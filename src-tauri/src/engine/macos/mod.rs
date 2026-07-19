@@ -16,6 +16,13 @@ const TUN_REMOVED_MESSAGE: &str =
 pub struct MacOSEngine;
 
 impl EngineManager for MacOSEngine {
+    fn start_settle_delay(_mode: &crate::engine::ProxyMode) -> std::time::Duration {
+        // The certificate-free macOS build only launches a user-mode mixed
+        // proxy. Its sidecar is spawned directly, so the generic one-second
+        // TUN/helper settling delay only postpones readiness and tray updates.
+        std::time::Duration::ZERO
+    }
+
     async fn start(
         app: &AppHandle,
         mode: crate::engine::ProxyMode,
@@ -110,5 +117,19 @@ impl EngineManager for MacOSEngine {
 
     async fn probe(_app: &AppHandle) -> Result<String, String> {
         Err("The privileged helper has been removed from NekoPilot.".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MacOSEngine;
+    use crate::engine::{EngineManager, ProxyMode};
+
+    #[test]
+    fn user_mode_proxy_starts_without_a_fixed_settle_delay() {
+        assert_eq!(
+            MacOSEngine::start_settle_delay(&ProxyMode::SystemProxy),
+            std::time::Duration::ZERO
+        );
     }
 }
