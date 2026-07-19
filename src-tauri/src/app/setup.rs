@@ -70,8 +70,8 @@ pub fn app_setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
     if let Ok(Some(urls)) = app.deep_link().get_current() {
         if let Some(payload) = urls.first().and_then(extract_deep_link_data) {
             log::info!(
-                "Cold-start deep link config data: {} apply={}",
-                payload.data,
+                "[deep-link] cold-start config payload received bytes={} apply={}",
+                payload.data.len(),
                 payload.apply
             );
             store_pending_deep_link(&app.state::<crate::app::state::AppData>(), payload);
@@ -178,13 +178,13 @@ fn register_deep_link(app: &tauri::App) {
     let handle = app.handle().clone();
     app.deep_link().on_open_url(move |event| {
         let urls = event.urls();
-        log::info!("Received deep link: {:#?}", urls);
+        log::info!("[deep-link] received {} URL(s)", urls.len());
         show_dashboard(handle.clone());
 
         if let Some(payload) = urls.first().and_then(extract_deep_link_data) {
             log::info!(
-                "Received config data: {} apply={}",
-                payload.data,
+                "[deep-link] config payload received bytes={} apply={}",
+                payload.data.len(),
                 payload.apply
             );
             // 写入 state（冷/热启动都靠前端主动拉取，保证可靠）

@@ -2,131 +2,9 @@
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import { getSingBoxUserAgent, t } from '../utils/helper';
-import { isUsableSubscriptionConfig } from './subscription-config';
 import { isLocalProxyLink } from './proxy-link';
 
-
-export interface ResponseHeaders {
-    'subscription-userinfo': string;
-    'official-website': string;
-    'content-disposition': string;
-    get?: (name: string) => string | null;
-}
-
-export interface ConfigResponse {
-    data: any;
-    headers: ResponseHeaders;
-    status?: number;
-}
-
-export { isUsableSubscriptionConfig } from './subscription-config';
-
 export { isLocalProxyLink } from './proxy-link';
-
-export async function fetchConfigContent(url: string): Promise<ConfigResponse> {
-    const result = await invoke<{
-        data: unknown;
-        headers: Record<string, string>;
-        status: number;
-    }>('fetch_config_with_optimal_dns', {
-        url,
-        userAgent: await getSingBoxUserAgent(),
-    });
-
-    return {
-        data: result.data ?? null,
-        headers: {
-            'subscription-userinfo': result.headers['subscription-userinfo'] || '',
-            'official-website': result.headers['official-website'] || 'https://sing-box.net',
-            'content-disposition': result.headers['content-disposition'] || '',
-        },
-        status: result.status,
-    };
-}
-
-export function getRemoteNameByContentDisposition(contentDisposition: string) {
-    const filenameRegex = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/;
-    const matches = filenameRegex.exec(contentDisposition);
-    if (matches != null && matches[1]) {
-        return decodeURIComponent(matches[1].replace(/['"]/g, ''));
-    }
-    return null;
-}
-
-
-export function getRemoteInfoBySubscriptionUserinfo(subscriptionUserinfo: string) {
-    try {
-        const info = subscriptionUserinfo.split('; ').reduce((acc, item) => {
-            const [key, value] = item.split('=');
-            if (key && value) {
-                acc[key.trim()] = value.trim();
-            }
-            return acc;
-        }, {} as Record<string, string>);
-
-        const numberOrUndefined = (value: string | undefined) => {
-            const parsed = Number.parseInt(value ?? '', 10);
-            return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
-        };
-
-        return {
-            upload: numberOrUndefined(info.upload),
-            download: numberOrUndefined(info.download),
-            total: numberOrUndefined(info.total),
-            expire: numberOrUndefined(info.expire),
-        };
-    } catch (error) {
-        console.error('Error parsing subscription userinfo:', error);
-        return {
-            upload: undefined,
-            download: undefined,
-            total: undefined,
-            expire: undefined,
-        };
-    }
-}
-
-export function subscriptionWritePayload(
-    url: string,
-    name: string | undefined,
-    response: ConfigResponse,
-    preserveExistingName = false,
-) {
-    const { upload, download, total, expire } = getRemoteInfoBySubscriptionUserinfo(
-        response.headers['subscription-userinfo'] || '',
-    );
-    return {
-        url,
-        name: preserveExistingName
-            ? undefined
-            : (!name || name === '默认配置')
-            ? getRemoteNameByContentDisposition(response.headers['content-disposition'] || '') || '配置'
-            : name,
-        officialWebsite: response.headers['official-website'] || 'https://sing-box.net',
-        usedTraffic: (upload ?? 0) + (download ?? 0),
-        totalTraffic: total ?? 0,
-        expireTime: (expire ?? 0) * 1000,
-        lastUpdateTime: Date.now(),
-        config: response.data,
-    };
-}
-
-
-export async function updateSubscription(identifier: string) {
-    try {
-        await invoke('refresh_subscription', {
-            identifier,
-            userAgent: await getSingBoxUserAgent(),
-        });
-        toast.success(t('update_subscription_success'))
-
-    } catch (error) {
-        console.error('Error updating subscription:', error);
-        toast.error(t('update_subscription_failed'))
-    }
-
-
-}
 
 
 
@@ -185,9 +63,9 @@ export function insertSubscription(url: string, name?: string): Promise<string> 
 }
 
 async function _insertSubscription(url: string, name?: string): Promise<string> {
-    // Timings bracket each phase so the renderer log reveals whether the
-    // dominant cost is the network fetch (Rust reqwest, see
-    // `fetch_config_with_optimal_dns`), the DB upsert, or JSON parsing.
+    // Remote imports stay native end-to-end: fetching, validation and SQLite
+    // persistence no longer serialize a potentially large node list through
+    // the WebView. The renderer receives only the selected identifier.
     const tTotal = performance.now();
     try {
         if (isLocalProxyLink(url)) {
@@ -195,24 +73,15 @@ async function _insertSubscription(url: string, name?: string): Promise<string> 
             console.info(`[import] local proxy link imported identifier=${identifier}`);
             return identifier;
         }
-        const tFetch = performance.now();
-        const response = await fetchConfigContent(url);
-        const fetchMs = Math.round(performance.now() - tFetch);
-        console.info(`[import] fetch done status=${response.status} elapsed=${fetchMs}ms url=${url}`);
-        if (response.status !== 200 || !isUsableSubscriptionConfig(response.data)) {
-            console.warn(`[import] abort unusable response status=${response.status} url=${url}`);
-            throw new Error('subscription_no_usable_nodes');
-        }
-
-        const tDb = performance.now();
-        const identifier = await invoke<string>('upsert_subscription', {
-            subscription: subscriptionWritePayload(url, name, response),
+        const identifier = await invoke<string>('import_subscription', {
+            url,
+            name,
+            userAgent: await getSingBoxUserAgent(),
         });
-        const dbMs = Math.round(performance.now() - tDb);
-        console.info(`[import] native db upsert elapsed=${dbMs}ms total=${Math.round(performance.now() - tTotal)}ms identifier=${identifier}`);
+        console.info(`[import] native subscription import elapsed=${Math.round(performance.now() - tTotal)}ms identifier=${identifier}`);
         return identifier;
     } catch (err) {
-        console.error(`[import] error total=${Math.round(performance.now() - tTotal)}ms err=${err instanceof Error ? err.message : String(err)} url=${url}`);
+        console.error(`[import] error total=${Math.round(performance.now() - tTotal)}ms err=${err instanceof Error ? err.message : String(err)}`);
         throw err;
     }
 }

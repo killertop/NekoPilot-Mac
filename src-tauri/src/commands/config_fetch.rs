@@ -29,6 +29,21 @@ pub(crate) fn compute_sha256_hex(s: &str) -> String {
     hash.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
+/// A subscription URL often carries a credential in its query string. Keep
+/// request diagnostics useful without persisting that credential in logs.
+/// User info and fragments can carry secrets too, so deliberately reconstruct
+/// only the scheme, host, explicit port and path.
+fn subscription_log_target(url: &Url) -> String {
+    let Some(host) = url.host_str() else {
+        return "<invalid-subscription-url>".to_owned();
+    };
+    let authority = match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_owned(),
+    };
+    format!("{}://{}{}", url.scheme(), authority, url.path())
+}
+
 /// Progressive suffix candidates, shortest first.
 /// `a.b.c` → `["c", "b.c", "a.b.c"]`. IPs / single-label hostnames return
 /// just the input. Any matching hash in the whitelist approves the entire
@@ -156,10 +171,11 @@ pub(crate) async fn fetch_subscription_config(
         .ok_or("missing host in URL")?
         .to_string();
     let port = parsed_url.port_or_known_default().unwrap_or(443);
+    let log_target = subscription_log_target(&parsed_url);
 
     log::info!(
-        "[CONFIG_LOAD] 开始请求 URL={} host={} port={}",
-        url,
+        "[CONFIG_LOAD] 开始请求 target={} host={} port={}",
+        log_target,
         hostname,
         port
     );
@@ -268,12 +284,12 @@ pub(crate) async fn fetch_subscription_config(
                 None
             };
             log::info!(
-                "[CONFIG_LOAD] 方式=PRIMARY status={} headers_elapsed={}ms body_elapsed={}ms total_elapsed={}ms URL={}",
+                "[CONFIG_LOAD] 方式=PRIMARY status={} headers_elapsed={}ms body_elapsed={}ms total_elapsed={}ms target={}",
                 status,
                 t_headers.as_millis(),
                 t_body.elapsed().as_millis(),
                 t_total.elapsed().as_millis(),
-                url
+                log_target
             );
             Ok(FetchConfigResponse {
                 data,
@@ -289,10 +305,10 @@ pub(crate) async fn fetch_subscription_config(
                 format!("CONNECT_ERROR({})", primary_err)
             };
             log::warn!(
-                "[CONFIG_LOAD] 主地址失败 reason={} primary_elapsed={}ms URL={}",
+                "[CONFIG_LOAD] 主地址失败 reason={} primary_elapsed={}ms target={}",
                 primary_reason,
                 primary_elapsed,
-                url
+                log_target
             );
 
             // Three conditions must all hold for the fallback:
@@ -358,13 +374,12 @@ pub(crate) async fn fetch_subscription_config(
                             .ok()
                             .and_then(|b| serde_json::from_slice(&b).ok());
                         log::info!(
-                            "[CONFIG_LOAD] 方式=FALLBACK_ACCELERATOR status={} primary_reason={} headers_elapsed={}ms body_elapsed={}ms total_elapsed={}ms 加速URL={}",
+                            "[CONFIG_LOAD] 方式=FALLBACK_ACCELERATOR status={} primary_reason={} headers_elapsed={}ms body_elapsed={}ms total_elapsed={}ms",
                             status,
                             primary_reason,
                             t_headers.as_millis(),
                             t_body.elapsed().as_millis(),
-                            t_total.elapsed().as_millis(),
-                            accelerated_url
+                            t_total.elapsed().as_millis()
                         );
                         Ok(FetchConfigResponse {
                             data,
@@ -410,15 +425,6 @@ pub(crate) async fn fetch_subscription_config(
     }
 }
 
-#[tauri::command]
-pub async fn fetch_config_with_optimal_dns(
-    app: AppHandle,
-    url: String,
-    user_agent: String,
-) -> Result<FetchConfigResponse, String> {
-    fetch_subscription_config(&app, &url, &user_agent).await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,6 +434,17 @@ mod tests {
         assert_eq!(
             hostname_suffix_candidates("a.b.c"),
             vec!["c".to_string(), "b.c".to_string(), "a.b.c".to_string()],
+        );
+    }
+
+    #[test]
+    fn log_target_redacts_subscription_credentials() {
+        let url =
+            Url::parse("https://user:password@example.com:8443/sub/path?token=secret#fragment")
+                .unwrap();
+        assert_eq!(
+            subscription_log_target(&url),
+            "https://example.com:8443/sub/path"
         );
     }
 

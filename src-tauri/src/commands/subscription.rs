@@ -608,6 +608,48 @@ pub async fn upsert_subscription(
     upsert_into_database(&pool, subscription).await
 }
 
+fn content_disposition_filename(header: Option<&String>) -> Option<String> {
+    let header = header?;
+    let mut plain_filename = None;
+    for field in header.split(';') {
+        let Some((key, raw_value)) = field.split_once('=') else {
+            continue;
+        };
+        let key = key.trim().to_ascii_lowercase();
+        let raw_value = raw_value.trim().trim_matches('"');
+        if raw_value.is_empty() {
+            continue;
+        }
+        if key == "filename*" {
+            // RFC 5987: UTF-8''percent-encoded-name
+            let encoded = raw_value
+                .split_once("''")
+                .map(|(_, value)| value)
+                .unwrap_or(raw_value);
+            if let Ok(value) = percent_decode_str(encoded).decode_utf8() {
+                let value = value.trim();
+                if !value.is_empty() {
+                    return Some(value.to_owned());
+                }
+            }
+        } else if key == "filename" {
+            plain_filename = Some(raw_value.to_owned());
+        }
+    }
+    plain_filename
+}
+
+fn import_subscription_name(
+    name: Option<String>,
+    content_disposition: Option<&String>,
+) -> Option<String> {
+    let name = name.filter(|value| !value.trim().is_empty());
+    if matches!(name.as_deref(), Some(value) if value != "默认配置") {
+        return name;
+    }
+    content_disposition_filename(content_disposition).or(Some("配置".to_owned()))
+}
+
 fn parse_subscription_userinfo(header: Option<&String>) -> (i64, i64) {
     let Some(header) = header else {
         return (0, 0);
@@ -641,6 +683,46 @@ fn subscription_expiry_millis(header: Option<&String>) -> i64 {
         })
         .unwrap_or_default()
         .saturating_mul(1_000)
+}
+
+/// Imports a remote subscription entirely in Rust. This keeps potentially
+/// large subscription JSON in the native process instead of serializing it
+/// through the WebView just to persist it in SQLite.
+#[tauri::command]
+pub async fn import_subscription(
+    app: AppHandle,
+    url: String,
+    name: Option<String>,
+    user_agent: String,
+) -> Result<String, String> {
+    let fetched = config_fetch::fetch_subscription_config(&app, &url, &user_agent).await?;
+    if fetched.status != 200 {
+        return Err("subscription_no_usable_nodes".to_owned());
+    }
+    let config = fetched
+        .data
+        .ok_or_else(|| "subscription_no_usable_nodes".to_owned())?;
+    if !has_usable_node(&config) {
+        return Err("subscription_no_usable_nodes".to_owned());
+    }
+    let (used_traffic, total_traffic) =
+        parse_subscription_userinfo(fetched.headers.get("subscription-userinfo"));
+    let pool = database(&app).await?;
+    upsert_into_database(
+        &pool,
+        SubscriptionUpsert {
+            url,
+            name: import_subscription_name(name, fetched.headers.get("content-disposition")),
+            official_website: fetched.headers.get("official-website").cloned(),
+            used_traffic,
+            total_traffic,
+            expire_time: subscription_expiry_millis(fetched.headers.get("subscription-userinfo")),
+            last_update_time: chrono::Utc::now().timestamp_millis(),
+            config,
+            source_type: Some("subscription".to_owned()),
+        },
+    )
+    .await
 }
 
 /// Refreshes a remote subscription entirely in Rust.  The renderer receives
@@ -824,7 +906,8 @@ pub async fn deduplicate_subscriptions(app: AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        database_at_path, has_usable_node, parse_proxy_link, parse_subscription_userinfo,
+        content_disposition_filename, database_at_path, has_usable_node,
+        import_subscription_name, parse_proxy_link, parse_subscription_userinfo,
         subscription_expiry_millis, upsert_into_database, SubscriptionUpsert,
     };
 
@@ -846,6 +929,23 @@ mod tests {
         let header = "upload=100; download=200; total=1000; expire=1900000000".to_owned();
         assert_eq!(parse_subscription_userinfo(Some(&header)), (300, 1000));
         assert_eq!(subscription_expiry_millis(Some(&header)), 1_900_000_000_000);
+    }
+
+    #[test]
+    fn subscription_import_name_preserves_explicit_name_and_decodes_remote_filename() {
+        let header = "attachment; filename*=UTF-8''NekoPilot%20Nodes".to_owned();
+        assert_eq!(
+            content_disposition_filename(Some(&header)),
+            Some("NekoPilot Nodes".to_owned())
+        );
+        assert_eq!(
+            import_subscription_name(Some("My nodes".to_owned()), Some(&header)),
+            Some("My nodes".to_owned())
+        );
+        assert_eq!(
+            import_subscription_name(None, Some(&header)),
+            Some("NekoPilot Nodes".to_owned())
+        );
     }
 
     #[test]

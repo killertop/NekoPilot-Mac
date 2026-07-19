@@ -279,12 +279,16 @@ export const useApplyPipelineRoot = () => {
       applyEpochRef.current = engineState.epoch;
       setApplyPhase("start");
 
-      vpnServiceManager.syncConfig({
+      void vpnServiceManager.syncConfig({
         onSuccess: async () => {
           try {
             await vpnServiceManager.start();
           } catch (error: any) {
             console.error("启动服务失败:", error);
+            // syncConfig owns the error handoff for this pipeline. Without
+            // rethrowing, a synchronous start failure would leave the modal
+            // waiting for its 45-second backstop instead of showing the error.
+            throw error;
           }
         },
         onError: async (error) => {
@@ -332,12 +336,17 @@ export const useApplyPipelineRoot = () => {
 export const useVPNOperations = () => {
   const engineState = useEngineState();
   const { setActiveScreen } = useContext(NavContext);
+  // Config compilation happens before the native engine emits `starting`.
+  // Keep that preparation phase visible and coalesce repeated Connect presses
+  // so two independent start sequences can never race into core::start.
+  const [isPreparingStart, setIsPreparingStart] = useState(false);
+  const startInFlightRef = useRef(false);
 
   // 从权威状态派生出兼容变量
   const isRunning = engineState.kind === "running";
-  const isLoading = engineState.kind === "starting" ||
+  const isLoading = isPreparingStart || engineState.kind === "starting" ||
     engineState.kind === "stopping";
-  const operationStatus: OperationStatus = engineState.kind === "starting"
+  const operationStatus: OperationStatus = isPreparingStart || engineState.kind === "starting"
     ? "starting"
     : engineState.kind === "stopping"
     ? "stopping"
@@ -362,19 +371,29 @@ export const useVPNOperations = () => {
     }
   };
 
-  const performSyncAndStart = (onSyncError: (error: any) => Promise<void>) => {
-    vpnServiceManager.syncConfig({
-      onSuccess: async () => {
-        try {
-          await vpnServiceManager.start();
-        } catch (error: any) {
-          console.error("启动服务失败:", error);
-        }
-      },
-      onError: async (error) => {
-        await onSyncError(error);
-      },
-    });
+  const performSyncAndStart = async (onSyncError: (error: any) => Promise<void>) => {
+    if (startInFlightRef.current) return;
+    startInFlightRef.current = true;
+    setIsPreparingStart(true);
+    try {
+      await vpnServiceManager.syncConfig({
+        onSuccess: async () => {
+          try {
+            await vpnServiceManager.start();
+          } catch (error: any) {
+            console.error("启动服务失败:", error);
+            // Let syncConfig route the failure to its single error path.
+            throw error;
+          }
+        },
+        onError: async (error) => {
+          await onSyncError(error);
+        },
+      });
+    } finally {
+      startInFlightRef.current = false;
+      setIsPreparingStart(false);
+    }
   };
 
   const startService = async (isEmpty: boolean) => {
@@ -404,7 +423,7 @@ export const useVPNOperations = () => {
     if (check.port_occupied && check.orphan_pids.length > 0) {
       // Store what we would do after repair, then show the modal
       pendingStartRef.current = () => {
-        performSyncAndStart(async (error) => {
+        void performSyncAndStart(async (error) => {
           console.error("同步配置失败:", error);
           if (error?.message === "subscription_config_missing") {
             await message(t("subscription_config_missing"), {
@@ -425,7 +444,7 @@ export const useVPNOperations = () => {
       return;
     }
 
-    performSyncAndStart(async (error) => {
+    await performSyncAndStart(async (error) => {
       console.error("同步配置失败:", error);
       if (error?.message === "subscription_config_missing") {
         await message(t("subscription_config_missing"), {

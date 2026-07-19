@@ -28,11 +28,17 @@ export default function Configuration() {
     const { openModal, ModalElement } = useSubscriptionModalController();
 
     const handleUpdateAll = async () => {
-        window.dispatchEvent(new CustomEvent("update-all-subscriptions"));
-        // Allow the event to propagate to every mounted item which spins its
-        // own updater; give a short delay so toasts from each don't stack
-        // instantly, then bail.
-        await new Promise((resolve) => setTimeout(resolve, 600));
+        // Event listeners append their actual native refresh promise here.
+        // Waiting for that batch keeps the global spinner truthful instead of
+        // clearing after an arbitrary delay while requests are still running.
+        const updates: Promise<void>[] = [];
+        window.dispatchEvent(
+            new CustomEvent<{ updates: Promise<void>[] }>("update-all-subscriptions", {
+                detail: { updates },
+            }),
+        );
+        await Promise.all(updates);
+        await mutate(GET_SUBSCRIPTIONS_LIST_SWR_KEY);
     };
 
     return (
@@ -96,9 +102,6 @@ function ConfigurationBody({
                         item={item}
                         expanded={expanded}
                         setExpanded={setExpanded}
-                        onUpdateDone={async () => {
-                            await mutate(GET_SUBSCRIPTIONS_LIST_SWR_KEY);
-                        }}
                     />
                 ))}
             </ul>

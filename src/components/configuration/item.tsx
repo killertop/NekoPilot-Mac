@@ -22,7 +22,6 @@ interface SubscriptionItemProps {
     item: Subscription;
     expanded: string;
     setExpanded: (id: string) => void;
-    onUpdateDone: () => void;
 }
 
 const messageStyles = {
@@ -35,7 +34,6 @@ export const SubscriptionItem: React.FC<SubscriptionItemProps> = ({
     item,
     expanded,
     setExpanded,
-    onUpdateDone,
 }) => {
     const isExpanded = expanded === item.identifier;
     const isLocalFile = item.expire_time === LOCAL_FILE_SENTINEL;
@@ -68,10 +66,13 @@ export const SubscriptionItem: React.FC<SubscriptionItemProps> = ({
     }, [loading, message]);
 
     useEffect(() => {
-        const handleUpdateEvent = async () => {
-            if (isLocalLink) return;
-            await update(item.identifier);
-            onUpdateDone();
+        const handleUpdateEvent = (event: Event) => {
+            // Local files and single-node links never have a remote source to
+            // refresh. Skip both so "Update all" cannot create a misleading
+            // failure state for a valid local configuration.
+            if (isLocalConfig) return;
+            const detail = (event as CustomEvent<{ updates?: Promise<void>[] }>).detail;
+            detail?.updates?.push(update(item.identifier));
         };
         window.addEventListener("update-all-subscriptions", handleUpdateEvent);
         return () => {
@@ -80,7 +81,7 @@ export const SubscriptionItem: React.FC<SubscriptionItemProps> = ({
                 handleUpdateEvent,
             );
         };
-    }, [item.identifier, isLocalLink]);
+    }, [item.identifier, isLocalConfig, update]);
 
     const handleDelete = async () => {
         setIsDeleting(true);
@@ -222,7 +223,7 @@ export const SubscriptionItem: React.FC<SubscriptionItemProps> = ({
                         className="overflow-hidden"
                     >
                         <div
-                            className={clsx("grid relative", isLocalLink ? "grid-cols-2" : "grid-cols-3")}
+                            className={clsx("grid relative", isLocalConfig ? "grid-cols-2" : "grid-cols-3")}
                             style={{
                                 borderTop: "0.5px solid var(--onebox-separator)",
                             }}
@@ -236,7 +237,7 @@ export const SubscriptionItem: React.FC<SubscriptionItemProps> = ({
                                 <InfoCircle size={13} />
                                 <span>{t("details")}</span>
                             </button>
-                            {!isLocalLink && <button
+                            {!isLocalConfig && <button
                                 type="button"
                                 onClick={handleUpdate}
                                 className="py-2.5 flex items-center justify-center gap-1.5 text-[13px] font-medium transition-colors active:bg-[rgba(0,122,255,0.06)]"
@@ -255,7 +256,7 @@ export const SubscriptionItem: React.FC<SubscriptionItemProps> = ({
                                 className="py-2.5 flex items-center justify-center gap-1.5 text-[13px] font-medium transition-colors active:bg-[rgba(255,59,48,0.06)]"
                                 style={{
                                     color: "#FF3B30",
-                                    borderLeft: isLocalLink
+                                    borderLeft: isLocalConfig
                                         ? "0.5px solid var(--onebox-separator)"
                                         : undefined,
                                 }}
