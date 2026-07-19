@@ -99,6 +99,8 @@ docs/                 Development, release, audit, and implementation notes
 - [Security Policy](SECURITY.md)
 - [Contributing Guide](CONTRIBUTING.md)
 
+Source publication is routed through the VPS bare repository with [scripts/post-receive-github-sync.sh](scripts/post-receive-github-sync.sh), then pushed by the VPS to the project's GitHub repository.
+
 ## License and source notices
 
 This repository is maintained at [killertop/NekoPilot-Mac](https://github.com/killertop/NekoPilot-Mac). It retains the Apache-2.0 `LICENSE` and `NOTICE` files required for source attribution. NekoPilot for Mac uses its own product name, iconography, bundle identifier, and user-facing branding. See [LICENSE](LICENSE) and [NOTICE](NOTICE) for the applicable notices.

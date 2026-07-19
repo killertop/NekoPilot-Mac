@@ -283,6 +283,10 @@ No GitHub MCP server is installed on this host (only Gmail / Drive /
 Calendar MCPs are registered). `gh` covers every CI and repo-diagnostic
 need `gh api` can reach, and is the preferred interface for this repo.
 
+## Repository push route
+
+For NekoPilot Mac source publication, local origin is us:/opt/git/NekoPilot-Mac.git. Use git push origin branch; the VPS post-receive hook forwards branches and tags to GitHub killertop/NekoPilot-Mac. Do not point origin directly at GitHub or add an upstream remote for this project.
+
 ## Test-first cadence
 
 Project restatement of the global "Write-test-first cadence" rule in `~/.claude/CLAUDE.md` § Testing. Kept here because OneBox ships pure helpers in both Rust and TS (hostname-suffix verification, URL parsers, state reducers, config mergers) where the cost of a unit test is near-zero and the bug classes caught would otherwise only surface on a specific platform at runtime — exactly the bugs that are most expensive to debug after shipping.

@@ -28,13 +28,40 @@ Then manually test the local Release bundle on macOS. Confirm import, selection,
 
 The release workflow is .github/workflows/release.yml. It builds macOS arm64 and x86_64 packages and publishes the resulting assets to a GitHub Release.
 
+## GitHub synchronization through the VPS
+
+Source publication uses a VPS bare repository as the network boundary:
+
+~~~text
+local origin → us:/opt/git/NekoPilot-Mac.git → GitHub killertop/NekoPilot-Mac
+~~~
+
+The VPS bare repository has a post-receive hook at /opt/git/NekoPilot-Mac.git/hooks/post-receive. It forwards branch and tag updates to the GitHub remote, configured as https://github.com/killertop/NekoPilot-Mac.git.
+
+One-time local setup:
+
+~~~bash
+git remote set-url origin us:/opt/git/NekoPilot-Mac.git
+git remote set-url --push origin us:/opt/git/NekoPilot-Mac.git
+~~~
+
+After the one-time VPS setup, publish normally from the repository root:
+
+~~~bash
+git push origin main
+~~~
+
+The local origin intentionally points to us:/opt/git/NekoPilot-Mac.git; the Mac does not push directly to GitHub. The VPS uses its own gh/Git HTTPS credential setup for killertop, so no GitHub token is stored in this repository.
+
+The hook is versioned at scripts/post-receive-github-sync.sh. If the VPS hook changes, keep the repository copy and the installed VPS copy identical, then verify both the VPS bare ref and the GitHub ref.
+
 The intended stable flow is:
 
 1. Finish and review the code and documentation.
 2. Increment the version in src-tauri/tauri.conf.json.
 3. Update the relevant CHANGELOG.MD entry.
 4. Run the local preflight checks.
-5. Push the version change to the stable branch.
+5. Push the version change to the stable branch through the VPS route above.
 6. Wait for the release workflow to finish.
 7. Download the DMG and app.tar.gz assets from the resulting GitHub Release.
 

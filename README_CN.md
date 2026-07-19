@@ -99,6 +99,8 @@ docs/                 开发、发布、审计和实现说明
 - [安全说明](SECURITY.md)
 - [贡献指南](CONTRIBUTING.md)
 
+源码发布默认经由 VPS 裸仓库，再由 VPS 推送到项目自己的 GitHub 仓库，转推钩子是 [scripts/post-receive-github-sync.sh](scripts/post-receive-github-sync.sh)。
+
 ## 许可证与来源声明
 
 本仓库由 [killertop/NekoPilot-Mac](https://github.com/killertop/NekoPilot-Mac) 维护。仓库保留 Apache-2.0 `LICENSE` 和 `NOTICE` 文件，以满足源代码归属与许可证要求。NekoPilot for Mac 使用独立的产品名称、图标、Bundle ID 和用户界面品牌。具体适用范围请查看 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。
