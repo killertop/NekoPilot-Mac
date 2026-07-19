@@ -1,6 +1,6 @@
 [package]
 name = "nekopilot"
-version = "1.0.0"
+version = "1.0.1"
 description = "NekoPilot is a macOS proxy client powered by sing-box."
 authors = ["NekoPilot"]
 edition = "2021"
