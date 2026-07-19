@@ -163,23 +163,23 @@ export async function setupTrayIcon() {
 
     const setup = (async () => {
       try {
-        // A page reload can re-evaluate this module while the native tray item
-        // still exists. Reuse its stable ID instead of creating another macOS
-        // status item. The promise lock above also closes the first-launch
-        // race where two callers both observed a null local instance.
-        const existing = await TrayIcon.getById(TRAY_ICON_ID);
-        if (existing) {
-            trayInstance = existing;
+            // A page reload can re-evaluate this module while the native tray item
+            // still exists. Reuse its stable ID instead of creating another macOS
+            // status item. The promise lock above also closes the first-launch
+            // race where two callers both observed a null local instance.
+            const existing = await TrayIcon.getById(TRAY_ICON_ID);
+            if (existing) {
+                trayInstance = existing;
+                startStatusPolling();
+                return trayInstance;
+            }
+            const menu = await createTrayMenu();
+            const options = await createTrayIconOptions(menu);
+
+            trayInstance = await TrayIcon.new(options);
+
             startStatusPolling();
             return trayInstance;
-        }
-        const menu = await createTrayMenu();
-        const options = await createTrayIconOptions(menu);
-
-        trayInstance = await TrayIcon.new(options);
-
-        startStatusPolling();
-        return trayInstance;
       } catch (error) {
         console.error('Error setting up tray icon:', error);
         return null;
