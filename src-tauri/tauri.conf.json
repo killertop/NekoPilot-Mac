@@ -1,6 +1,6 @@
 {
   "productName": "NekoPilot",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "identifier": "dev.nekopilot.desktop",
   "build": {
     "beforeDevCommand": "deno task dev",
