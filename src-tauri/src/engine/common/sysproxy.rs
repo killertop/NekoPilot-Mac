@@ -24,6 +24,16 @@ use crate::{core::mixed_proxy_port, engine::EVENT_TAURI_LOG};
 
 const PROXY_HOST: &str = "127.0.0.1";
 
+/// Resolve the same active network service that `set_system_proxy` will use.
+///
+/// This is deliberately read-only.  After macOS wakes, lifecycle events can
+/// arrive before the default route has been recreated; waiting for this lookup
+/// avoids stopping a working proxy only to fail while applying it again.
+#[cfg(target_os = "macos")]
+pub(crate) fn active_macos_proxy_service() -> anyhow::Result<String> {
+    onebox_sysproxy_rs::active_network_service().map_err(|error| anyhow::anyhow!(error))
+}
+
 // The system proxy is global state. Keep the exact port this process applied
 // so shutdown never disables another local proxy that merely shares 127.0.0.1.
 #[cfg(target_os = "macos")]

@@ -23,7 +23,9 @@ pub fn app_setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
     if let Err(error) = crate::commands::rule_sets::ensure_cn_rule_set_baseline(app.handle()) {
         log::warn!("[RULE-SETS] Failed to install bundled CN baseline: {error}");
     }
-    if let Err(error) = crate::commands::rule_sets::migrate_current_config_to_managed_cn_rule_sets(app.handle()) {
+    if let Err(error) =
+        crate::commands::rule_sets::migrate_current_config_to_managed_cn_rule_sets(app.handle())
+    {
         log::warn!("[RULE-SETS] Failed to migrate existing config: {error}");
     }
     crate::commands::rule_sets::spawn_cn_rule_set_refresh_task(app.handle().clone());
@@ -207,16 +209,67 @@ const MIN_OUTAGE: std::time::Duration = std::time::Duration::from_secs(2);
 // NetworkUp / DidWake 后等待此时长确认系统稳定，再执行重启
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 const DEBOUNCE_SECS: u64 = 3;
+// macOS 唤醒后，默认路由和 networksetup 服务映射可能比 NetworkUp 晚到。
+// 只在系统代理模式下探测；手动代理无需依赖 macOS 网络服务。
+#[cfg(target_os = "macos")]
+const MACOS_INTERFACE_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+#[cfg(target_os = "macos")]
+const MACOS_INTERFACE_RETRY_ATTEMPTS: u8 = 10;
 // 睡眠时长 >= 此值才触发 wake 重启。30s 足以过滤"临时锁屏-解锁"
 // 但会覆盖"开会合盖几分钟"这种真实场景。
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 const WAKE_RESTART_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// 调度引擎重启：DEBOUNCE_SECS 秒后若 epoch 未变则 stop + start。
+/// 调度引擎重启：DEBOUNCE_SECS 秒后若 epoch 未变则重启。
+/// macOS 系统代理模式会先有限等待默认网络服务就绪；等待超时不停止现有引擎。
 /// NetworkUp / DidWake 共用此路径，`ctx` 仅用于日志前缀区分触发源。
 ///
 /// 调用方负责在调度前 `fetch_add(1)` 自增 epoch（幂等取消：后来的调度
 /// 让之前已排队的任务读到不同 epoch，自动放弃）。
+#[cfg(target_os = "macos")]
+async fn wait_for_macos_proxy_service(
+    epoch_arc: &std::sync::Arc<std::sync::atomic::AtomicU64>,
+    current_epoch: u64,
+    ctx: &str,
+) -> bool {
+    for attempt in 0..=MACOS_INTERFACE_RETRY_ATTEMPTS {
+        if epoch_arc.load(std::sync::atomic::Ordering::Relaxed) != current_epoch {
+            log::info!("[{ctx}] epoch changed while waiting for macOS network service");
+            return false;
+        }
+
+        match crate::engine::sysproxy::active_macos_proxy_service() {
+            Ok(service) => {
+                if attempt > 0 {
+                    log::info!(
+                        "[{ctx}] macOS network service {service:?} ready after {}s",
+                        attempt as u64 * MACOS_INTERFACE_RETRY_INTERVAL.as_secs()
+                    );
+                }
+                return true;
+            }
+            Err(error) if attempt == MACOS_INTERFACE_RETRY_ATTEMPTS => {
+                log::warn!(
+                    "[{ctx}] macOS network service was not ready after {}s ({error}); preserving the existing engine",
+                    attempt as u64 * MACOS_INTERFACE_RETRY_INTERVAL.as_secs()
+                );
+                return false;
+            }
+            Err(error) => {
+                log::info!(
+                    "[{ctx}] macOS network service not ready (attempt {}/{}, {error}); retrying in {}s",
+                    attempt + 1,
+                    MACOS_INTERFACE_RETRY_ATTEMPTS,
+                    MACOS_INTERFACE_RETRY_INTERVAL.as_secs()
+                );
+                tokio::time::sleep(MACOS_INTERFACE_RETRY_INTERVAL).await;
+            }
+        }
+    }
+
+    unreachable!("the bounded retry loop always returns")
+}
+
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 fn schedule_engine_restart(
     handle: tauri::AppHandle,
@@ -233,6 +286,16 @@ fn schedule_engine_restart(
         let Some((mode, path)) = crate::core::get_running_config() else {
             return;
         };
+        #[cfg(target_os = "macos")]
+        if matches!(&mode, crate::core::ProxyMode::SystemProxy)
+            && !wait_for_macos_proxy_service(&epoch_arc, current_epoch, ctx).await
+        {
+            return;
+        }
+        if epoch_arc.load(std::sync::atomic::Ordering::Relaxed) != current_epoch {
+            log::info!("[{ctx}] epoch changed, aborting engine restart");
+            return;
+        }
         log::info!("[{ctx}] restarting engine (mode: {:?})", mode);
         if let Err(e) = crate::core::stop(handle.clone()).await {
             log::error!("[{ctx}] stop engine failed: {}", e);
