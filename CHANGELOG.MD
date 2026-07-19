@@ -15,7 +15,7 @@
 ### 发布与工程
 
 - 增加本地 Release 构建和 macOS bundle 说明。
-- 增加正式签名、公证和 GitHub Actions 发布说明。
+- 增加 GitHub-only ad-hoc 签名与 GitHub Actions 发布说明。
 - 整理中英文项目文档、开发指南、安全说明和贡献指南。
 
-> 当前版本仍处于开发阶段。正式发布前请以 GitHub Release 页面中的签名产物和验收记录为准。
+> macOS 安装包使用 ad-hoc 签名，不包含 Apple 公证；请以 GitHub Release 页面中的安装包和验收记录为准。
