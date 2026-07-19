@@ -99,8 +99,8 @@ Expected results:
 
 The macOS release is expected to contain:
 
-- Apple Silicon DMG package.
-- Intel DMG package.
+- Apple Silicon DMG and `.app.tar.gz` archive.
+- Intel DMG and `.app.tar.gz` archive.
 - No updater signatures or `latest.json`: the Tauri updater is not enabled in this project.
 
 Record the Git commit, version, workflow run URL, artifact checksums, and manual QA result alongside each production release.
