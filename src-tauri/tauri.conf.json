@@ -1,0 +1,59 @@
+{
+  "productName": "NekoPilot",
+  "version": "1.0.0",
+  "identifier": "dev.nekopilot.desktop",
+  "build": {
+    "beforeDevCommand": "deno task dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "deno task build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "devtools": false,
+        "maximizable": false,
+        "decorations": true,
+        "resizable": false,
+        "title": "NekoPilot",
+        "width": 371,
+        "height": 600
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:*; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:;"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "externalBin": [
+      "binaries/sing-box"
+    ],
+    "resources": {
+      "resources/rules/geoip-cn.srs": "rules/geoip-cn.srs",
+      "resources/rules/geosite-cn.srs": "rules/geosite-cn.srs"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "nekopilot"
+        ]
+      }
+    },
+    "sql": {
+      "preload": [
+        "sqlite:data.db"
+      ]
+    }
+  }
+}

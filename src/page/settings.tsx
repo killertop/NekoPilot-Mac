@@ -1,0 +1,45 @@
+import AboutItem from "../components/settings/about";
+import ToggleAutoStart from "../components/settings/auto-start";
+import ToggleDHCP from "../components/developer/dhcp-toggle";
+import DNSSettingsItem from "../components/developer/dns-settings";
+import ToggleNodeProtocol from "../components/developer/node-protocol-toggle";
+import UASettingsItem from "../components/developer/ua-settings";
+import ToggleLan from "../components/settings/lan";
+import ProxyPortSetting from "../components/settings/proxy-port";
+import { useVersion } from "../hooks/useVersion";
+import { t } from "../utils/helper";
+
+export default function Settings() {
+  const version = useVersion();
+
+  return (
+    <div className="onebox-scrollpage">
+      <div className="onebox-page-inner">
+        <div className="onebox-grouped-card mb-5">
+          <ToggleAutoStart />
+          <ToggleLan />
+          <ProxyPortSetting />
+        </div>
+
+        <div className="onebox-grouped-card mb-5">
+          <ToggleDHCP />
+          <DNSSettingsItem />
+          <ToggleNodeProtocol />
+          <UASettingsItem />
+        </div>
+
+        <div className="onebox-grouped-card">
+          <AboutItem />
+        </div>
+
+        <div
+          className="text-center text-[11px] mt-6 mb-2"
+          style={{ color: "var(--onebox-label-tertiary)" }}
+        >
+          <p>{t("version")} {version}</p>
+          <p className="mt-0.5">© 2026 NekoPilot</p>
+        </div>
+      </div>
+    </div>
+  );
+}

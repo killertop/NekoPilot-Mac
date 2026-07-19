@@ -1,0 +1,46 @@
+# Logs
+logs
+*.log
+.docs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.omc
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.tauri
+tmp
+src-tauri/binaries
+src-tauri/resources/*.db
+src-tauri/resources/*.so
+src-tauri/resources/*.dll
+
+# `generated.ts` is an offline build input and is deliberately versioned.
+# Refresh it explicitly with `deno task sync-templates` when updating the
+# bundled config-template snapshot.
+scripts/tmp-*.sh
+
+
+src-tauri/*.db
+src-tauri/examples
+target
+
+# tsc -b incremental build cache + accidental emit from `vite.config.ts`
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts

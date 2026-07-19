@@ -1,0 +1,22 @@
+{
+    "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+    "identifier": "dev.nekopilot.desktop",
+    "bundle": {
+        "windows": {
+            "nsis": {
+                "displayLanguageSelector": true,
+                "languages": [
+                    "SimpChinese",
+                    "English"
+                ]
+            },
+            "webviewInstallMode": {
+                "type": "embedBootstrapper"
+            }
+        },
+        "externalBin": [
+            "binaries/sing-box",
+            "binaries/tun-service"
+        ]
+    }
+}

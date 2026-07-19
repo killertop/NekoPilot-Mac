@@ -1,0 +1,119 @@
+name: "Test"
+
+on:
+  push:
+  pull_request:
+
+# Cancel any in-progress test run on the same ref when a new push
+# arrives. Test runs are pure regression — the latest commit's result
+# is what matters, older runs become wasted minutes as soon as they
+# are superseded.
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Frontend unit tests (vitest). Lightweight — no Rust toolchain, no
+  # Linux system deps. Runs in parallel with the cargo job below.
+  frontend:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set Up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Set Up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Install Dependencies
+        run: deno install
+
+      - name: Run Frontend Tests
+        run: deno task test
+
+  # Rust unit tests (cargo test) — compiles the tauri lib crate, so the
+  # same apt prereqs as a Linux release build are required to satisfy
+  # webkit2gtk / appindicator dependencies at link time. The tauri build
+  # script also validates every `externalBin` in tauri.conf.json exists
+  # on disk, so we pre-stage the sing-box sidecar via the same script
+  # release.yml uses — otherwise `cargo test` fails at build-script time
+  # with "resource path binaries/sing-box-... doesn't exist".
+  rust:
+    runs-on: ubuntu-24.04
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      # crates.io downloads over HTTP/2 intermittently abort with
+      # `curl failed — [16] Error in the HTTP2 framing layer`, failing the
+      # job on a pure network flake (same SHA passes on a re-run). Forcing
+      # HTTP/1.1 removes the multiplexing path that produces the framing
+      # error; the high net.retry handles the residual blips.
+      CARGO_HTTP_MULTIPLEXING: "false"
+      CARGO_NET_RETRY: "10"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux Dependencies
+        run: |
+          sudo apt update
+          sudo apt install libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Set Up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Set Up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Install Frontend Dependencies
+        run: deno install
+
+      - name: Download Sidecar Binaries
+        run: deno task download-binaries
+
+      - name: Set Up Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      # Isolate the only network-bound part of the job (registry update +
+      # crate download) into its own retried step, so a transient crates.io
+      # blip self-heals instead of failing the run. `cargo test` below then
+      # runs `--offline`, guaranteeing the test step itself never touches the
+      # network — a red there is always a real test failure, never a flake,
+      # and never wastes minutes retrying a genuine failure.
+      - name: Fetch Rust Dependencies
+        run: |
+          for attempt in 1 2 3; do
+            cargo fetch --manifest-path src-tauri/Cargo.toml && exit 0
+            echo "::warning::cargo fetch attempt ${attempt} failed (transient crates.io network error); retrying..."
+            sleep $((attempt * 5))
+          done
+          echo "::error::cargo fetch failed after 3 attempts"
+          exit 1
+
+      - name: Run Rust Tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib --offline

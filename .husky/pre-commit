@@ -1,0 +1,10 @@
+#!/usr/bin/env sh
+
+# Enforce Tailwind canonical class policy.
+# See scripts/check-tailwind-canonical.ts for scope and rationale.
+deno task check:tailwind || {
+    echo ""
+    echo "❌ Tailwind canonical check failed."
+    echo "   Run 'deno task check:tailwind:fix' to auto-convert, or fix manually."
+    exit 1
+}

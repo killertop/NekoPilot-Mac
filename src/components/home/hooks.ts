@@ -1,0 +1,536 @@
+import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { confirm, message } from "@tauri-apps/plugin-dialog";
+import { useContext, useEffect, useRef, useState } from "react";
+import useSWR, { mutate as swrMutate } from "swr";
+import { formatSubscriptionImportError, insertSubscription } from "../../action/db";
+import { clearEngineError, useEngineState } from "../../hooks/useEngineState";
+import { NavContext } from "../../single/context";
+import { getProxyPort, getStoreValue, setStoreValue } from "../../single/store";
+import {
+  GET_SUBSCRIPTIONS_LIST_SWR_KEY,
+  RULE_MODE_STORE_KEY,
+  SSI_STORE_KEY,
+} from "../../types/definition";
+import { t, vpnServiceManager } from "../../utils/helper";
+import type { DeepLinkApplyPhase } from "./deep-link-apply-progress-modal";
+
+export function useNetworkCheck(key: string, checkFn: () => Promise<number>) {
+  const [shouldRefresh, setShouldRefresh] = useState(true);
+  const [confirmShown, setConfirmShown] = useState(false);
+
+  async function handleNetworkCheck() {
+    if (!shouldRefresh) {
+      return false;
+    }
+
+    try {
+      const status = await checkFn();
+      if (status == 1 && !confirmShown) {
+        setShouldRefresh(false);
+        setConfirmShown(true);
+        const answer = await confirm(t("network_need_login"), {
+          title: t("network_need_login_title"),
+          kind: "warning",
+        });
+
+        if (answer) {
+          setConfirmShown(false);
+          await vpnServiceManager.stop();
+          let url = await invoke("get_captive_redirect_url");
+          await invoke("open_browser", {
+            app: getCurrentWindow(),
+            url: url,
+          });
+        }
+
+        setTimeout(() => {
+          setShouldRefresh(true);
+          setConfirmShown(false);
+        }, 15000);
+      }
+
+      //  状态为 0 代表网络正常。
+      return status == 0;
+    } catch (error) {
+      console.error(`Network check failed: ${error}`);
+      return false;
+    }
+  }
+
+  return useSWR(key, handleNetworkCheck, {
+    refreshInterval: 15_000,
+    revalidateOnFocus: true,
+  });
+}
+
+export function useGstaticNetworkCheck() {
+  return useNetworkCheck(
+    `apple-network-check`,
+    async () => {
+      return await invoke<number>("check_captive_portal_status");
+    },
+  );
+}
+
+export function useGoogleNetworkCheck(isRunning: boolean) {
+  return useSWR(
+    isRunning ? "swr-google-check" : null,
+    async () => {
+      return invoke<boolean>("ping_google");
+    },
+    { refreshInterval: 15_000, revalidateOnFocus: true },
+  );
+}
+
+// 类型定义
+export type ProxyMode = "rules" | "global";
+export type OperationStatus = "starting" | "stopping" | "idle";
+
+/**
+ * 自定义Hook: 管理代理模式状态
+ */
+export const useProxyMode = () => {
+  const [selectedMode, setSelectedMode] = useState<ProxyMode>("rules");
+
+  const initializeMode = async () => {
+    try {
+      const storedMode = await getStoreValue(RULE_MODE_STORE_KEY) as ProxyMode;
+      if (storedMode) {
+        setSelectedMode(storedMode);
+      } else {
+        await setStoreValue(RULE_MODE_STORE_KEY, "rules");
+        setSelectedMode("rules");
+      }
+    } catch (error) {
+      console.error("获取规则模式发生错误:", error);
+      await setStoreValue(RULE_MODE_STORE_KEY, "rules");
+      setSelectedMode("rules");
+    }
+  };
+
+  const changeMode = async (mode: ProxyMode) => {
+    await setStoreValue(RULE_MODE_STORE_KEY, mode);
+    setSelectedMode(mode);
+  };
+
+  return {
+    selectedMode,
+    initializeMode,
+    changeMode,
+  };
+};
+
+/**
+ * Root-level hook. Owns the apply-pipeline state (applyPhase /
+ * applyErrorMessage), the deep-link consumer effect, the engine-transition
+ * watcher, the 45 s backstop, and the engine-failed dialog handler.
+ *
+ * Call this ONCE at the App root so the progress modal can render at app
+ * level and fire regardless of which page is currently visible — manual
+ * add no longer needs to switch to Home to get the modal.
+ */
+export const useApplyPipelineRoot = () => {
+  const engineState = useEngineState();
+  const {
+    deepLinkApplyUrl,
+    setDeepLinkApplyUrl,
+    deepLinkApplyName,
+    setDeepLinkApplyName,
+    deepLinkApplyAutoStart,
+    setDeepLinkApplyAutoStart,
+  } = useContext(NavContext);
+
+  const [applyPhase, setApplyPhase] = useState<DeepLinkApplyPhase | null>(null);
+  const [applyErrorMessage, setApplyErrorMessage] = useState<string>("");
+  const [applyErrorTitle, setApplyErrorTitle] = useState<string>("");
+  // Tracks which caller kind is driving the *current* modal run, so the
+  // manual-add path can confirm selection instead of claiming it started
+  // the service. Snapshotted when the URL is consumed
+  // below, not derived live from NavContext (which resets to true after
+  // consumption).
+  const [manualMode, setManualMode] = useState<boolean>(false);
+  // Epoch at the moment we enter the 'start' phase. Only engine transitions
+  // past this epoch can close the modal — avoids a stale `running` snapshot
+  // (e.g. the previous subscription) flipping us to 'done' prematurely.
+  const applyEpochRef = useRef<number>(-1);
+
+  // 失败状态: 弹窗提示并回到 Idle, 避免前端永久卡在 failed。
+  // Suppressed while the apply modal is live — the modal surfaces the error
+  // instead, to avoid a double prompt.
+  useEffect(() => {
+    if (engineState.kind !== "failed") return;
+    if (applyPhase !== null) return;
+    const reason = engineState.reason;
+    (async () => {
+      await message(`${t("connect_failed")}: ${reason}`, {
+        title: t("error"),
+        kind: "error",
+      });
+      await clearEngineError();
+    })();
+  }, [engineState.kind === "failed" ? engineState.epoch : null, applyPhase]);
+
+  // Drive apply modal to 'done' / 'error' based on engine transitions that
+  // happen after we issued the start command.
+  useEffect(() => {
+    if (applyPhase !== "start") return;
+    if (engineState.epoch <= applyEpochRef.current) return;
+    if (engineState.kind === "running") {
+      setApplyPhase("done");
+    } else if (engineState.kind === "failed") {
+      setApplyErrorMessage(engineState.reason || t("connect_failed"));
+      setApplyPhase("error");
+      clearEngineError().catch(() => {});
+    }
+  }, [applyPhase, engineState.kind, engineState.epoch]);
+
+  // Backstop timeout: if the engine never transitions (silent IPC failure or
+  // indefinite connect attempt), flip to error after 45s so the modal never
+  // wedges.
+  useEffect(() => {
+    if (applyPhase !== "start") return;
+    const timer = setTimeout(() => {
+      setApplyErrorMessage(t("connect_failed"));
+      setApplyPhase("error");
+    }, 45000);
+    return () => clearTimeout(timer);
+  }, [applyPhase]);
+
+  // apply=1 auto-dismiss: the engine is already running and the user
+  // landed on Home via the deep-link handler, so once they've registered
+  // the success state (~1 s) take them to the connected Home view.
+  // Manual-add intentionally skips this — the modal carries the
+  // "请手动启动服务" hint and should stay open for the user to act on.
+  useEffect(() => {
+    if (applyPhase !== "done") return;
+    if (manualMode) return;
+    const timer = setTimeout(() => {
+      setApplyPhase(null);
+      setApplyErrorMessage("");
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [applyPhase, manualMode]);
+
+  // Apply pipeline. Shared between two callers:
+  //   1. Deep-link apply=1 (App.tsx on_open_url handler): autoStart=true
+  //      (the default) — import, select, stop-then-start the engine.
+  //   2. Manual add (configuration modal submit): autoStart=false —
+  //      import and make the new configuration current, but do not touch
+  //      the engine. Same modal UI, no page switch.
+  useEffect(() => {
+    if (!deepLinkApplyUrl) return;
+    const url = deepLinkApplyUrl;
+    const name = deepLinkApplyName;
+    const autoStart = deepLinkApplyAutoStart;
+    setDeepLinkApplyUrl("");
+    setDeepLinkApplyName("");
+    // Reset the flag so the next fire — whatever origin — defaults
+    // back to the apply=1 contract unless the caller opts out again.
+    setDeepLinkApplyAutoStart(true);
+    setManualMode(!autoStart);
+
+    setApplyErrorMessage("");
+    setApplyErrorTitle("");
+    setApplyPhase("init");
+
+    (async () => {
+      // Brief 'init' dwell so the modal can render its entrance animation
+      // before the first real work starts.
+      await new Promise((r) => setTimeout(r, 350));
+      setApplyPhase("import");
+
+      try {
+        const id = await insertSubscription(url, name || undefined);
+        if (autoStart) {
+          await setStoreValue(SSI_STORE_KEY, id);
+          await Promise.all([
+            swrMutate(GET_SUBSCRIPTIONS_LIST_SWR_KEY),
+            vpnServiceManager.stop().catch(() => {}),
+          ]);
+        } else {
+          // A user explicitly chose this link, so it should become the
+          // current configuration immediately. The service remains stopped
+          // until the user presses Connect on Home.
+          await Promise.all([
+            setStoreValue(SSI_STORE_KEY, id),
+            swrMutate(GET_SUBSCRIPTIONS_LIST_SWR_KEY),
+          ]);
+        }
+      } catch (error) {
+        setApplyErrorTitle(t("import_failed"));
+        setApplyErrorMessage(formatSubscriptionImportError(error));
+        setApplyPhase("error");
+        return;
+      }
+
+      if (!autoStart) {
+        // Manual-add path: import finished, engine untouched.
+        // Jump straight to 'done' — modal shows success chip + close
+        // button. Step 3 ("启动服务") marks green as a side effect of
+        // isDone=true; accepted trade-off to keep the modal UI
+        // identical to apply=1 per design.
+        setApplyPhase("done");
+        return;
+      }
+
+      // Snapshot the current engine epoch; only transitions past this
+      // epoch count for the apply-modal 'done' check.
+      applyEpochRef.current = engineState.epoch;
+      setApplyPhase("start");
+
+      vpnServiceManager.syncConfig({
+        onSuccess: async () => {
+          try {
+            await vpnServiceManager.start();
+          } catch (error: any) {
+            console.error("启动服务失败:", error);
+          }
+        },
+        onError: async (error) => {
+          setApplyErrorMessage(
+            typeof error === "string" && error ? error : t("connect_failed"),
+          );
+          setApplyPhase("error");
+        },
+      });
+    })();
+  }, [deepLinkApplyUrl]);
+
+  const closeApplyModal = () => {
+    setApplyPhase(null);
+    setApplyErrorMessage("");
+    setApplyErrorTitle("");
+  };
+
+  // Manual-add renders the same progress shell but never starts the engine.
+  // The final step confirms that the imported configuration is selected and
+  // tells the user exactly where to connect.
+  const stepLabels = manualMode
+    ? {
+      start: t("dl_phase_start_manual"),
+      done: t("dl_phase_done_manual"),
+    }
+    : undefined;
+
+  return {
+    applyPhase,
+    applyErrorMessage,
+    applyErrorTitle,
+    closeApplyModal,
+    stepLabels,
+  };
+};
+
+/**
+ * 自定义Hook: 管理VPN服务操作状态
+ *
+ * Plan B 后:权威状态来自 Rust 的 `engine-state` 事件(经由 `EngineStateContext`),
+ * 本 hook 只剩下 UI 操作入口与派生的 isLoading/isRunning/operationStatus。
+ * 应用流水线状态已上移到 `useApplyPipelineRoot`。
+ */
+export const useVPNOperations = () => {
+  const engineState = useEngineState();
+  const { setActiveScreen } = useContext(NavContext);
+
+  // 从权威状态派生出兼容变量
+  const isRunning = engineState.kind === "running";
+  const isLoading = engineState.kind === "starting" ||
+    engineState.kind === "stopping";
+  const operationStatus: OperationStatus = engineState.kind === "starting"
+    ? "starting"
+    : engineState.kind === "stopping"
+    ? "stopping"
+    : "idle";
+
+  // Repair modal state: visible + orphan pids found by prestart_check
+  const [repairState, setRepairState] = useState<
+    { visible: boolean; orphanPids: number[] }
+  >({
+    visible: false,
+    orphanPids: [],
+  });
+
+  // Pending start callback: called by onRepairSuccess to resume the start sequence
+  const pendingStartRef = useRef<(() => void) | null>(null);
+
+  const stopService = async () => {
+    try {
+      await vpnServiceManager.stop();
+    } catch (error) {
+      console.error("停止服务失败:", error);
+    }
+  };
+
+  const performSyncAndStart = (onSyncError: (error: any) => Promise<void>) => {
+    vpnServiceManager.syncConfig({
+      onSuccess: async () => {
+        try {
+          await vpnServiceManager.start();
+        } catch (error: any) {
+          console.error("启动服务失败:", error);
+        }
+      },
+      onError: async (error) => {
+        await onSyncError(error);
+      },
+    });
+  };
+
+  const startService = async (isEmpty: boolean) => {
+    if (isEmpty) {
+      setActiveScreen("configuration");
+      return message(t("please_add_subscription"), {
+        title: t("tips"),
+        kind: "error",
+      });
+    }
+
+    // Pre-start check: if port is occupied by orphan processes, show repair modal
+    const proxyPort = await getProxyPort();
+    const check = await invoke<
+      { port_occupied: boolean; orphan_pids: number[]; foreign_pids: number[] }
+    >("prestart_check", { port: proxyPort });
+    if (check.port_occupied && check.foreign_pids.length > 0) {
+      return message(
+        t(
+          "port_occupied_by_other_app",
+          { port: proxyPort },
+          "Port {{port}} is used by another application. NekoPilot will not stop it.",
+        ),
+        { title: t("error"), kind: "error" },
+      );
+    }
+    if (check.port_occupied && check.orphan_pids.length > 0) {
+      // Store what we would do after repair, then show the modal
+      pendingStartRef.current = () => {
+        performSyncAndStart(async (error) => {
+          console.error("同步配置失败:", error);
+          if (error?.message === "subscription_config_missing") {
+            await message(t("subscription_config_missing"), {
+              title: t("error"),
+              kind: "error",
+            });
+          }
+          if (error?.message === "subscription_no_usable_nodes") {
+            await message(t("subscription_no_usable_nodes", "The subscription has no usable nodes."), {
+              title: t("error"),
+              kind: "error",
+            });
+            return;
+          }
+        });
+      };
+      setRepairState({ visible: true, orphanPids: check.orphan_pids });
+      return;
+    }
+
+    performSyncAndStart(async (error) => {
+      console.error("同步配置失败:", error);
+      if (error?.message === "subscription_config_missing") {
+        await message(t("subscription_config_missing"), {
+          title: t("error"),
+          kind: "error",
+        });
+      }
+      if (error?.message === "subscription_no_usable_nodes") {
+        await message(t("subscription_no_usable_nodes", "The subscription has no usable nodes."), {
+          title: t("error"),
+          kind: "error",
+        });
+        return;
+      }
+    });
+  };
+
+  const onRepairSuccess = () => {
+    setRepairState({ visible: false, orphanPids: [] });
+    const pending = pendingStartRef.current;
+    pendingStartRef.current = null;
+    pending?.();
+  };
+
+  const restartService = async (isEmpty: boolean) => {
+    if (isEmpty) {
+      setActiveScreen("configuration");
+      return message(t("please_add_subscription"), {
+        title: t("tips"),
+        kind: "error",
+      });
+    }
+    try {
+      await vpnServiceManager.syncAndReload();
+    } catch (error) {
+      console.error("重启服务失败:", error);
+      await message(t("reconnect_failed"), {
+        title: t("error"),
+        kind: "error",
+      });
+    }
+  };
+
+  const toggleService = async (isEmpty: boolean) => {
+    if (isEmpty) {
+      setActiveScreen("configuration");
+      return message(t("please_add_subscription"), {
+        title: t("tips"),
+        kind: "error",
+      });
+    }
+
+    try {
+      if (isRunning) {
+        await stopService();
+      } else {
+        await startService(isEmpty);
+      }
+    } catch (error) {
+      console.error("连接失败:", error);
+      await message(`${t("connect_failed")}: ${error}`, {
+        title: t("error"),
+        kind: "error",
+      });
+    }
+  };
+
+  return {
+    operationStatus,
+    isLoading,
+    isRunning,
+    startService,
+    restartService,
+    toggleService,
+    repairState,
+    onRepairSuccess,
+  };
+};
+
+/**
+ * 自定义Hook: 管理模式切换指示器位置
+ */
+export const useModeIndicator = (selectedMode: ProxyMode) => {
+  const [indicatorStyle, setIndicatorStyle] = useState({ left: 0, width: 0 });
+  const modeButtonsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const container = modeButtonsRef.current;
+    const activeButton = container?.querySelector(
+      `button[data-mode="${selectedMode}"]`,
+    );
+
+    if (container && activeButton) {
+      const containerRect = container.getBoundingClientRect();
+      const buttonRect = activeButton.getBoundingClientRect();
+
+      setIndicatorStyle({
+        left: buttonRect.left - containerRect.left,
+        width: buttonRect.width,
+      });
+    }
+  }, [selectedMode]);
+
+  return {
+    indicatorStyle,
+    modeButtonsRef,
+  };
+};

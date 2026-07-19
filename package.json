@@ -1,0 +1,53 @@
+{
+  "name": "nekopilot",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "tauri": "deno task tauri"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.3.2",
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-autostart": "^2.5.1",
+    "@tauri-apps/plugin-clipboard-manager": "~2.3.2",
+    "@tauri-apps/plugin-deep-link": "~2.4.9",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
+    "@tauri-apps/plugin-fs": "~2.5.1",
+    "@tauri-apps/plugin-http": "~2.5.9",
+    "@tauri-apps/plugin-log": "~2.8.0",
+    "@tauri-apps/plugin-opener": "^2.5.4",
+    "@tauri-apps/plugin-os": "~2.3.2",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-shell": "~2.3.5",
+    "@tauri-apps/plugin-window-state": "^2.4.1",
+    "bytes": "^3.1.2",
+    "clsx": "^2.1.1",
+    "framer-motion": "^12.42.2",
+    "jsonc": "^2.0.0",
+    "jsonc-parser": "^3.3.1",
+    "react": "^19.2.7",
+    "react-bootstrap-icons": "^1.11.6",
+    "react-dom": "^19.2.7",
+    "sonner": "^2.0.7",
+    "swr": "^2.4.2",
+    "tailwindcss": "^4.3.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/bytes": "^3.1.5",
+    "@types/node": "^25.9.4",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@types/unzipper": "^0.10.11",
+    "@vitejs/plugin-react": "^5.2.0",
+    "@vitest/coverage-v8": "^3.2.6",
+    "husky": "^9.1.7",
+    "tar": "^7.5.19",
+    "typescript": "~5.9.3",
+    "unzipper": "^0.12.5",
+    "vite": "^7.3.6",
+    "vitest": "^3.2.6"
+  }
+}
