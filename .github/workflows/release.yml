@@ -552,7 +552,7 @@ jobs:
         run: rm -f temp_auth_key.p8
 
   build-linux:
-    needs: [resolve, delete-old-release, check-reuse]
+    needs: [resolve, delete-old-release, check-reuse, release-preflight]
     if: |
       !failure() && !cancelled() &&
       (needs.check-reuse.result == 'skipped' || needs.check-reuse.outputs.can_reuse == 'false')
@@ -641,7 +641,7 @@ jobs:
           prerelease: ${{ needs.resolve.outputs.prerelease == 'true' }}
 
   build-windows:
-    needs: [resolve, delete-old-release, check-reuse]
+    needs: [resolve, delete-old-release, check-reuse, release-preflight]
     if: |
       !failure() && !cancelled() &&
       (needs.check-reuse.result == 'skipped' || needs.check-reuse.outputs.can_reuse == 'false')
