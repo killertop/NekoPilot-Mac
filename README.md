@@ -79,7 +79,7 @@ Build a local Release application and macOS bundle:
 deno task tauri build
 ```
 
-The local bundle is written below `src-tauri/target/release/bundle/`. A local build may be ad-hoc signed; see [docs/RELEASE.md](docs/RELEASE.md) for the signed and notarized release path.
+The local bundle is written below `src-tauri/target/release/bundle/`. macOS builds use an ad-hoc signature for the GitHub-only release path; see [docs/RELEASE.md](docs/RELEASE.md) for first-launch and verification notes.
 
 ## Project layout
 

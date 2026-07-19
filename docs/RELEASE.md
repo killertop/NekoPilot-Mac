@@ -6,9 +6,9 @@ There are three useful package levels:
 
 1. Development run — deno task tauri dev; debug app, not a distributable package.
 2. Local Release bundle — deno task tauri build; optimized local package, normally ad-hoc signed.
-3. Official release package — GitHub Actions output signed with an Apple Developer ID certificate and notarized by Apple.
+3. GitHub Release package — GitHub Actions output ad-hoc signed macOS packages and uploads them to GitHub Releases.
 
-Only the third type should be described as the final formal release package.
+NekoPilot is distributed from GitHub only. Apple Developer ID signing and notarization are deliberately not part of this release path. An ad-hoc signature lets Apple Silicon run a downloaded bundle, but users may still need to approve the app once in macOS Privacy & Security.
 
 ## Local preflight
 
@@ -36,7 +36,7 @@ To package the current committed version without changing the version file, manu
 gh workflow run release.yml --repo killertop/NekoPilot-Mac --ref main -f channel=stable
 ~~~
 
-The workflow must finish successfully before the GitHub Release is considered complete. The macOS jobs have a preflight check for signing, notarization, and updater secrets; missing secrets fail before a partial release is published.
+The workflow must finish successfully before the GitHub Release is considered complete. macOS jobs use the Tauri ad-hoc signing identity (`-`), so they do not require Apple certificates, notarization credentials, or GitHub Actions secrets beyond the built-in `GITHUB_TOKEN`.
 
 ## GitHub synchronization through the VPS
 
@@ -79,20 +79,6 @@ The repository convention is to use make bump for a version bump. It commits all
 
 The workflow also supports dev, beta, stable, and manual channels through GitHub Actions manual dispatch. Stable and beta may reuse an upstream artifact when the version matches; use a new version when the current source must be rebuilt.
 
-## Required GitHub secrets
-
-The macOS jobs reference these secrets:
-
-- APPLE_CERTIFICATE — base64-encoded Apple signing certificate in .p12 format.
-- APPLE_CERTIFICATE_PASSWORD — password for that certificate.
-- APPLE_AUTH_KEY — App Store Connect API key file content in .p8 format.
-- APPLE_API_KEY — App Store Connect API key ID.
-- APPLE_API_ISSUER — App Store Connect issuer ID.
-- TAURI_PRIVATE_KEY — Tauri updater signing private key.
-- KEYCHAIN_PASSWORD — temporary keychain password used by the macOS job.
-
-The certificate must be suitable for Developer ID distribution, and the App Store Connect key must be authorized for notarization. Never put any of these values in the repository or in an Issue, PR, log, or screenshot.
-
 ## Package verification
 
 After downloading the macOS package, verify the application bundle:
@@ -100,26 +86,21 @@ After downloading the macOS package, verify the application bundle:
 ```bash
 codesign -dv --verbose=4 NekoPilot.app
 codesign --verify --deep --strict --verbose=2 NekoPilot.app
-spctl -a -vv NekoPilot.app
-xcrun stapler validate NekoPilot.app
+spctl -a -vv NekoPilot.app || true
 ```
 
 Expected results:
 
-- codesign shows a Developer ID Application authority and a non-empty team identifier.
-- The signature is not adhoc.
-- spctl reports the app as accepted.
-- stapler validate succeeds for the notarization ticket.
-
-If the bundle still reports Signature=adhoc, it is a local-style package and must not be distributed as the final official build.
+- `codesign --verify` succeeds and the signature is ad-hoc.
+- `spctl` may reject the bundle because it has no Apple notarization ticket; this is expected for this GitHub-only release path.
+- On first launch after downloading, users may need to right-click the app and choose **Open**, or approve it in **System Settings → Privacy & Security**.
 
 ## Release artifacts
 
 The macOS release is expected to contain:
 
-- Apple Silicon DMG and app.tar.gz packages.
-- Intel DMG and app.tar.gz packages.
-- Matching updater signature files.
-- latest.json when the updater metadata is generated.
+- Apple Silicon DMG package.
+- Intel DMG package.
+- No updater signatures or `latest.json`: the Tauri updater is not enabled in this project.
 
 Record the Git commit, version, workflow run URL, artifact checksums, and manual QA result alongside each production release.

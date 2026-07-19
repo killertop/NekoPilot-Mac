@@ -193,50 +193,6 @@ jobs:
             echo "can_reuse=false" >> $GITHUB_OUTPUT
           fi
 
-  # Fail before the macOS runners start when official signing or notarization
-  # credentials are missing. This avoids publishing a partial Release with
-  # only Linux/Windows assets and makes the repair action explicit.
-  release-preflight:
-    needs: [resolve, delete-old-release, check-reuse]
-    if: |
-      !failure() && !cancelled() &&
-      (needs.check-reuse.result == 'skipped' || needs.check-reuse.outputs.can_reuse == 'false')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Validate macOS release secrets
-        shell: bash
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_AUTH_KEY: ${{ secrets.APPLE_AUTH_KEY }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: |
-          set -euo pipefail
-          missing=()
-          for name in \
-            APPLE_CERTIFICATE \
-            APPLE_CERTIFICATE_PASSWORD \
-            APPLE_AUTH_KEY \
-            APPLE_API_KEY \
-            APPLE_API_ISSUER \
-            TAURI_PRIVATE_KEY \
-            KEYCHAIN_PASSWORD; do
-            if [ -z "${!name:-}" ]; then
-              missing+=("$name")
-            fi
-          done
-
-          if ((${#missing[@]} > 0)); then
-            printf '::error::Missing GitHub Actions secret(s): %s\n' "${missing[*]}"
-            echo 'Configure the required secrets before creating an official macOS release.'
-            exit 1
-          fi
-
-          echo '✓ macOS signing, notarization, and updater secrets are present'
-
   # ── 4. Copy artifacts from upstream release ─────────────────────────
   copy-release:
     needs: [resolve, delete-old-release, check-reuse]
@@ -324,7 +280,7 @@ jobs:
   # Linux and Windows are also separate jobs for symmetry.
 
   build-macos-arm64:
-    needs: [resolve, delete-old-release, check-reuse, release-preflight]
+    needs: [resolve, delete-old-release, check-reuse]
     if: |
       !failure() && !cancelled() &&
       (needs.check-reuse.result == 'skipped' || needs.check-reuse.outputs.can_reuse == 'false')
@@ -387,58 +343,28 @@ jobs:
             || { echo "::error::generated.ts missing singBoxVersion"; exit 1; }
           echo "✓ committed template snapshot verified"
 
-      - name: Initialize Apple Signing Key
-        shell: bash
-        run: |
-          echo "${{ secrets.APPLE_AUTH_KEY }}" > $GITHUB_WORKSPACE/temp_auth_key.p8
-
-      - name: Import signing certificate for helper prebuild
-        shell: bash
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-        run: |
-          KEYCHAIN_PATH="$RUNNER_TEMP/helper-signing.keychain-db"
-          KEYCHAIN_PASSWORD="$(openssl rand -base64 12)"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN_PATH" \
-            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
-          security set-key-partition-list -S apple-tool:,apple: \
-            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security list-keychains -d user -s "$KEYCHAIN_PATH" \
-            $(security list-keychains -d user | tr -d '"')
-          rm -f "$RUNNER_TEMP/cert.p12"
-          echo "Helper signing certificate imported into $KEYCHAIN_PATH"
-
-      - name: Build and Release with Tauri Action
+      - name: Build and publish ad-hoc macOS package
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
           ACCELERATE_URL: ${{ secrets.ACCELERATE_URL }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_API_KEY_PATH: ${{ github.workspace }}/temp_auth_key.p8
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          # GitHub-only distribution: create a real ad-hoc signature so
+          # Apple Silicon can launch the downloaded bundle. This deliberately
+          # does not claim an Apple Developer identity or notarization.
+          APPLE_SIGNING_IDENTITY: "-"
         with:
           tagName: ${{ needs.resolve.outputs.tag_name }}
           releaseName: ${{ needs.resolve.outputs.release_name }}
           releaseBody: |
             ${{ steps.decode.outputs.content }}
+
+            ## macOS installation
+            This GitHub package is ad-hoc signed and is not Apple-notarized. On first launch, macOS may require **Open** from the context menu or approval in **Privacy & Security**.
           args: --target aarch64-apple-darwin
           prerelease: ${{ needs.resolve.outputs.prerelease == 'true' }}
 
-      - name: Clean Up Apple Signing Key
-        shell: bash
-        run: rm -f temp_auth_key.p8
-
   build-macos-x86:
-    needs: [resolve, delete-old-release, check-reuse, release-preflight]
+    needs: [resolve, delete-old-release, check-reuse]
     if: |
       !failure() && !cancelled() &&
       (needs.check-reuse.result == 'skipped' || needs.check-reuse.outputs.can_reuse == 'false')
@@ -501,58 +427,25 @@ jobs:
             || { echo "::error::generated.ts missing singBoxVersion"; exit 1; }
           echo "✓ committed template snapshot verified"
 
-      - name: Initialize Apple Signing Key
-        shell: bash
-        run: |
-          echo "${{ secrets.APPLE_AUTH_KEY }}" > $GITHUB_WORKSPACE/temp_auth_key.p8
-
-      - name: Import signing certificate for helper prebuild
-        shell: bash
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-        run: |
-          KEYCHAIN_PATH="$RUNNER_TEMP/helper-signing.keychain-db"
-          KEYCHAIN_PASSWORD="$(openssl rand -base64 12)"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN_PATH" \
-            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
-          security set-key-partition-list -S apple-tool:,apple: \
-            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security list-keychains -d user -s "$KEYCHAIN_PATH" \
-            $(security list-keychains -d user | tr -d '"')
-          rm -f "$RUNNER_TEMP/cert.p12"
-          echo "Helper signing certificate imported into $KEYCHAIN_PATH"
-
-      - name: Build and Release with Tauri Action
+      - name: Build and publish ad-hoc macOS package
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
           ACCELERATE_URL: ${{ secrets.ACCELERATE_URL }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_API_KEY_PATH: ${{ github.workspace }}/temp_auth_key.p8
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_SIGNING_IDENTITY: "-"
         with:
           tagName: ${{ needs.resolve.outputs.tag_name }}
           releaseName: ${{ needs.resolve.outputs.release_name }}
           releaseBody: |
             ${{ steps.decode.outputs.content }}
+
+            ## macOS installation
+            This GitHub package is ad-hoc signed and is not Apple-notarized. On first launch, macOS may require **Open** from the context menu or approval in **Privacy & Security**.
           args: --target x86_64-apple-darwin
           prerelease: ${{ needs.resolve.outputs.prerelease == 'true' }}
 
-      - name: Clean Up Apple Signing Key
-        shell: bash
-        run: rm -f temp_auth_key.p8
-
   build-linux:
-    needs: [resolve, delete-old-release, check-reuse, release-preflight]
+    needs: [resolve, delete-old-release, check-reuse]
     if: |
       !failure() && !cancelled() &&
       (needs.check-reuse.result == 'skipped' || needs.check-reuse.outputs.can_reuse == 'false')
@@ -631,7 +524,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACCELERATE_URL: ${{ secrets.ACCELERATE_URL }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
         with:
           tagName: ${{ needs.resolve.outputs.tag_name }}
           releaseName: ${{ needs.resolve.outputs.release_name }}
@@ -641,7 +533,7 @@ jobs:
           prerelease: ${{ needs.resolve.outputs.prerelease == 'true' }}
 
   build-windows:
-    needs: [resolve, delete-old-release, check-reuse, release-preflight]
+    needs: [resolve, delete-old-release, check-reuse]
     if: |
       !failure() && !cancelled() &&
       (needs.check-reuse.result == 'skipped' || needs.check-reuse.outputs.can_reuse == 'false')
@@ -716,7 +608,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACCELERATE_URL: ${{ secrets.ACCELERATE_URL }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
         with:
           tagName: ${{ needs.resolve.outputs.tag_name }}
           releaseName: ${{ needs.resolve.outputs.release_name }}

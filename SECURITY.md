@@ -21,4 +21,4 @@ If the issue involves a real subscription or node, remove the URL and replace se
 - Never commit subscription URLs, API keys, private keys, certificates, or personal databases.
 - Treat imported configuration content as untrusted input.
 - Keep local logs and exported configurations out of Issues and Pull Requests unless they have been sanitized.
-- Verify the signature and notarization of release packages before distributing them.
+- Verify the ad-hoc signature of macOS release packages and clearly disclose the required first-launch Gatekeeper approval before distributing them.

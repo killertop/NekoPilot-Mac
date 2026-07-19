@@ -60,7 +60,7 @@ git diff --check
 deno task build
 ```
 
-The Rust test command and frontend test command are independent. Passing them does not prove that a signed macOS application can start, control the system proxy, launch sing-box, or pass notarization.
+The Rust test command and frontend test command are independent. Passing them does not prove that an ad-hoc-signed macOS application can start, pass its required first-launch Gatekeeper approval, control the system proxy, or launch sing-box.
 
 ## 4. Manual QA boundary
 
