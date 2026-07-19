@@ -1,4 +1,4 @@
-# OneBox — Project Notes for Claude
+# NekoPilot for Mac — Project Notes for Claude
 
 ## Reading guide
 
@@ -262,7 +262,7 @@ String comparison in `ensure_helper_installed` is literal byte equality on the e
 
 ## GitHub CLI access: use `gh` freely for history and CI diagnostics
 
-I have **full write permissions on `OneOhCloud/OneBox`** via the `gh`
+I have **full write permissions on `killertop/NekoPilot-Mac`** via the `gh`
 CLI already configured on this host. Before guessing at CI behaviour,
 cache state, past failures, or commit history, query it directly. The
 answers are one command away and dramatically better than speculation.
@@ -272,7 +272,7 @@ Routinely useful invocations:
 ```bash
 gh run list --limit 10 --workflow=release.yml
 gh run view <run-id> --json jobs -q '.jobs[] | {name, conclusion, status}'
-gh api repos/OneOhCloud/OneBox/actions/jobs/<job-id>/logs | grep -i cache
+gh api repos/killertop/NekoPilot-Mac/actions/jobs/<job-id>/logs | grep -i cache
 gh cache list --sort created_at --order desc --json id,key,ref,sizeInBytes
 gh workflow run release.yml -r feature/dev -f channel=dev
 gh pr list --state=all --limit 20
@@ -460,7 +460,7 @@ System DNS is pointed at the TUN gateway IP on TUN start, because `mDNSResponder
 
 **Read before editing**: `scripts/sync-templates.ts`, `src/config/merger/*`, `src/config/templates/*`, `src/hooks/useSwr.ts`, `src/single/store.ts`, or when bumping sing-box version / the cache schema.
 
-Templates come from one source of truth (`OneOhCloud/conf-template`); both the build-time snapshot (`src/config/templates/generated.ts`, produced by `scripts/sync-templates.ts` via the pre-build hook and an explicit CI step) and the SWR-refreshed runtime cache (`tauri-plugin-store`) are snapshots of that same upstream. The read path never blocks on network; the write path refreshes in the background. A schema-versioned cache key plus a scorched-earth legacy-purge at mount prevents poisoned caches from surviving a client upgrade.
+Templates come from the committed local snapshot in `src/config/templates/generated.ts`; `scripts/sync-templates.ts` validates it during the pre-build hook and CI. The runtime cache is refreshed only through the existing application logic and the read path never blocks on network. A schema-versioned cache key plus a scorched-earth legacy-purge at mount prevents poisoned caches from surviving a client upgrade.
 
 ### Update-driven relaunch: deep-link argv suppression → [`docs/claude/update-argv-suppression.md`](docs/claude/update-argv-suppression.md)
 

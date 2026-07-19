@@ -99,6 +99,6 @@ docs/                 开发、发布、审计和实现说明
 - [安全说明](SECURITY.md)
 - [贡献指南](CONTRIBUTING.md)
 
-## 许可证与上游
+## 许可证与来源声明
 
-仓库保留上游 OneBox 的 Apache-2.0 `LICENSE` 和 `NOTICE` 文件。NekoPilot for Mac 使用独立的产品名称、图标、Bundle ID 和用户界面品牌。具体适用范围请查看 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。
+本仓库由 [killertop/NekoPilot-Mac](https://github.com/killertop/NekoPilot-Mac) 维护。仓库保留 Apache-2.0 `LICENSE` 和 `NOTICE` 文件，以满足源代码归属与许可证要求。NekoPilot for Mac 使用独立的产品名称、图标、Bundle ID 和用户界面品牌。具体适用范围请查看 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。

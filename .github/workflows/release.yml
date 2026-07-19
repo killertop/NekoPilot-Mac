@@ -328,23 +328,20 @@ jobs:
       - name: Download Binaries
         run: deno task download-binaries
 
-      - name: Sync config templates from conf-template
-        env:
-          CONF_TEMPLATE_BRANCH: ${{ needs.resolve.outputs.conf_template_branch }}
+      - name: Verify committed config template snapshot
         shell: bash
         run: |
           set -euo pipefail
-          rm -f src/config/templates/generated.ts
           deno task sync-templates
           test -f src/config/templates/generated.ts \
-            || { echo "::error::sync-templates did not write generated.ts"; exit 1; }
+            || { echo "::error::committed generated.ts is missing"; exit 1; }
           grep -q "BUILT_IN_TEMPLATE_OBJECTS" src/config/templates/generated.ts \
             || { echo "::error::generated.ts missing BUILT_IN_TEMPLATE_OBJECTS export"; exit 1; }
           grep -q "BUILD_TIME_TEMPLATE_SOURCE" src/config/templates/generated.ts \
             || { echo "::error::generated.ts missing BUILD_TIME_TEMPLATE_SOURCE metadata"; exit 1; }
           grep -q "singBoxVersion: 'v" src/config/templates/generated.ts \
             || { echo "::error::generated.ts missing singBoxVersion"; exit 1; }
-          echo "✓ template snapshot synced and valid"
+          echo "✓ committed template snapshot verified"
 
       - name: Initialize Apple Signing Key
         shell: bash
@@ -445,23 +442,20 @@ jobs:
       - name: Download Binaries
         run: deno task download-binaries
 
-      - name: Sync config templates from conf-template
-        env:
-          CONF_TEMPLATE_BRANCH: ${{ needs.resolve.outputs.conf_template_branch }}
+      - name: Verify committed config template snapshot
         shell: bash
         run: |
           set -euo pipefail
-          rm -f src/config/templates/generated.ts
           deno task sync-templates
           test -f src/config/templates/generated.ts \
-            || { echo "::error::sync-templates did not write generated.ts"; exit 1; }
+            || { echo "::error::committed generated.ts is missing"; exit 1; }
           grep -q "BUILT_IN_TEMPLATE_OBJECTS" src/config/templates/generated.ts \
             || { echo "::error::generated.ts missing BUILT_IN_TEMPLATE_OBJECTS export"; exit 1; }
           grep -q "BUILD_TIME_TEMPLATE_SOURCE" src/config/templates/generated.ts \
             || { echo "::error::generated.ts missing BUILD_TIME_TEMPLATE_SOURCE metadata"; exit 1; }
           grep -q "singBoxVersion: 'v" src/config/templates/generated.ts \
             || { echo "::error::generated.ts missing singBoxVersion"; exit 1; }
-          echo "✓ template snapshot synced and valid"
+          echo "✓ committed template snapshot verified"
 
       - name: Initialize Apple Signing Key
         shell: bash
@@ -573,23 +567,20 @@ jobs:
       - name: Download Binaries
         run: deno task download-binaries
 
-      - name: Sync config templates from conf-template
-        env:
-          CONF_TEMPLATE_BRANCH: ${{ needs.resolve.outputs.conf_template_branch }}
+      - name: Verify committed config template snapshot
         shell: bash
         run: |
           set -euo pipefail
-          rm -f src/config/templates/generated.ts
           deno task sync-templates
           test -f src/config/templates/generated.ts \
-            || { echo "::error::sync-templates did not write generated.ts"; exit 1; }
+            || { echo "::error::committed generated.ts is missing"; exit 1; }
           grep -q "BUILT_IN_TEMPLATE_OBJECTS" src/config/templates/generated.ts \
             || { echo "::error::generated.ts missing BUILT_IN_TEMPLATE_OBJECTS export"; exit 1; }
           grep -q "BUILD_TIME_TEMPLATE_SOURCE" src/config/templates/generated.ts \
             || { echo "::error::generated.ts missing BUILD_TIME_TEMPLATE_SOURCE metadata"; exit 1; }
           grep -q "singBoxVersion: 'v" src/config/templates/generated.ts \
             || { echo "::error::generated.ts missing singBoxVersion"; exit 1; }
-          echo "✓ template snapshot synced and valid"
+          echo "✓ committed template snapshot verified"
 
       - name: Build and Release with Tauri Action
         uses: tauri-apps/tauri-action@v0
@@ -652,23 +643,20 @@ jobs:
       - name: Download Binaries
         run: deno task download-binaries
 
-      - name: Sync config templates from conf-template
-        env:
-          CONF_TEMPLATE_BRANCH: ${{ needs.resolve.outputs.conf_template_branch }}
+      - name: Verify committed config template snapshot
         shell: bash
         run: |
           set -euo pipefail
-          rm -f src/config/templates/generated.ts
           deno task sync-templates
           test -f src/config/templates/generated.ts \
-            || { echo "::error::sync-templates did not write generated.ts"; exit 1; }
+            || { echo "::error::committed generated.ts is missing"; exit 1; }
           grep -q "BUILT_IN_TEMPLATE_OBJECTS" src/config/templates/generated.ts \
             || { echo "::error::generated.ts missing BUILT_IN_TEMPLATE_OBJECTS export"; exit 1; }
           grep -q "BUILD_TIME_TEMPLATE_SOURCE" src/config/templates/generated.ts \
             || { echo "::error::generated.ts missing BUILD_TIME_TEMPLATE_SOURCE metadata"; exit 1; }
           grep -q "singBoxVersion: 'v" src/config/templates/generated.ts \
             || { echo "::error::generated.ts missing singBoxVersion"; exit 1; }
-          echo "✓ template snapshot synced and valid"
+          echo "✓ committed template snapshot verified"
 
       - name: Build tun-service
         shell: bash

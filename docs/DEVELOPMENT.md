@@ -79,13 +79,13 @@ When reporting a failure, record the app version, package path, macOS version, n
 
 ## 5. Configuration and generated files
 
-The file src/config/templates/generated.ts is a versioned offline build input. Refresh it explicitly with:
+The file src/config/templates/generated.ts is a versioned local build input. Validate it explicitly with:
 
 ```bash
 deno task sync-templates
 ```
 
-The release workflow refreshes the template snapshot for its selected channel. Do not commit personal subscription data or generated local databases.
+The release workflow validates the committed snapshot and does not fetch or delete it. Do not commit personal subscription data or generated local databases.
 
 ## 6. Product behavior principles
 
