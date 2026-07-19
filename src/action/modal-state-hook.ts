@@ -54,6 +54,17 @@ export function useModalState() {
         setOpen(false);
     }
 
+    useEffect(() => {
+        if (!open) return;
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") setOpen(false);
+        };
+
+        document.addEventListener("keydown", handleKeyDown);
+        return () => document.removeEventListener("keydown", handleKeyDown);
+    }, [open]);
+
     // 收到 apply=0 的 deep link 时，自动预填 URL 并打开弹窗
     useEffect(() => {
         if (!deepLinkUrl) return;
@@ -61,9 +72,9 @@ export function useModalState() {
         setDeepLinkUrl('');
     }, [deepLinkUrl]);
 
-    function validate(): boolean {
+    function validate(nextName = name, nextUrl = url): boolean {
         try {
-            subscriptionSchema.parse({ name, url });
+            subscriptionSchema.parse({ name: nextName, url: nextUrl });
             setErrors({});
             return true;
         } catch (err) {
@@ -93,12 +104,12 @@ export function useModalState() {
 
     function onNameChange(value: string) {
         setName(value);
-        if (errors.name) validate();
+        if (errors.name) validate(value, url);
     }
 
     function onUrlChange(value: string) {
         setUrl(value);
-        if (errors.url) validate();
+        if (errors.url) validate(name, value);
     }
 
     return { open, name, url, errors, openModal, closeModal, onNameChange, onUrlChange, submit };

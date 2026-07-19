@@ -252,6 +252,8 @@
     "update_install": "安装更新",
     "update_subscription_failed": "更新配置失败",
     "update_subscription_success": "更新配置成功",
+    "subscription_load_failed": "配置列表加载失败",
+    "retry": "重试",
     "update": "更新",
     "updating": "更新中...",
     "url_cannot_empty": "URL不能为空",

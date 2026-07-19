@@ -1,5 +1,7 @@
-import { ReactNode } from "react";
+import { ReactNode, useEffect } from "react";
 import { createPortal } from "react-dom";
+
+let bodyScrollLockCount = 0;
 
 /**
  * Render children into document.body instead of the caller's DOM location.
@@ -15,4 +17,21 @@ import { createPortal } from "react-dom";
  */
 export function Portal({ children }: { children: ReactNode }) {
     return createPortal(children, document.body);
+}
+
+/** Keep the underlying page from scrolling while one or more modals are open. */
+export function useBodyScrollLock(locked: boolean) {
+    useEffect(() => {
+        if (!locked) return;
+
+        bodyScrollLockCount += 1;
+        document.body.classList.add("overflow-hidden");
+
+        return () => {
+            bodyScrollLockCount = Math.max(0, bodyScrollLockCount - 1);
+            if (bodyScrollLockCount === 0) {
+                document.body.classList.remove("overflow-hidden");
+            }
+        };
+    }, [locked]);
 }

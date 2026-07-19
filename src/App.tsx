@@ -28,7 +28,6 @@ const RouterSettingsPage = React.lazy(() => import('./page/router'));
 
 
 type BodyProps = {
-  lang: string;
   activeScreen: ActiveScreenType;
 }
 
@@ -39,45 +38,20 @@ const LoadingFallback = () => (
   </div>
 );
 
-function Body({ lang, activeScreen }: BodyProps) {
-
-  const lazyComponent = useMemo(() => {
-    switch (activeScreen) {
-      case 'home':
-        return (
-          <HomePage />
-        );
-      case 'configuration':
-        return (
-          <Suspense fallback={<LoadingFallback />}>
-            <ConfigurationPage />
-          </Suspense>
-        );
-
-      case 'settings':
-        return (
-          <Suspense fallback={<LoadingFallback />}>
-            <SettingsPage />
-          </Suspense>
-        );
-
-      case 'router_settings':
-        return (
-          <Suspense fallback={<LoadingFallback />}>
-            <RouterSettingsPage />
-          </Suspense>
-        );
-
-      default:
-        return null;
-    }
-  }, [activeScreen]);
-
+function Body({ activeScreen }: BodyProps) {
   return (
-    <div className="flex-1 overflow-y-hidden">
+    <div className="flex-1 min-h-0 overflow-hidden">
       {activeScreen && (
-        <div className="animate-fade-in h-full overflow-y-auto" key={`${activeScreen}-${lang}`}>
-          {lazyComponent}
+        <div className="animate-fade-in h-full min-h-0 overflow-hidden" key={activeScreen}>
+          {activeScreen === 'home' ? (
+            <HomePage />
+          ) : (
+            <Suspense fallback={<LoadingFallback />}>
+              {activeScreen === 'configuration' && <ConfigurationPage />}
+              {activeScreen === 'settings' && <SettingsPage />}
+              {activeScreen === 'router_settings' && <RouterSettingsPage />}
+            </Suspense>
+          )}
         </div>
       )}
     </div>
@@ -92,12 +66,13 @@ function App() {
   // boots with the persisted theme and reacts to toggle events. Do not re-mount here.
   const [activeScreen, setActiveScreen] = useState<ActiveScreenType>('home');
   const [isSettingsHovered, setIsSettingsHovered] = useState(false);
-  const [dockLang, setDockLang] = useState({
+  const [language, setLanguage] = useState('en');
+  const dockLang = useMemo(() => ({
     home: t("home"),
     configuration: t("configuration"),
     rules: t("router_settings"),
     settings: t("settings"),
-  })
+  }), [language]);
   useSWR('swr-purgeLegacyTemplateCache-key', async () => {
     await purgeLegacyTemplateCache();
     return 'ok';
@@ -116,7 +91,6 @@ function App() {
     dedupingInterval: 60000 * 30,
   })
 
-  const [language, setLanguage] = useState('en');
   const [deepLinkUrl, setDeepLinkUrl] = useState<string>('');
   const [deepLinkApplyUrl, setDeepLinkApplyUrl] = useState<string>('');
   const [deepLinkApplyName, setDeepLinkApplyName] = useState<string>('');
@@ -215,23 +189,32 @@ function App() {
     };
   }, []);
 
-  useEffect(() => {
-    if (language !== 'en' && language !== 'zh') return;
-    setDockLang({
-      home: t("home"),
-      configuration: t("configuration"),
-      rules: t("router_settings"),
-      settings: t("settings"),
-    });
-  }, [language]);
+  const navContextValue = useMemo(() => ({
+    activeScreen,
+    setActiveScreen,
+    deepLinkUrl,
+    setDeepLinkUrl,
+    deepLinkApplyUrl,
+    setDeepLinkApplyUrl,
+    deepLinkApplyName,
+    setDeepLinkApplyName,
+    deepLinkApplyAutoStart,
+    setDeepLinkApplyAutoStart,
+  }), [
+    activeScreen,
+    deepLinkUrl,
+    deepLinkApplyUrl,
+    deepLinkApplyName,
+    deepLinkApplyAutoStart,
+  ]);
+
   return (
-    <NavContext.Provider value={{ activeScreen, setActiveScreen, deepLinkUrl, setDeepLinkUrl, deepLinkApplyUrl, setDeepLinkApplyUrl, deepLinkApplyName, setDeepLinkApplyName, deepLinkApplyAutoStart, setDeepLinkApplyAutoStart }}>
+    <NavContext.Provider value={navContextValue}>
       <EngineStateContext.Provider value={engineState}>
         <Toaster position="top-center" toastOptions={{ duration: 2000 }} />
         <AppShell
           activeScreen={activeScreen}
           setActiveScreen={setActiveScreen}
-          language={language}
           dockLang={dockLang}
           isSettingsHovered={isSettingsHovered}
           setIsSettingsHovered={setIsSettingsHovered}
@@ -248,14 +231,12 @@ function App() {
 function AppShell({
   activeScreen,
   setActiveScreen,
-  language,
   dockLang,
   isSettingsHovered,
   setIsSettingsHovered,
 }: {
   activeScreen: ActiveScreenType;
   setActiveScreen: (s: ActiveScreenType) => void;
-  language: string;
   dockLang: { home: string; configuration: string; rules: string; settings: string };
   isSettingsHovered: boolean;
   setIsSettingsHovered: (v: boolean) => void;
@@ -271,7 +252,7 @@ function AppShell({
   return (
     <>
       <main className="onebox-surface relative flex flex-col h-screen">
-        <Body activeScreen={activeScreen} lang={language} />
+        <Body activeScreen={activeScreen} />
 
         <div className="onebox-dock">
           <button

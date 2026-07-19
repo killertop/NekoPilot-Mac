@@ -35,7 +35,7 @@ export default function Body({
     isRunning: boolean;
     onUpdate: () => void;
 }) {
-    const { data, isLoading } = useSubscriptions();
+    const { data, error, isLoading, mutate } = useSubscriptions();
 
     const handleUpdate = async (_identifier: string, isUpdate: boolean) => {
         try {
@@ -51,6 +51,37 @@ export default function Body({
             console.error(t("update_config_failed") + ":", error);
         }
     };
+
+    if (error) {
+        return (
+            <div className="w-full">
+                <div className="onebox-plain-card flex items-center gap-3 px-4 py-3">
+                    <div className="min-w-0 flex-1">
+                        <p
+                            className="text-[13px] font-medium"
+                            style={{ color: "var(--onebox-label)" }}
+                        >
+                            {t("subscription_load_failed")}
+                        </p>
+                        <p
+                            className="mt-0.5 truncate text-[11px]"
+                            style={{ color: "var(--onebox-label-secondary)" }}
+                        >
+                            {String(error)}
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        className="shrink-0 text-[13px] font-medium"
+                        style={{ color: "var(--onebox-blue)" }}
+                        onClick={() => void mutate()}
+                    >
+                        {t("retry")}
+                    </button>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="w-full space-y-4">

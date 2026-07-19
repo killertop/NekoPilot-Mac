@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { ReactNode } from "react";
 import { t } from "../../utils/helper";
-import { Portal } from "./portal";
+import { Portal, useBodyScrollLock } from "./portal";
 
 interface SettingsModalProps {
     isOpen: boolean;
@@ -48,6 +48,7 @@ export function SettingsModal({
 }: SettingsModalProps) {
     const hasConfirm = !!onConfirm && !!confirmLabel;
     const confirmColor = confirmDestructive ? "#FF3B30" : "var(--onebox-blue)";
+    useBodyScrollLock(isOpen);
 
     return (
         <Portal>

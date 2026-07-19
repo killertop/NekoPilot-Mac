@@ -28,6 +28,16 @@ Then manually test the local Release bundle on macOS. Confirm import, selection,
 
 The release workflow is .github/workflows/release.yml. It builds macOS arm64 and x86_64 packages and publishes the resulting assets to a GitHub Release.
 
+The normal automation is version-based: a push that changes `src-tauri/tauri.conf.json` on `feature/dev`, `feature/beta`, or `main` starts the corresponding channel. A `main` build is the stable release and is tagged `v<version>`. This prevents ordinary source commits from repeatedly overwriting the same formal release version.
+
+To package the current committed version without changing the version file, manually dispatch the same workflow:
+
+~~~bash
+gh workflow run release.yml --repo killertop/NekoPilot-Mac --ref main -f channel=stable
+~~~
+
+The workflow must finish successfully before the GitHub Release is considered complete. The macOS jobs have a preflight check for signing, notarization, and updater secrets; missing secrets fail before a partial release is published.
+
 ## GitHub synchronization through the VPS
 
 Source publication uses a VPS bare repository as the network boundary:

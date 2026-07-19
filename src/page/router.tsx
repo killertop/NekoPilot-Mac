@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Pencil, Plus, QuestionCircle, X, XCircleFill } from "react-bootstrap-icons";
 import { toast } from "sonner";
 import { IOSTextField } from "../components/common/ios-text-field";
+import { Portal, useBodyScrollLock } from "../components/common/portal";
 import { HelpModal } from "../components/router-settings/help-modal";
 import {
     RULE_ACTIONS,
@@ -542,11 +543,16 @@ function BottomSheet({
     title: string;
     children: ReactNode;
 }) {
+    useBodyScrollLock(open);
+
     return (
-        <AnimatePresence>
-            {open && (
-                <motion.div
-                    className="fixed inset-0 z-50 flex items-end justify-center"
+        <Portal>
+            <AnimatePresence>
+                {open && (
+                    <motion.div
+                    className="fixed inset-0 z-[80] flex items-end justify-center"
+                    role="dialog"
+                    aria-modal="true"
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
@@ -598,9 +604,10 @@ function BottomSheet({
                         </div>
                         {children}
                     </motion.div>
-                </motion.div>
-            )}
-        </AnimatePresence>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </Portal>
     );
 }
 

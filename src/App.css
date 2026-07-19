@@ -64,30 +64,19 @@ https://v2.tauri.app/learn/window-customization/
 /* Window Customization CSS end */
 
 
-/* 完全隐藏滚动条 - 所有浏览器兼容方案 */
-/* Webkit 浏览器 (Chrome, Safari, Edge) */
-::-webkit-scrollbar {
-  display: none !important;
-}
-
-/* Firefox */
-* {
-  scrollbar-width: none !important;
-}
-
-/* IE 和 Edge Legacy */
-* {
-  -ms-overflow-style: none !important;
-}
-
-/* 确保滚动功能仍然有效 */
-.overflow-auto,
-.overflow-scroll,
-.overflow-y-auto,
-.overflow-x-auto,
-.overflow-y-scroll,
-.overflow-x-scroll {
+/* Hide scrollbars only on intentional app surfaces. Keeping this scoped is
+   important for config viewers, text areas, and modal content where a visible
+   scrollbar is useful feedback that more content exists. */
+.onebox-scrollpage,
+.onebox-scrollbar-hidden {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   -webkit-overflow-scrolling: touch;
+}
+
+.onebox-scrollpage::-webkit-scrollbar,
+.onebox-scrollbar-hidden::-webkit-scrollbar {
+  display: none;
 }
 
 /* Apple 风格动画和样式 */
@@ -288,6 +277,13 @@ main.onebox-surface {
   width: 100%;
   overflow-y: auto;
   overflow-x: hidden;
+}
+
+/* Pages with a fixed header and their own list viewport (currently the
+   configuration page) must not create a second scroll container. The route
+   shell owns clipping; the list body owns scrolling. */
+.onebox-scrollpage--fixed {
+  overflow: hidden;
 }
 
 /* A card that holds one group of rows. Shadow is at Apple "ambient" level

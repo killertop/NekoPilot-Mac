@@ -2,7 +2,6 @@ import bytes from "bytes";
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import {
-    ArrowClockwise,
     Check,
     ChevronRight,
     ClipboardCheck,
@@ -15,10 +14,9 @@ import {
 import { toast } from "sonner";
 import { mutate } from "swr";
 import { deleteSubscription, getSubscriptionConfig, renameSubscription } from "../../action/db";
-import { useUpdateSubscription } from "../../action/subscription-hooks";
 import { GET_SUBSCRIPTIONS_LIST_SWR_KEY, Subscription } from "../../types/definition";
 import { t } from "../../utils/helper";
-import { Portal } from "../common/portal";
+import { Portal, useBodyScrollLock } from "../common/portal";
 import Avatar from "./avatar";
 import { extractLocalNodeInfo, type LocalNodeInfo } from "./local-node-info";
 import {
@@ -79,7 +77,7 @@ export function SubscriptionDetailModal({
     const [localNodeInfo, setLocalNodeInfo] = useState<LocalNodeInfo>();
     const nameInputRef = useRef<HTMLInputElement>(null);
 
-    const { update, loading: updating } = useUpdateSubscription();
+    useBodyScrollLock(isOpen);
 
     // Reset all transient state whenever the modal opens for a (possibly
     // different) item. Also seed the name draft from the freshest item
@@ -196,11 +194,6 @@ export function SubscriptionDetailModal({
         }
     };
 
-    const handleUpdate = async () => {
-        await update(item.identifier);
-        await mutate(GET_SUBSCRIPTIONS_LIST_SWR_KEY);
-    };
-
     const handleDelete = async () => {
         if (!confirmingDelete) {
             setConfirmingDelete(true);
@@ -275,7 +268,7 @@ export function SubscriptionDetailModal({
                                 </button>
                             </div>
 
-                            <div className="flex-1 overflow-y-auto">
+                            <div className="onebox-scrollbar-hidden flex-1 overflow-y-auto">
                                 <div className="px-4 pt-5 pb-5 space-y-5">
                                     {/* Local links contain connection parameters, not a
                                         subscription quota. Remote subscriptions keep
@@ -515,40 +508,6 @@ export function SubscriptionDetailModal({
                                                 onPress={handleCopyConfig}
                                                 loading={copyingConfig}
                                             />
-                                            {!isLocalLink && <ActionRow
-                                                icon={
-                                                    <motion.div
-                                                        animate={
-                                                            updating
-                                                                ? { rotate: 360 }
-                                                                : { rotate: 0 }
-                                                        }
-                                                        transition={
-                                                            updating
-                                                                ? {
-                                                                      duration: 1,
-                                                                      repeat: Infinity,
-                                                                      ease: 'linear',
-                                                                  }
-                                                                : undefined
-                                                        }
-                                                    >
-                                                        <ArrowClockwise
-                                                            size={16}
-                                                            style={{
-                                                                color: 'var(--onebox-blue)',
-                                                            }}
-                                                        />
-                                                    </motion.div>
-                                                }
-                                                label={
-                                                    updating
-                                                        ? t('updating')
-                                                        : t('refresh_now')
-                                                }
-                                                onPress={handleUpdate}
-                                                disabled={updating}
-                                            />}
                                         </div>
                                     </section>
 

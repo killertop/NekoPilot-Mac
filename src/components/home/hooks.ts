@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm, message } from "@tauri-apps/plugin-dialog";
-import { useContext, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import useSWR, { mutate as swrMutate } from "swr";
 import { formatSubscriptionImportError, insertSubscription } from "../../action/db";
 import { clearEngineError, useEngineState } from "../../hooks/useEngineState";
@@ -16,8 +16,17 @@ import { t, vpnServiceManager } from "../../utils/helper";
 import type { DeepLinkApplyPhase } from "./deep-link-apply-progress-modal";
 
 export function useNetworkCheck(key: string, checkFn: () => Promise<number>) {
-  const [shouldRefresh, setShouldRefresh] = useState(true);
-  const [confirmShown, setConfirmShown] = useState(false);
+    const [shouldRefresh, setShouldRefresh] = useState(true);
+    const [confirmShown, setConfirmShown] = useState(false);
+    const refreshTimerRef = useRef<number | null>(null);
+
+    useEffect(() => {
+        return () => {
+            if (refreshTimerRef.current !== null) {
+                window.clearTimeout(refreshTimerRef.current);
+            }
+        };
+    }, []);
 
   async function handleNetworkCheck() {
     if (!shouldRefresh) {
@@ -44,9 +53,10 @@ export function useNetworkCheck(key: string, checkFn: () => Promise<number>) {
           });
         }
 
-        setTimeout(() => {
-          setShouldRefresh(true);
-          setConfirmShown(false);
+        refreshTimerRef.current = window.setTimeout(() => {
+            refreshTimerRef.current = null;
+            setShouldRefresh(true);
+            setConfirmShown(false);
         }, 15000);
       }
 
@@ -154,6 +164,10 @@ export const useApplyPipelineRoot = () => {
   // past this epoch can close the modal — avoids a stale `running` snapshot
   // (e.g. the previous subscription) flipping us to 'done' prematurely.
   const applyEpochRef = useRef<number>(-1);
+  // Every import gets a monotonically increasing run id. Native imports cannot
+  // always be cancelled, but stale completions must never update the current
+  // modal or start an older configuration.
+  const applyRunRef = useRef(0);
 
   // 失败状态: 弹窗提示并回到 Idle, 避免前端永久卡在 failed。
   // Suppressed while the apply modal is live — the modal surfaces the error
@@ -220,6 +234,8 @@ export const useApplyPipelineRoot = () => {
   //      the engine. Same modal UI, no page switch.
   useEffect(() => {
     if (!deepLinkApplyUrl) return;
+    const runId = ++applyRunRef.current;
+    const isCurrentRun = () => applyRunRef.current === runId;
     const url = deepLinkApplyUrl;
     const name = deepLinkApplyName;
     const autoStart = deepLinkApplyAutoStart;
@@ -238,10 +254,12 @@ export const useApplyPipelineRoot = () => {
       // Brief 'init' dwell so the modal can render its entrance animation
       // before the first real work starts.
       await new Promise((r) => setTimeout(r, 350));
+      if (!isCurrentRun()) return;
       setApplyPhase("import");
 
       try {
         const id = await insertSubscription(url, name || undefined);
+        if (!isCurrentRun()) return;
         if (autoStart) {
           await setStoreValue(SSI_STORE_KEY, id);
           await Promise.all([
@@ -258,12 +276,14 @@ export const useApplyPipelineRoot = () => {
           ]);
         }
       } catch (error) {
+        if (!isCurrentRun()) return;
         setApplyErrorTitle(t("import_failed"));
         setApplyErrorMessage(formatSubscriptionImportError(error));
         setApplyPhase("error");
         return;
       }
 
+      if (!isCurrentRun()) return;
       if (!autoStart) {
         // Manual-add path: import finished, engine untouched.
         // Jump straight to 'done' — modal shows success chip + close
@@ -281,6 +301,7 @@ export const useApplyPipelineRoot = () => {
 
       void vpnServiceManager.syncConfig({
         onSuccess: async () => {
+          if (!isCurrentRun()) return;
           try {
             await vpnServiceManager.start();
           } catch (error: any) {
@@ -292,6 +313,7 @@ export const useApplyPipelineRoot = () => {
           }
         },
         onError: async (error) => {
+          if (!isCurrentRun()) return;
           setApplyErrorMessage(
             typeof error === "string" && error ? error : t("connect_failed"),
           );
@@ -302,6 +324,7 @@ export const useApplyPipelineRoot = () => {
   }, [deepLinkApplyUrl]);
 
   const closeApplyModal = () => {
+    applyRunRef.current += 1;
     setApplyPhase(null);
     setApplyErrorMessage("");
     setApplyErrorTitle("");
@@ -363,15 +386,15 @@ export const useVPNOperations = () => {
   // Pending start callback: called by onRepairSuccess to resume the start sequence
   const pendingStartRef = useRef<(() => void) | null>(null);
 
-  const stopService = async () => {
+  const stopService = useCallback(async () => {
     try {
       await vpnServiceManager.stop();
     } catch (error) {
       console.error("停止服务失败:", error);
     }
-  };
+  }, []);
 
-  const performSyncAndStart = async (onSyncError: (error: any) => Promise<void>) => {
+  const performSyncAndStart = useCallback(async (onSyncError: (error: any) => Promise<void>) => {
     if (startInFlightRef.current) return;
     startInFlightRef.current = true;
     setIsPreparingStart(true);
@@ -394,9 +417,9 @@ export const useVPNOperations = () => {
       startInFlightRef.current = false;
       setIsPreparingStart(false);
     }
-  };
+  }, []);
 
-  const startService = async (isEmpty: boolean) => {
+  const startService = useCallback(async (isEmpty: boolean) => {
     if (isEmpty) {
       setActiveScreen("configuration");
       return message(t("please_add_subscription"), {
@@ -460,16 +483,16 @@ export const useVPNOperations = () => {
         return;
       }
     });
-  };
+  }, [performSyncAndStart, setActiveScreen]);
 
-  const onRepairSuccess = () => {
+  const onRepairSuccess = useCallback(() => {
     setRepairState({ visible: false, orphanPids: [] });
     const pending = pendingStartRef.current;
     pendingStartRef.current = null;
     pending?.();
-  };
+  }, []);
 
-  const restartService = async (isEmpty: boolean) => {
+  const restartService = useCallback(async (isEmpty: boolean) => {
     if (isEmpty) {
       setActiveScreen("configuration");
       return message(t("please_add_subscription"), {
@@ -486,9 +509,9 @@ export const useVPNOperations = () => {
         kind: "error",
       });
     }
-  };
+  }, [setActiveScreen]);
 
-  const toggleService = async (isEmpty: boolean) => {
+  const toggleService = useCallback(async (isEmpty: boolean) => {
     if (isEmpty) {
       setActiveScreen("configuration");
       return message(t("please_add_subscription"), {
@@ -510,7 +533,7 @@ export const useVPNOperations = () => {
         kind: "error",
       });
     }
-  };
+  }, [isRunning, setActiveScreen, startService, stopService]);
 
   return {
     operationStatus,

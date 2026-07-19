@@ -7,6 +7,7 @@ import {
 } from "../../action/modal-state-hook";
 import { t } from "../../utils/helper";
 import { IOSTextField } from "../common/ios-text-field";
+import { Portal, useBodyScrollLock } from "../common/portal";
 
 // ---- Form step ---------------------------------------------------------
 
@@ -31,6 +32,7 @@ const FormStep: React.FC<FormStepProps> = ({
 }) => (
     <>
         <h3
+            id="add-subscription-title"
             className="text-[16px] font-semibold text-center pt-5 pb-3.5 px-5 tracking-[-0.01em]"
             style={{ color: "var(--onebox-label)" }}
         >
@@ -103,54 +105,60 @@ export function useSubscriptionModalController() {
         onUrlChange,
         submit,
     } = useModalState();
+    useBodyScrollLock(open);
 
     const ModalElement = (
-        <AnimatePresence>
-            {open && (
-                <motion.div
-                    className="fixed inset-0 z-50 flex items-center justify-center px-4"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.18 }}
-                >
-                    <div
-                        className="absolute inset-0"
-                        style={{
-                            background: "rgba(15, 23, 42, 0.38)",
-                            backdropFilter: "blur(6px)",
-                            WebkitBackdropFilter: "blur(6px)",
-                        }}
-                        onClick={closeModal}
-                    />
+        <Portal>
+            <AnimatePresence>
+                {open && (
                     <motion.div
-                        className="relative w-full max-w-[290px] rounded-[14px] overflow-hidden"
-                        style={{
-                            background: 'var(--onebox-card)',
-                            boxShadow:
-                                "0 22px 48px -12px rgba(15, 23, 42, 0.3), 0 4px 14px rgba(15, 23, 42, 0.08)",
-                        }}
-                        initial={{ scale: 0.92, y: 8 }}
-                        animate={{ scale: 1, y: 0 }}
-                        exit={{ scale: 0.94, y: 4 }}
-                        transition={{
-                            duration: 0.22,
-                            ease: [0.32, 0.72, 0, 1],
-                        }}
+                        className="fixed inset-0 z-[80] flex items-center justify-center px-4"
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="add-subscription-title"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.18 }}
                     >
-                        <FormStep
-                            name={name}
-                            url={url}
-                            errors={errors}
-                            onNameChange={onNameChange}
-                            onUrlChange={onUrlChange}
-                            onClose={closeModal}
-                            onAdd={submit}
+                        <div
+                            className="absolute inset-0"
+                            style={{
+                                background: "rgba(15, 23, 42, 0.38)",
+                                backdropFilter: "blur(6px)",
+                                WebkitBackdropFilter: "blur(6px)",
+                            }}
+                            onClick={closeModal}
                         />
+                        <motion.div
+                            className="relative w-full max-w-[290px] rounded-[14px] overflow-hidden"
+                            style={{
+                                background: 'var(--onebox-card)',
+                                boxShadow:
+                                    "0 22px 48px -12px rgba(15, 23, 42, 0.3), 0 4px 14px rgba(15, 23, 42, 0.08)",
+                            }}
+                            initial={{ scale: 0.92, y: 8 }}
+                            animate={{ scale: 1, y: 0 }}
+                            exit={{ scale: 0.94, y: 4 }}
+                            transition={{
+                                duration: 0.22,
+                                ease: [0.32, 0.72, 0, 1],
+                            }}
+                        >
+                            <FormStep
+                                name={name}
+                                url={url}
+                                errors={errors}
+                                onNameChange={onNameChange}
+                                onUrlChange={onUrlChange}
+                                onClose={closeModal}
+                                onAdd={submit}
+                            />
+                        </motion.div>
                     </motion.div>
-                </motion.div>
-            )}
-        </AnimatePresence>
+                )}
+            </AnimatePresence>
+        </Portal>
     );
 
     return { openModal: () => openModal(), ModalElement };

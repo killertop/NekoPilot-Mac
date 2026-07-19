@@ -16,7 +16,7 @@ import {
     t,
 } from "../../utils/helper";
 import nekoPilotLogoUrl from "../../assets/nekopilot-logo.png";
-import { Portal } from "../common/portal";
+import { Portal, useBodyScrollLock } from "../common/portal";
 import { SettingItem } from "./common";
 
 const getVersion = async () => {
@@ -36,17 +36,7 @@ const getVersion = async () => {
  */
 export default function AboutItem() {
     const [isOpen, setIsOpen] = useState(false);
-
-    useEffect(() => {
-        if (isOpen) {
-            document.body.classList.add("overflow-hidden");
-        } else {
-            document.body.classList.remove("overflow-hidden");
-        }
-        return () => {
-            document.body.classList.remove("overflow-hidden");
-        };
-    }, [isOpen]);
+    useBodyScrollLock(isOpen);
 
     return (
         <>
@@ -159,7 +149,7 @@ function AboutSheet({ onClose }: { onClose: () => void }) {
                             </button>
                         </div>
 
-                        <div className="flex-1 overflow-y-auto">
+                        <div className="onebox-scrollbar-hidden flex-1 overflow-y-auto">
                             {/* Hero */}
                             <div
                                 className="flex flex-col items-center pt-6 pb-7"
@@ -373,7 +363,7 @@ function CoreInfoSheet({
                     >
                         {t("core_info")}
                     </h3>
-                    <div className="flex-1 overflow-y-auto px-4 pb-4">
+                    <div className="onebox-scrollbar-hidden flex-1 overflow-y-auto px-4 pb-4">
                         <div
                             className="rounded-xl px-3 py-2.5 text-[11px] leading-relaxed font-mono whitespace-pre-wrap break-all"
                             style={{

@@ -12,12 +12,14 @@ import { copyEnvToClipboard, initLanguage, t, vpnServiceManager } from './utils/
 
 // 常量
 const PROXY_HOST = "127.0.0.1";
+const TRAY_ICON_ID = "nekopilot-menu-bar";
 // Native lifecycle events update the tray immediately. This is only a
 // low-frequency fallback for an unexpected child-process exit.
 const STATUS_POLL_INTERVAL = 10_000;
 
 const appWindow = getCurrentWindow();
 let trayInstance: TrayIcon | null = null;
+let traySetupPromise: Promise<TrayIcon | null> | null = null;
 let lastStatus: boolean | null = null;
 let statusPollerId: number | null = null;
 let statusPollInFlight = false;
@@ -145,6 +147,7 @@ async function createTrayIconOptions(menu: Menu) {
     }
 
     const options = {
+        id: TRAY_ICON_ID,
         menu,
         iconAsTemplate: type() === 'macos',
         tooltip: "NekoPilot",
@@ -156,8 +159,20 @@ async function createTrayIconOptions(menu: Menu) {
 // 初始化托盘
 export async function setupTrayIcon() {
     if (trayInstance) return trayInstance;
+    if (traySetupPromise) return traySetupPromise;
 
-    try {
+    const setup = (async () => {
+      try {
+        // A page reload can re-evaluate this module while the native tray item
+        // still exists. Reuse its stable ID instead of creating another macOS
+        // status item. The promise lock above also closes the first-launch
+        // race where two callers both observed a null local instance.
+        const existing = await TrayIcon.getById(TRAY_ICON_ID);
+        if (existing) {
+            trayInstance = existing;
+            startStatusPolling();
+            return trayInstance;
+        }
         const menu = await createTrayMenu();
         const options = await createTrayIconOptions(menu);
 
@@ -165,10 +180,16 @@ export async function setupTrayIcon() {
 
         startStatusPolling();
         return trayInstance;
-    } catch (error) {
+      } catch (error) {
         console.error('Error setting up tray icon:', error);
         return null;
-    }
+      }
+    })();
+    traySetupPromise = setup;
+    void setup.finally(() => {
+        if (traySetupPromise === setup) traySetupPromise = null;
+    });
+    return setup;
 }
 
 // 更新托盘菜单

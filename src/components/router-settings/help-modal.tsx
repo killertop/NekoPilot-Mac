@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { ArrowClockwise, ChevronRight, X } from "react-bootstrap-icons";
 import { RULE_ACTIONS, RULE_KINDS } from "../../config/merger/custom-rules";
 import { t } from "../../utils/helper";
+import { Portal, useBodyScrollLock } from "../common/portal";
 import { ActionBadge, KIND_META, KindChip } from "./rule-badges";
 
 interface HelpModalProps {
@@ -15,12 +16,18 @@ interface HelpModalProps {
 // glyph-chips the user sees on rule rows (shared from rule-badges.tsx, so the
 // legend can't drift from the list), plus a quiet restart footnote.
 export function HelpModal({ isOpen, onClose }: HelpModalProps) {
+    useBodyScrollLock(isOpen);
+
     return (
-        <AnimatePresence>
-            {isOpen && (
-                <motion.div
+        <Portal>
+            <AnimatePresence>
+                {isOpen && (
+                    <motion.div
                     key="help-modal"
-                    className="fixed inset-0 z-50 flex items-center justify-center px-4"
+                    className="fixed inset-0 z-[80] flex items-center justify-center px-4"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="rule-info-title"
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
@@ -50,6 +57,7 @@ export function HelpModal({ isOpen, onClose }: HelpModalProps) {
                     >
                         <div className="relative flex items-center justify-center px-4 pt-4 pb-3">
                             <h3
+                                id="rule-info-title"
                                 className="text-[16px] font-semibold tracking-[-0.01em]"
                                 style={{ color: "var(--onebox-label)" }}
                             >
@@ -68,7 +76,7 @@ export function HelpModal({ isOpen, onClose }: HelpModalProps) {
                             </button>
                         </div>
 
-                        <div className="px-4 pb-4 space-y-4 overflow-y-auto">
+                        <div className="onebox-scrollbar-hidden px-4 pb-4 space-y-4 overflow-y-auto">
                             {/* Action — color-coded, in priority order. */}
                             <Section label={t("rule_section_action", "Action")}>
                                 {RULE_ACTIONS.map((a) => (
@@ -157,9 +165,10 @@ export function HelpModal({ isOpen, onClose }: HelpModalProps) {
                             {t("close", "Close")}
                         </button>
                     </motion.div>
-                </motion.div>
-            )}
-        </AnimatePresence>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </Portal>
     );
 }
 

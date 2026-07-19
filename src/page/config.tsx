@@ -2,8 +2,11 @@ import { motion } from "framer-motion";
 import { useState } from "react";
 import { ArrowClockwise, CloudPlus, Plus } from "react-bootstrap-icons";
 import { mutate } from "swr";
+import { toast } from "sonner";
+import { refreshSubscription } from "../action/subscription-hooks";
 import { SubscriptionItem } from "../components/configuration/item";
 import { useSubscriptionModalController } from "../components/configuration/modal";
+import { isLocalConfiguration } from "../components/configuration/subscription-metadata";
 import { useSubscriptions } from "../hooks/useDB";
 import {
     GET_SUBSCRIPTIONS_LIST_SWR_KEY,
@@ -11,43 +14,14 @@ import {
 import { t } from "../utils/helper";
 
 
-function ConfigurationHeader() {
-    return (
-        <div className="px-4 pt-5 pb-3">
-            <h1
-                className="text-[22px] font-semibold tracking-[-0.02em] capitalize"
-                style={{ color: "var(--onebox-label)" }}
-            >
-                {t("subscription_management")}
-            </h1>
-        </div>
-    );
-}
-
 export default function Configuration() {
     const { openModal, ModalElement } = useSubscriptionModalController();
 
-    const handleUpdateAll = async () => {
-        // Event listeners append their actual native refresh promise here.
-        // Waiting for that batch keeps the global spinner truthful instead of
-        // clearing after an arbitrary delay while requests are still running.
-        const updates: Promise<void>[] = [];
-        window.dispatchEvent(
-            new CustomEvent<{ updates: Promise<void>[] }>("update-all-subscriptions", {
-                detail: { updates },
-            }),
-        );
-        await Promise.all(updates);
-        await mutate(GET_SUBSCRIPTIONS_LIST_SWR_KEY);
-    };
-
     return (
-        <div className="onebox-scrollpage flex flex-col">
-            <ConfigurationHeader />
+        <div className="onebox-scrollpage onebox-scrollpage--fixed flex flex-col">
             <div className="flex-1 min-h-0 overflow-hidden">
                 <ConfigurationBody
                     onAdd={openModal}
-                    onUpdateAll={handleUpdateAll}
                 />
             </div>
             {ModalElement}
@@ -58,13 +32,24 @@ export default function Configuration() {
 
 function ConfigurationBody({
     onAdd,
-    onUpdateAll,
 }: {
     onAdd: () => void;
-    onUpdateAll: () => Promise<void>;
 }) {
     const [expanded, setExpanded] = useState("");
-    const { data, error, isLoading } = useSubscriptions();
+    const { data, error, isLoading, mutate: retrySubscriptions } = useSubscriptions();
+
+    const handleUpdateAll = async () => {
+        const remoteSubscriptions = (data ?? []).filter(
+            (item) => !isLocalConfiguration(item),
+        );
+        const results = await Promise.allSettled(
+            remoteSubscriptions.map((item) => refreshSubscription(item.identifier)),
+        );
+        if (results.some((result) => result.status === "rejected")) {
+            toast.error(t("update_subscription_failed"));
+        }
+        await mutate(GET_SUBSCRIPTIONS_LIST_SWR_KEY);
+    };
 
     if (isLoading) {
         return (
@@ -81,10 +66,23 @@ function ConfigurationBody({
 
     if (error) {
         return (
-            <div className="flex justify-center items-center pt-20 px-4">
-                <p className="text-sm text-red-500 text-center">
-                    {String(error)}
-                </p>
+            <div className="px-4 pt-5">
+                <div className="onebox-plain-card flex items-center gap-3 px-4 py-3">
+                    <p
+                        className="min-w-0 flex-1 text-[13px]"
+                        style={{ color: "var(--onebox-label-secondary)" }}
+                    >
+                        {t("subscription_load_failed", "Subscription list unavailable")}
+                    </p>
+                    <button
+                        type="button"
+                        className="shrink-0 text-[13px] font-medium"
+                        style={{ color: "var(--onebox-blue)" }}
+                        onClick={() => void retrySubscriptions()}
+                    >
+                        {t("retry", "Retry")}
+                    </button>
+                </div>
             </div>
         );
     }
@@ -94,7 +92,7 @@ function ConfigurationBody({
     }
 
     return (
-        <div className="h-full overflow-auto px-4 pb-5">
+        <div className="onebox-scrollbar-hidden h-full overflow-auto px-4 pb-5">
             <ul className="onebox-grouped-card list-none p-0">
                 {data.map((item) => (
                     <SubscriptionItem
@@ -106,7 +104,7 @@ function ConfigurationBody({
                 ))}
             </ul>
 
-            <ActionsCard onAdd={onAdd} onUpdateAll={onUpdateAll} />
+            <ActionsCard onAdd={onAdd} onUpdateAll={handleUpdateAll} />
         </div>
     );
 }

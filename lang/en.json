@@ -252,6 +252,8 @@
     "update_install": "Install update",
     "update_subscription_failed": "Update config failed",
     "update_subscription_success": "Update config success",
+    "subscription_load_failed": "Configuration list unavailable",
+    "retry": "Retry",
     "update": "Update",
     "updating": "Updating...",
     "url_cannot_empty": "Url cannot be empty",

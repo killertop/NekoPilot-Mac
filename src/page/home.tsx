@@ -19,7 +19,12 @@ import "./home.css";
 // (600 window - 30 titlebar - 56 tab bar). When the window is shorter than
 // that budget, let the app-level route scroller reveal the overflow.
 export default function HomePage() {
-    const { data: subscriptions } = useSubscriptions();
+    const {
+        data: subscriptions,
+        error: subscriptionsError,
+        isLoading: subscriptionsLoading,
+        mutate: retrySubscriptions,
+    } = useSubscriptions();
     const { selectedMode, initializeMode, changeMode } = useProxyMode();
     const {
         isLoading,
@@ -32,7 +37,9 @@ export default function HomePage() {
     } = useVPNOperations();
     const { indicatorStyle, modeButtonsRef } = useModeIndicator(selectedMode);
 
-    const isEmpty = !subscriptions?.length;
+    const isEmpty = !subscriptionsError
+        && subscriptions !== undefined
+        && subscriptions.length === 0;
 
     useEffect(() => {
         initializeMode();
@@ -40,16 +47,36 @@ export default function HomePage() {
 
     const handleModeChange = async (mode: ProxyMode) => {
         await changeMode(mode);
+        if (subscriptionsLoading || subscriptions === undefined || subscriptionsError) {
+            void retrySubscriptions();
+            return;
+        }
         if (isLoading || isRunning) {
             await restartService(isEmpty);
         }
     };
 
     const handleUpdate = async () => {
+        if (subscriptionsLoading || subscriptions === undefined || subscriptionsError) {
+            void retrySubscriptions();
+            return;
+        }
         await restartService(isEmpty);
     };
 
+    const handlePowerToggle = () => {
+        if (subscriptionsLoading || subscriptions === undefined || subscriptionsError) {
+            void retrySubscriptions();
+            return;
+        }
+        void toggleService(isEmpty);
+    };
+
     const statusText = useMemo(() => {
+        if (subscriptionsError) {
+            return t("subscription_load_failed", "Subscription list unavailable");
+        }
+        if (subscriptionsLoading) return t("loading");
         switch (operationStatus) {
             case "starting":
                 return t("connecting");
@@ -58,7 +85,7 @@ export default function HomePage() {
             default:
                 return isRunning ? t("connected") : t("not_connected");
         }
-    }, [operationStatus, isRunning]);
+    }, [operationStatus, isRunning, subscriptionsError, subscriptionsLoading]);
 
     const phase: "idle" | "connecting" | "on" = isLoading
         ? "connecting"
@@ -68,7 +95,7 @@ export default function HomePage() {
 
     return (
         <div
-            className="onebox-home relative w-full min-h-[calc(100dvh-56px)] overflow-x-hidden"
+            className="onebox-home onebox-scrollbar-hidden relative h-full w-full min-h-0 overflow-x-hidden overflow-y-auto"
             data-phase={phase}
         >
             <PrestartRepairModal
@@ -86,8 +113,8 @@ export default function HomePage() {
             <div className="relative min-h-[calc(100dvh-56px)] flex flex-col items-center px-5 pt-5 pb-5">
                 <PowerToggle
                     isRunning={Boolean(isRunning)}
-                    isLoading={isLoading}
-                    onClick={() => toggleService(isEmpty)}
+                    isLoading={isLoading || subscriptionsLoading}
+                    onClick={handlePowerToggle}
                 />
 
                 <div className="mt-4">

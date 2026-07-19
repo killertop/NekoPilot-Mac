@@ -35,9 +35,12 @@ export default function SelectSub({ data, isLoading, onUpdate }: SubscriptionPro
     const [selected, setSelected] = useState<string>("");
 
     useEffect(() => {
+        let cancelled = false;
+
         const syncDisplay = async () => {
             if (!data?.length) return;
             const savedId = await getStoreValue(SSI_STORE_KEY);
+            if (cancelled) return;
             const item = data.find((i) => i.identifier === savedId);
             if (item) {
                 setSelected(item.identifier);
@@ -47,6 +50,10 @@ export default function SelectSub({ data, isLoading, onUpdate }: SubscriptionPro
             }
         };
         syncDisplay();
+
+        return () => {
+            cancelled = true;
+        };
     }, [data]);
 
     const options = useMemo<AppleSelectOption<string>[]>(() => {

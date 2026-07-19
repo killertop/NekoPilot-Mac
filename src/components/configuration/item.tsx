@@ -2,11 +2,10 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import bytes from "bytes";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
-import React, { useEffect, useState } from "react";
-import { ArrowClockwise, ChevronDown, InfoCircle, Trash3 } from "react-bootstrap-icons";
+import React, { useState } from "react";
+import { ChevronDown, InfoCircle, Trash3 } from "react-bootstrap-icons";
 import { mutate } from "swr";
 import { deleteSubscription } from "../../action/db";
-import { useUpdateSubscription } from "../../action/subscription-hooks";
 import { GET_SUBSCRIPTIONS_LIST_SWR_KEY, Subscription } from "../../types/definition";
 import { t } from "../../utils/helper";
 import Avatar from "./avatar";
@@ -24,17 +23,11 @@ interface SubscriptionItemProps {
     setExpanded: (id: string) => void;
 }
 
-const messageStyles = {
-    error: { color: "#FF3B30", bg: "rgba(255, 59, 48, 0.1)" },
-    success: { color: "#34C759", bg: "rgba(52, 199, 89, 0.12)" },
-    warning: { color: "#FF9500", bg: "rgba(255, 149, 0, 0.1)" },
-} as const;
-
-export const SubscriptionItem: React.FC<SubscriptionItemProps> = ({
+export const SubscriptionItem = React.memo(function SubscriptionItem({
     item,
     expanded,
     setExpanded,
-}) => {
+}: SubscriptionItemProps) {
     const isExpanded = expanded === item.identifier;
     const isLocalFile = item.expire_time === LOCAL_FILE_SENTINEL;
     const isLocalLink = item.source_type === "local_link";
@@ -53,46 +46,15 @@ export const SubscriptionItem: React.FC<SubscriptionItemProps> = ({
         ? t("local_file_no_expire")
         : `${remainingDays} ${t("days")}`;
 
-    const { update, resetMessage, loading, message, messageType } =
-        useUpdateSubscription();
     const [isDeleting, setIsDeleting] = useState(false);
     const [detailOpen, setDetailOpen] = useState(false);
 
-    useEffect(() => {
-        if (!loading) {
-            const timer = setTimeout(() => resetMessage(), 5000);
-            return () => clearTimeout(timer);
-        }
-    }, [loading, message]);
-
-    useEffect(() => {
-        const handleUpdateEvent = (event: Event) => {
-            // Local files and single-node links never have a remote source to
-            // refresh. Skip both so "Update all" cannot create a misleading
-            // failure state for a valid local configuration.
-            if (isLocalConfig) return;
-            const detail = (event as CustomEvent<{ updates?: Promise<void>[] }>).detail;
-            detail?.updates?.push(update(item.identifier));
-        };
-        window.addEventListener("update-all-subscriptions", handleUpdateEvent);
-        return () => {
-            window.removeEventListener(
-                "update-all-subscriptions",
-                handleUpdateEvent,
-            );
-        };
-    }, [item.identifier, isLocalConfig, update]);
-
     const handleDelete = async () => {
+        if (isDeleting) return;
         setIsDeleting(true);
         await deleteSubscription(item.identifier);
         await new Promise((resolve) => setTimeout(resolve, 100));
         setIsDeleting(false);
-        await mutate(GET_SUBSCRIPTIONS_LIST_SWR_KEY);
-    };
-
-    const handleUpdate = async () => {
-        await update(item.identifier);
         await mutate(GET_SUBSCRIPTIONS_LIST_SWR_KEY);
     };
 
@@ -107,18 +69,13 @@ export const SubscriptionItem: React.FC<SubscriptionItemProps> = ({
         }
     };
 
-    const isBusy = loading || isDeleting;
+    const isBusy = isDeleting;
     const progressWidth = Math.min(usage, 100);
     const progressColor = danger ? "#FF3B30" : "var(--onebox-blue)";
 
-    const pillStyle =
-        message && messageType && messageStyles[messageType as keyof typeof messageStyles];
-
     const titleText = isDeleting
         ? t("deleting_subscription")
-        : loading
-            ? t("updating")
-            : item.name;
+        : item.name;
 
     return (
         <li>
@@ -150,17 +107,6 @@ export const SubscriptionItem: React.FC<SubscriptionItemProps> = ({
                         >
                             {titleText}
                         </span>
-                        {pillStyle && (
-                            <span
-                                className="shrink-0 inline-flex items-center px-1.5 py-0.25 rounded-md text-[10px] font-medium whitespace-nowrap"
-                                style={{
-                                    color: pillStyle.color,
-                                    background: pillStyle.bg,
-                                }}
-                            >
-                                {message}
-                            </span>
-                        )}
                     </div>
 
                     <div
@@ -223,7 +169,7 @@ export const SubscriptionItem: React.FC<SubscriptionItemProps> = ({
                         className="overflow-hidden"
                     >
                         <div
-                            className={clsx("grid relative", isLocalConfig ? "grid-cols-2" : "grid-cols-3")}
+                            className="grid grid-cols-2 relative"
                             style={{
                                 borderTop: "0.5px solid var(--onebox-separator)",
                             }}
@@ -237,28 +183,13 @@ export const SubscriptionItem: React.FC<SubscriptionItemProps> = ({
                                 <InfoCircle size={13} />
                                 <span>{t("details")}</span>
                             </button>
-                            {!isLocalConfig && <button
-                                type="button"
-                                onClick={handleUpdate}
-                                className="py-2.5 flex items-center justify-center gap-1.5 text-[13px] font-medium transition-colors active:bg-[rgba(0,122,255,0.06)]"
-                                style={{
-                                    color: "var(--onebox-blue)",
-                                    borderLeft: "0.5px solid var(--onebox-separator)",
-                                    borderRight: "0.5px solid var(--onebox-separator)",
-                                }}
-                            >
-                                <ArrowClockwise size={13} />
-                                <span>{t("update")}</span>
-                            </button>}
                             <button
                                 type="button"
                                 onClick={handleDelete}
                                 className="py-2.5 flex items-center justify-center gap-1.5 text-[13px] font-medium transition-colors active:bg-[rgba(255,59,48,0.06)]"
                                 style={{
                                     color: "#FF3B30",
-                                    borderLeft: isLocalConfig
-                                        ? "0.5px solid var(--onebox-separator)"
-                                        : undefined,
+                                    borderLeft: "0.5px solid var(--onebox-separator)",
                                 }}
                             >
                                 <Trash3 size={13} />
@@ -276,4 +207,10 @@ export const SubscriptionItem: React.FC<SubscriptionItemProps> = ({
             />
         </li>
     );
-};
+}, (previous, next) => {
+    const previousExpanded = previous.expanded === previous.item.identifier;
+    const nextExpanded = next.expanded === next.item.identifier;
+    return previous.item === next.item
+        && previousExpanded === nextExpanded
+        && previous.setExpanded === next.setExpanded;
+});

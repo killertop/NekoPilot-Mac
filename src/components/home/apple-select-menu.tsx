@@ -1,6 +1,14 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+    ReactNode,
+    useCallback,
+    useEffect,
+    useLayoutEffect,
+    useRef,
+    useState,
+} from "react";
 import { Check, ChevronExpand } from "react-bootstrap-icons";
+import { Portal } from "../common/portal";
 
 export type AppleSelectOption<T> = {
     value: T;
@@ -32,6 +40,13 @@ type AppleSelectMenuProps<T> = {
     className?: string;
 };
 
+type MenuPosition = {
+    left: number;
+    width: number;
+    top?: number;
+    bottom?: number;
+};
+
 // Apple-style custom popup menu.
 // Soft fill, no borders, backdrop blur on the popover surface, spring-like
 // entrance sized to the trigger width. Auto-flips above the trigger when
@@ -52,8 +67,10 @@ export function AppleSelectMenu<T>(props: AppleSelectMenuProps<T>) {
 
     const [isOpen, setIsOpen] = useState(false);
     const [placement, setPlacement] = useState<"up" | "down">("down");
+    const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
     const wrapperRef = useRef<HTMLDivElement>(null);
     const triggerRef = useRef<HTMLButtonElement>(null);
+    const menuRef = useRef<HTMLDivElement>(null);
 
     const selected = options.find((opt) =>
         keyEquals
@@ -64,7 +81,8 @@ export function AppleSelectMenu<T>(props: AppleSelectMenuProps<T>) {
     useEffect(() => {
         if (!isOpen) return;
         const onDocClick = (event: MouseEvent) => {
-            if (!wrapperRef.current?.contains(event.target as Node)) {
+            const target = event.target as Node;
+            if (!wrapperRef.current?.contains(target) && !menuRef.current?.contains(target)) {
                 setIsOpen(false);
             }
         };
@@ -79,17 +97,60 @@ export function AppleSelectMenu<T>(props: AppleSelectMenuProps<T>) {
         };
     }, [isOpen]);
 
-    useLayoutEffect(() => {
+    const updateMenuPosition = useCallback(() => {
         if (!isOpen) return;
         const rect = triggerRef.current?.getBoundingClientRect();
         if (!rect) return;
         const spaceBelow = window.innerHeight - rect.bottom;
         const spaceAbove = rect.top;
         const needed = menuMaxHeight + 16;
-        setPlacement(
-            spaceBelow < needed && spaceAbove > spaceBelow ? "up" : "down",
-        );
+        const nextPlacement =
+            spaceBelow < needed && spaceAbove > spaceBelow ? "up" : "down";
+        const nextPosition: MenuPosition = nextPlacement === "up"
+            ? {
+                left: rect.left,
+                width: rect.width,
+                bottom: window.innerHeight - rect.top + 8,
+            }
+            : {
+                left: rect.left,
+                width: rect.width,
+                top: rect.bottom + 8,
+            };
+
+        setPlacement((previous) => previous === nextPlacement ? previous : nextPlacement);
+        setMenuPosition((previous) => {
+            if (
+                previous
+                && previous.left === nextPosition.left
+                && previous.width === nextPosition.width
+                && previous.top === nextPosition.top
+                && previous.bottom === nextPosition.bottom
+            ) {
+                return previous;
+            }
+            return nextPosition;
+        });
     }, [isOpen, menuMaxHeight]);
+
+    useLayoutEffect(() => {
+        if (!isOpen) {
+            setMenuPosition(null);
+            return;
+        }
+        updateMenuPosition();
+    }, [isOpen, updateMenuPosition]);
+
+    useEffect(() => {
+        if (!isOpen) return;
+
+        window.addEventListener("resize", updateMenuPosition);
+        window.addEventListener("scroll", updateMenuPosition, true);
+        return () => {
+            window.removeEventListener("resize", updateMenuPosition);
+            window.removeEventListener("scroll", updateMenuPosition, true);
+        };
+    }, [isOpen, updateMenuPosition]);
 
     const toggle = () => {
         if (disabled) return;
@@ -103,6 +164,8 @@ export function AppleSelectMenu<T>(props: AppleSelectMenuProps<T>) {
                 type="button"
                 disabled={disabled}
                 onClick={toggle}
+                aria-haspopup="listbox"
+                aria-expanded={isOpen}
                 style={{ background: 'var(--onebox-card)', boxShadow: 'var(--onebox-shadow-card)' }}
                 className={`
                     group w-full text-left rounded-2xl
@@ -129,34 +192,35 @@ export function AppleSelectMenu<T>(props: AppleSelectMenuProps<T>) {
                 </div>
             </button>
 
-            <AnimatePresence>
-                {isOpen && (
-                    <motion.div
-                        key="apple-select-menu"
-                        initial={{
-                            opacity: 0,
-                            scale: 0.96,
-                            y: placement === "up" ? 6 : -6,
-                        }}
-                        animate={{ opacity: 1, scale: 1, y: 0 }}
-                        exit={{
-                            opacity: 0,
-                            scale: 0.97,
-                            y: placement === "up" ? 4 : -4,
-                        }}
-                        transition={{
-                            duration: 0.16,
-                            ease: [0.32, 0.72, 0, 1],
-                        }}
-                        style={{
-                            transformOrigin:
-                                placement === "up" ? "50% 100%" : "50% 0%",
-                        }}
-                        className={`
-                            absolute left-0 right-0 z-50
-                            ${placement === "up" ? "bottom-full mb-2" : "top-full mt-2"}
-                        `}
-                    >
+            <Portal>
+                <AnimatePresence>
+                    {isOpen && menuPosition && (
+                        <motion.div
+                            ref={menuRef}
+                            key="apple-select-menu"
+                            initial={{
+                                opacity: 0,
+                                scale: 0.96,
+                                y: placement === "up" ? 6 : -6,
+                            }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{
+                                opacity: 0,
+                                scale: 0.97,
+                                y: placement === "up" ? 4 : -4,
+                            }}
+                            transition={{
+                                duration: 0.16,
+                                ease: [0.32, 0.72, 0, 1],
+                            }}
+                            style={{
+                                ...menuPosition,
+                                transformOrigin:
+                                    placement === "up" ? "50% 100%" : "50% 0%",
+                            }}
+                            className="fixed z-[70]"
+                            role="listbox"
+                        >
                         <div
                             className="overflow-hidden rounded-2xl backdrop-blur-2xl backdrop-saturate-150"
                             style={{
@@ -166,7 +230,7 @@ export function AppleSelectMenu<T>(props: AppleSelectMenuProps<T>) {
                             }}
                         >
                             <div
-                                className="overflow-y-auto p-1.5"
+                                className="onebox-scrollbar-hidden overflow-y-auto p-1.5"
                                 style={{ maxHeight: menuMaxHeight }}
                             >
                                 {options.length === 0 ? (
@@ -219,9 +283,10 @@ export function AppleSelectMenu<T>(props: AppleSelectMenuProps<T>) {
                                 )}
                             </div>
                         </div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
+            </Portal>
         </div>
     );
 }

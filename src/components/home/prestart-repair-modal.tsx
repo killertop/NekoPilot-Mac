@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { CheckCircleFill, XCircleFill } from 'react-bootstrap-icons';
 import { getProxyPort } from '../../single/store';
 import { t } from '../../utils/helper';
+import { Portal, useBodyScrollLock } from '../common/portal';
 
 export interface PrestartRepairModalProps {
     visible: boolean;
@@ -199,6 +200,7 @@ export function PrestartRepairModal({
 }: PrestartRepairModalProps) {
     const [phase, setPhase] = useState<RepairPhase>('detecting');
     const hasRun = useRef(false);
+    useBodyScrollLock(visible);
 
     useEffect(() => {
         if (!visible) {
@@ -254,11 +256,15 @@ export function PrestartRepairModal({
             : t('prestart_repair_title', 'Clean Up Orphan Processes');
 
     return (
-        <AnimatePresence>
-            {visible && (
-                <motion.div
+        <Portal>
+            <AnimatePresence>
+                {visible && (
+                    <motion.div
                     key="prestart-repair-modal"
-                    className="fixed inset-0 z-50 flex items-center justify-center px-4"
+                    className="fixed inset-0 z-[80] flex items-center justify-center px-4"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="prestart-repair-title"
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
@@ -304,6 +310,7 @@ export function PrestartRepairModal({
                             )}
 
                             <h3
+                                id="prestart-repair-title"
                                 className="text-[16px] font-semibold text-center tracking-[-0.01em] mb-4"
                                 style={{ color: 'var(--onebox-label)' }}
                             >
@@ -371,9 +378,10 @@ export function PrestartRepairModal({
                             </button>
                         )}
                     </motion.div>
-                </motion.div>
-            )}
-        </AnimatePresence>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </Portal>
     );
 }
 

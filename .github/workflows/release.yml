@@ -193,6 +193,50 @@ jobs:
             echo "can_reuse=false" >> $GITHUB_OUTPUT
           fi
 
+  # Fail before the macOS runners start when official signing or notarization
+  # credentials are missing. This avoids publishing a partial Release with
+  # only Linux/Windows assets and makes the repair action explicit.
+  release-preflight:
+    needs: [resolve, delete-old-release, check-reuse]
+    if: |
+      !failure() && !cancelled() &&
+      (needs.check-reuse.result == 'skipped' || needs.check-reuse.outputs.can_reuse == 'false')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate macOS release secrets
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_AUTH_KEY: ${{ secrets.APPLE_AUTH_KEY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in \
+            APPLE_CERTIFICATE \
+            APPLE_CERTIFICATE_PASSWORD \
+            APPLE_AUTH_KEY \
+            APPLE_API_KEY \
+            APPLE_API_ISSUER \
+            TAURI_PRIVATE_KEY \
+            KEYCHAIN_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+
+          if ((${#missing[@]} > 0)); then
+            printf '::error::Missing GitHub Actions secret(s): %s\n' "${missing[*]}"
+            echo 'Configure the required secrets before creating an official macOS release.'
+            exit 1
+          fi
+
+          echo '✓ macOS signing, notarization, and updater secrets are present'
+
   # ── 4. Copy artifacts from upstream release ─────────────────────────
   copy-release:
     needs: [resolve, delete-old-release, check-reuse]
@@ -280,7 +324,7 @@ jobs:
   # Linux and Windows are also separate jobs for symmetry.
 
   build-macos-arm64:
-    needs: [resolve, delete-old-release, check-reuse]
+    needs: [resolve, delete-old-release, check-reuse, release-preflight]
     if: |
       !failure() && !cancelled() &&
       (needs.check-reuse.result == 'skipped' || needs.check-reuse.outputs.can_reuse == 'false')
@@ -394,7 +438,7 @@ jobs:
         run: rm -f temp_auth_key.p8
 
   build-macos-x86:
-    needs: [resolve, delete-old-release, check-reuse]
+    needs: [resolve, delete-old-release, check-reuse, release-preflight]
     if: |
       !failure() && !cancelled() &&
       (needs.check-reuse.result == 'skipped' || needs.check-reuse.outputs.can_reuse == 'false')

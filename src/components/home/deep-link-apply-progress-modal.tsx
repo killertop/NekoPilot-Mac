@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useRef } from 'react';
 import { CheckCircleFill, XCircleFill } from 'react-bootstrap-icons';
 import { t } from '../../utils/helper';
+import { Portal, useBodyScrollLock } from '../common/portal';
 
 export type DeepLinkApplyPhase = 'init' | 'import' | 'start' | 'done' | 'error';
 
@@ -211,6 +212,8 @@ export function DeepLinkApplyProgressModal({
     onClose,
     stepLabels,
 }: DeepLinkApplyProgressModalProps) {
+    useBodyScrollLock(visible);
+
     // Remember the last running step so 'error' paints the correct step red.
     const lastRunningIdxRef = useRef(0);
     useEffect(() => {
@@ -234,11 +237,15 @@ export function DeepLinkApplyProgressModal({
             : t('dl_phase_title', 'Applying configuration');
 
     return (
-        <AnimatePresence>
-            {visible && (
-                <motion.div
+        <Portal>
+            <AnimatePresence>
+                {visible && (
+                    <motion.div
                     key="dl-apply-modal"
-                    className="fixed inset-0 z-50 flex items-center justify-center px-4"
+                    className="fixed inset-0 z-[80] flex items-center justify-center px-4"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="deep-link-apply-title"
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
@@ -290,6 +297,7 @@ export function DeepLinkApplyProgressModal({
                             )}
 
                             <h3
+                                id="deep-link-apply-title"
                                 className="text-[16px] font-semibold text-center tracking-[-0.01em] mb-4"
                                 style={{ color: 'var(--onebox-label)' }}
                             >
@@ -362,9 +370,10 @@ export function DeepLinkApplyProgressModal({
                             </button>
                         )}
                     </motion.div>
-                </motion.div>
-            )}
-        </AnimatePresence>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </Portal>
     );
 }
 
