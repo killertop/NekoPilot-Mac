@@ -32,6 +32,10 @@ let statusPollInFlight = false;
 let toggleInFlight = false;
 let windowControlsSetup = false;
 let trayMenuUpdateChain: Promise<void> = Promise.resolve();
+let idleTrayIcon: Image | null = null;
+let runningTrayIcon: Image | null = null;
+
+const RUNNING_ICON_COLOR = [52, 199, 89] as const;
 
 // The Rust engine state is authoritative. Treating `Starting` as disabled
 // made the tray look stale until the old 10-second fallback poll ran, even
@@ -46,6 +50,10 @@ function isProxyEnabled(state: EngineState): boolean {
 
 function isStateTransitioning(state: EngineState): boolean {
   return state.kind === "starting" || state.kind === "stopping";
+}
+
+function isRunning(state: EngineState): boolean {
+  return state.kind === "running";
 }
 
 // 设置窗口控制按钮事件
@@ -112,15 +120,15 @@ async function createBaseMenuItems(
 }
 
 // 创建托盘菜单
-async function createTrayMenu() {
+async function createTrayMenu(state?: EngineState) {
   await initLanguage();
 
-  const state = await getEngineState();
-  lastEngineState = state.kind;
+  const currentState = state ?? (await getEngineState());
+  lastEngineState = currentState.kind;
 
   setupWindowControls();
 
-  const baseItems = await createBaseMenuItems(state);
+  const baseItems = await createBaseMenuItems(currentState);
 
   const menuItems = [
     ...baseItems,
@@ -164,8 +172,11 @@ async function handleTrayIconAction(event: TrayIconEvent) {
   }
 }
 
-// 创建托盘图标配置
-async function createTrayIconOptions(menu: Menu) {
+async function getTrayIconImage(running: boolean): Promise<Image | undefined> {
+  const macos = type() === "macos";
+  if (macos && running && runningTrayIcon) return runningTrayIcon;
+  if ((!macos || !running) && idleTrayIcon) return idleTrayIcon;
+
   // Decode the PNG before passing it to the tray API. A Rust Vec<u8> crosses
   // the IPC boundary as a number array, and supplying it directly can leave
   // macOS with an empty status item instead of an icon.
@@ -185,10 +196,48 @@ async function createTrayIconOptions(menu: Menu) {
     );
   }
 
+  if (!icon) return undefined;
+  if (!macos || !running) {
+    idleTrayIcon = icon;
+    return icon;
+  }
+
+  // Keep the idle image as a macOS template so it adapts to light and dark
+  // menu bars. Once sing-box is actually Running, recolor that same alpha
+  // mask with the macOS system-green accent for an at-a-glance state cue.
+  const rgba = await icon.rgba();
+  for (let offset = 0; offset < rgba.length; offset += 4) {
+    if (rgba[offset + 3] === 0) continue;
+    rgba[offset] = RUNNING_ICON_COLOR[0];
+    rgba[offset + 1] = RUNNING_ICON_COLOR[1];
+    rgba[offset + 2] = RUNNING_ICON_COLOR[2];
+  }
+  const size = await icon.size();
+  runningTrayIcon = await Image.new(rgba, size.width, size.height);
+  return runningTrayIcon;
+}
+
+async function updateTrayIcon(state: EngineState) {
+  if (!trayInstance) return;
+
+  const running = isRunning(state);
+  const icon = await getTrayIconImage(running);
+  if (!icon) return;
+
+  // A running icon must not be a template; macOS would otherwise turn its
+  // green pixels back into the same monochrome idle icon.
+  await trayInstance.setIconAsTemplate(type() === "macos" && !running);
+  await trayInstance.setIcon(icon);
+}
+
+// 创建托盘图标配置
+async function createTrayIconOptions(menu: Menu, state: EngineState) {
+  const running = isRunning(state);
+  const icon = await getTrayIconImage(running);
   const options = {
     id: TRAY_ICON_ID,
     menu,
-    iconAsTemplate: type() === "macos",
+    iconAsTemplate: type() === "macos" && !running,
     tooltip: "NekoPilot",
     action: handleTrayIconAction,
   };
@@ -209,11 +258,13 @@ export async function setupTrayIcon() {
       const existing = await TrayIcon.getById(TRAY_ICON_ID);
       if (existing) {
         trayInstance = existing;
+        await updateTrayIcon(await getEngineState());
         startStatusPolling();
         return trayInstance;
       }
-      const menu = await createTrayMenu();
-      const options = await createTrayIconOptions(menu);
+      const state = await getEngineState();
+      const menu = await createTrayMenu(state);
+      const options = await createTrayIconOptions(menu, state);
 
       trayInstance = await TrayIcon.new(options);
 
@@ -239,7 +290,9 @@ export async function updateTrayMenu() {
   const update = trayMenuUpdateChain.then(async () => {
     if (!trayInstance) return;
 
-    const newMenu = await createTrayMenu();
+    const state = await getEngineState();
+    await updateTrayIcon(state);
+    const newMenu = await createTrayMenu(state);
     await trayInstance.setMenu(newMenu);
   });
   trayMenuUpdateChain = update.catch((error) => {
