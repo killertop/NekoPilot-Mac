@@ -45,3 +45,52 @@ export function isRuleSetEmpty(set: RuleSet): boolean {
         && set.domain_suffix.length === 0
         && set.ip_cidr.length === 0;
 }
+
+function isValidIpv4Address(address: string): boolean {
+    const parts = address.split('.');
+    return parts.length === 4 && parts.every((part) => {
+        if (!/^\d{1,3}$/.test(part)) return false;
+        if (part.length > 1 && part.startsWith('0')) return false;
+        const value = Number(part);
+        return value >= 0 && value <= 255;
+    });
+}
+
+function isValidIpv6Address(address: string): boolean {
+    if (!address || address.includes('%')) return false;
+    const halves = address.split('::');
+    if (halves.length > 2) return false;
+
+    const countGroups = (part: string): number | null => {
+        if (!part) return 0;
+        const groups = part.split(':');
+        let count = 0;
+        for (const group of groups) {
+            if (/^[0-9a-fA-F]{1,4}$/.test(group)) {
+                count += 1;
+            } else if (group.includes('.') && isValidIpv4Address(group)) {
+                count += 2;
+            } else {
+                return null;
+            }
+        }
+        return count;
+    };
+
+    const left = countGroups(halves[0]);
+    const right = countGroups(halves[1] ?? '');
+    if (left === null || right === null) return false;
+    return halves.length === 2 ? left + right < 8 : left === 8;
+}
+
+/** Validate an IP network exactly as sing-box expects it. */
+export function isValidIpCidr(value: string): boolean {
+    const match = value.trim().match(/^(.+)\/(\d{1,3})$/);
+    if (!match) return false;
+    const address = match[1];
+    const prefix = Number(match[2]);
+    if (address.includes(':')) {
+        return prefix <= 128 && isValidIpv6Address(address);
+    }
+    return prefix <= 32 && isValidIpv4Address(address);
+}

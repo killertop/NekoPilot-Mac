@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { locale } from "@tauri-apps/plugin-os";
 import {
   emptyRuleSet,
+  isValidIpCidr,
   type RuleAction,
   type RuleSet,
 } from "../config/merger/custom-rules";
@@ -137,6 +138,14 @@ export async function getCustomRuleSet(key: RuleAction): Promise<RuleSet> {
         }
         if (!Array.isArray(config.ip_cidr)) {
           config.ip_cidr = [];
+        }
+        const validCidrs = config.ip_cidr.filter(
+          (value: unknown): value is string =>
+            typeof value === "string" && isValidIpCidr(value),
+        );
+        if (validCidrs.length !== config.ip_cidr.length) {
+          config.ip_cidr = validCidrs;
+          await setCustomRuleSet(key, config);
         }
         return config;
       }

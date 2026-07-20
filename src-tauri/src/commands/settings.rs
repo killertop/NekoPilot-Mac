@@ -3,6 +3,8 @@
 //! Settings stay in the existing `settings.json` format so upgrades retain
 //! user choices, but the renderer no longer writes this file directly.
 
+use std::net::IpAddr;
+
 use serde_json::Value;
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
@@ -18,6 +20,45 @@ const STRING_LIMIT: usize = 16 * 1024;
 const RULESET_PREFIX: &str = "custom_ruleset_";
 const RULESET_KEYS: [&str; 2] = ["custom_ruleset_direct", "custom_ruleset_proxy"];
 const TEMPLATE_CACHE_MARKER: &str = "-template-config-cache";
+
+pub(crate) fn is_valid_ip_cidr(value: &str) -> bool {
+    let Some((address, prefix)) = value.trim().rsplit_once('/') else {
+        return false;
+    };
+    let Ok(address) = address.parse::<IpAddr>() else {
+        return false;
+    };
+    let Ok(prefix) = prefix.parse::<u8>() else {
+        return false;
+    };
+    match address {
+        IpAddr::V4(_) => prefix <= 32,
+        IpAddr::V6(_) => prefix <= 128,
+    }
+}
+
+fn validate_custom_rules(raw: &str) -> bool {
+    let Ok(Value::Object(rules)) = serde_json::from_str::<Value>(raw) else {
+        return false;
+    };
+    for field in ["domain", "domain_suffix", "ip_cidr"] {
+        let Some(value) = rules.get(field) else {
+            continue;
+        };
+        let Some(values) = value.as_array() else {
+            return false;
+        };
+        if values.iter().any(|value| {
+            value.as_str().is_none_or(|value| {
+                value.trim().is_empty()
+                    || (field == "ip_cidr" && !is_valid_ip_cidr(value))
+            })
+        }) {
+            return false;
+        }
+    }
+    true
+}
 
 fn validate_setting(key: &str, value: &Value) -> Result<(), String> {
     if key.trim().is_empty() || key.len() > 256 {
@@ -45,7 +86,7 @@ fn validate_setting(key: &str, value: &Value) -> Result<(), String> {
         let raw = value
             .as_str()
             .ok_or_else(|| "invalid_custom_rules".to_owned())?;
-        if raw.len() > STRING_LIMIT || !serde_json::from_str::<Value>(raw).is_ok_and(|v| v.is_object()) {
+        if raw.len() > STRING_LIMIT || !validate_custom_rules(raw) {
             return Err("invalid_custom_rules".to_owned());
         }
         return Ok(());
@@ -137,6 +178,16 @@ mod tests {
         assert!(validate_setting("allow_lan_key", &serde_json::json!("true")).is_err());
         assert!(validate_setting("custom_ruleset_direct", &serde_json::json!("bad json")).is_err());
         assert!(validate_setting("custom_ruleset_reject", &serde_json::json!("{}")).is_err());
+        assert!(validate_setting(
+            "custom_ruleset_direct",
+            &serde_json::json!(r#"{"domain":[],"domain_suffix":[],"ip_cidr":["10.240.31.0/255"]}"#),
+        )
+        .is_err());
+        assert!(validate_setting(
+            "custom_ruleset_direct",
+            &serde_json::json!(r#"{"domain":[],"domain_suffix":[],"ip_cidr":["10.240.31.0/24","2001:db8::/32"]}"#),
+        )
+        .is_ok());
         assert!(validate_setting("proxy_port_key", &serde_json::json!(6789)).is_ok());
     }
 }

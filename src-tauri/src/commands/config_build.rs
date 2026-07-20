@@ -6,7 +6,7 @@
 
 use std::collections::HashSet;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tauri::{AppHandle, Manager};
 
@@ -41,7 +41,7 @@ pub struct CustomRules {
     pub proxy: RuleSet,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct RuleSet {
     #[serde(default)]
     pub domain: Vec<String>,
@@ -62,9 +62,27 @@ fn bool_setting(store: &tauri_plugin_store::Store<tauri::Wry>, key: &str) -> boo
 }
 
 fn custom_rule_setting(store: &tauri_plugin_store::Store<tauri::Wry>, action: &str) -> RuleSet {
-    string_setting(store, &format!("custom_ruleset_{action}"))
+    let key = format!("custom_ruleset_{action}");
+    let mut rules: RuleSet = string_setting(store, &key)
         .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let previous_count = rules.ip_cidr.len();
+    rules
+        .ip_cidr
+        .retain(|value| settings::is_valid_ip_cidr(value));
+    if rules.ip_cidr.len() != previous_count {
+        if let Ok(raw) = serde_json::to_string(&rules) {
+            store.set(key, Value::String(raw));
+            if let Err(error) = store.save() {
+                log::warn!("failed to persist repaired custom CIDR rules: {error}");
+            }
+        }
+        log::warn!(
+            "removed {} invalid custom CIDR rule(s) from {action}",
+            previous_count - rules.ip_cidr.len()
+        );
+    }
+    rules
 }
 
 /// Loads all engine-affecting settings from the native store. The renderer
@@ -180,7 +198,13 @@ fn inject_custom_rules(config: &mut Value, custom_rules: Option<&CustomRules>) {
         };
         append_strings(rule, "domain", &set.domain);
         append_strings(rule, "domain_suffix", &set.domain_suffix);
-        append_strings(rule, "ip_cidr", &set.ip_cidr);
+        let valid_cidrs = set
+            .ip_cidr
+            .iter()
+            .filter(|value| settings::is_valid_ip_cidr(value))
+            .cloned()
+            .collect::<Vec<_>>();
+        append_strings(rule, "ip_cidr", &valid_cidrs);
     }
 }
 
@@ -394,6 +418,7 @@ mod tests {
             custom_rules: Some(CustomRules {
                 direct: RuleSet {
                     domain: vec!["example.cn".into()],
+                    ip_cidr: vec!["10.0.0.0/8".into(), "10.240.31.0/255".into()],
                     ..Default::default()
                 },
                 proxy: RuleSet {
@@ -445,6 +470,10 @@ mod tests {
         assert_eq!(
             config["route"]["rules"][0]["domain"],
             serde_json::json!(["direct-tag.nekopilot.invalid", "example.cn"])
+        );
+        assert_eq!(
+            config["route"]["rules"][0]["ip_cidr"],
+            serde_json::json!(["10.0.0.0/8"])
         );
         assert_eq!(
             config["route"]["rules"][1]["domain_suffix"],

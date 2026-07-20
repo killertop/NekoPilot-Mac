@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     isRuleSetEmpty,
+    isValidIpCidr,
     kindClass,
     kindsInClass,
     RULE_ACTIONS,
@@ -19,6 +20,21 @@ describe('isRuleSetEmpty', () => {
     it('is true only when all three arrays are empty', () => {
         expect(isRuleSetEmpty({ domain: [], domain_suffix: [], ip_cidr: [] })).toBe(true);
         expect(isRuleSetEmpty({ domain: [], domain_suffix: [], ip_cidr: ['10.0.0.0/8'] })).toBe(false);
+    });
+});
+
+describe('CIDR validation', () => {
+    it('accepts valid IPv4 and IPv6 networks', () => {
+        expect(isValidIpCidr('10.240.31.0/24')).toBe(true);
+        expect(isValidIpCidr('2001:db8::/32')).toBe(true);
+    });
+
+    it('rejects out-of-range prefixes and invalid addresses', () => {
+        expect(isValidIpCidr('10.240.31.0/255')).toBe(false);
+        expect(isValidIpCidr('10.240.31.999/24')).toBe(false);
+        expect(isValidIpCidr('010.240.31.0/24')).toBe(false);
+        expect(isValidIpCidr('2001:db8::/129')).toBe(false);
+        expect(isValidIpCidr('10.240.31.0')).toBe(false);
     });
 });
 

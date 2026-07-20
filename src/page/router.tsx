@@ -8,6 +8,7 @@ import { HelpModal } from "../components/router-settings/help-modal";
 import {
     RULE_ACTIONS,
     RULE_KINDS,
+    isValidIpCidr,
     kindsInClass,
     type RuleAction,
     type RuleKind,
@@ -120,6 +121,10 @@ export default function RouterSettings() {
             toast.error(t("input_empty", "Input cannot be empty"));
             return;
         }
+        if (kind === "ip_cidr" && tokens.some((token) => !isValidIpCidr(token))) {
+            toast.error("CIDR: IPv4 /0–/32 · IPv6 /0–/128");
+            return;
+        }
 
         let next = sets;
         let added = 0;
@@ -174,6 +179,10 @@ export default function RouterSettings() {
         const value = editValue.trim();
         if (!value) {
             toast.error(t("input_empty", "Input cannot be empty"));
+            return;
+        }
+        if (editKind === "ip_cidr" && !isValidIpCidr(value)) {
+            toast.error("CIDR: IPv4 /0–/32 · IPv6 /0–/128");
             return;
         }
         const out = updateRule(sets, editOriginal, editAction, editKind, value);
