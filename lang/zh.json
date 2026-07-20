@@ -16,6 +16,8 @@
     "auto_start_failed_1": "切换自动启动失败",
     "auto_start_failed": "无法获取自动启动状态",
     "auto_start": "开机启动",
+    "auto_select_fastest_node": "自动选择最快节点",
+    "auto_select_fastest_node_desc": "每 10 分钟测速并自动切换",
     "auto": "自动选择",
     "boot_password": "开机密码",
     "bypass_router_mode_subtitle": "TUN旁路由模式",

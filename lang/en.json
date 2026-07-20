@@ -16,6 +16,8 @@
     "auto_start_failed_1": "Failed to switch auto start",
     "auto_start_failed": "Failed to get auto start status",
     "auto_start": "Auto start",
+    "auto_select_fastest_node": "Select fastest node automatically",
+    "auto_select_fastest_node_desc": "Test and switch every 10 minutes",
     "auto": "Auto",
     "boot_password": "Boot password",
     "bypass_router_mode_subtitle": "TUN + Bypass Router Mode",

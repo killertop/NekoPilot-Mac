@@ -3,6 +3,7 @@ vi.mock("../utils/clash-api", () => ({ clashApiFetch: vi.fn() }));
 import { clashApiFetch } from "../utils/clash-api";
 import {
   displayNodeTag,
+  preferredNodeForSubscription,
   subscriptionIdentifierForNode,
   subscriptionNodePrefix,
   switchToSubscriptionNode,
@@ -23,6 +24,13 @@ describe("runtime node pool tags", () => {
   it("leaves legacy node tags unchanged", () => {
     expect(displayNodeTag("VLESS · Tokyo")).toBe("VLESS · Tokyo");
     expect(subscriptionIdentifierForNode("VLESS · Tokyo")).toBeUndefined();
+  });
+
+  it("resolves a configuration node synchronously from the cached pool", () => {
+    const nodes = ["@np:airport-a:Tokyo", "@np:airport-b:Osaka"];
+    expect(preferredNodeForSubscription("airport-b", nodes)).toBe(
+      "@np:airport-b:Osaka",
+    );
   });
 
   it("switches configuration through the local selector without a config reload", async () => {

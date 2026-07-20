@@ -5,10 +5,18 @@ import {
   hasLongLivedConnection,
   pickFastestNode,
 } from "../hooks/useAutoNodeSelection";
+import {
+  AUTO_SELECT_FASTEST_NODE_CHANGED_EVENT,
+  DEFAULT_AUTO_SELECT_FASTEST_NODE,
+} from "../types/definition";
 
 describe("automatic node selection", () => {
   it("runs on the fixed ten-minute schedule", () => {
     expect(AUTO_SELECT_INTERVAL_MS).toBe(600_000);
+    expect(DEFAULT_AUTO_SELECT_FASTEST_NODE).toBe(true);
+    expect(AUTO_SELECT_FASTEST_NODE_CHANGED_EVENT).toBe(
+      "nekopilot-auto-select-fastest-node-changed",
+    );
   });
 
   it("picks the lowest successful delay and ignores timeouts", () => {

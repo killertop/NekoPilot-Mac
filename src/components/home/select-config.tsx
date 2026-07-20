@@ -7,6 +7,7 @@ import {
     AppleSelectOption,
     AppleSelectPlaceholder,
 } from "./apple-select-menu";
+import { NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT } from "./events";
 
 type SubscriptionProps = {
     data: Subscription[] | undefined;
@@ -71,10 +72,19 @@ export default function SelectSub({ data, isLoading, onUpdate }: SubscriptionPro
     const updateSubscription = async (identifier: string) => {
         const item = data.find((i) => i.identifier === identifier);
         if (!item) return;
-        const prevId = await getStoreValue(SSI_STORE_KEY);
+        const prevId = selected;
+        if (prevId === item.identifier) return;
+
+        // Update both selectors in the same frame as the click. Persistence
+        // and the local Clash API switch continue asynchronously.
         setSelected(item.identifier);
+        window.dispatchEvent(
+            new CustomEvent<string>(NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT, {
+                detail: item.identifier,
+            }),
+        );
         await setStoreValue(SSI_STORE_KEY, item.identifier);
-        await onUpdate(item.identifier, prevId !== item.identifier);
+        await onUpdate(item.identifier, true);
     };
 
     return (

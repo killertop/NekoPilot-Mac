@@ -1,5 +1,7 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { NODE_SELECTOR_REFRESH_EVENT } from "../components/home/events";
+import { getAutoSelectFastestNode } from "../single/store";
+import { AUTO_SELECT_FASTEST_NODE_CHANGED_EVENT } from "../types/definition";
 import { clashApiFetch } from "../utils/clash-api";
 import { measureNodeDelays, type DelayStatus } from "../utils/node-delay";
 import {
@@ -72,8 +74,37 @@ function wait(ms: number): Promise<void> {
  * one minute is still alive. It remains mounted when the user leaves Home.
  */
 export function useAutoNodeSelection(isRunning: boolean): void {
+  const [isEnabled, setIsEnabled] = useState<boolean>();
+
   useEffect(() => {
-    if (!isRunning) return;
+    let cancelled = false;
+    void getAutoSelectFastestNode()
+      .then((value) => {
+        if (!cancelled) setIsEnabled(value);
+      })
+      .catch((error) => {
+        console.warn("Failed to load automatic node selection setting", error);
+        if (!cancelled) setIsEnabled(true);
+      });
+
+    const handleSettingChanged = (event: Event) => {
+      setIsEnabled((event as CustomEvent<boolean>).detail);
+    };
+    window.addEventListener(
+      AUTO_SELECT_FASTEST_NODE_CHANGED_EVENT,
+      handleSettingChanged,
+    );
+    return () => {
+      cancelled = true;
+      window.removeEventListener(
+        AUTO_SELECT_FASTEST_NODE_CHANGED_EVENT,
+        handleSettingChanged,
+      );
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isRunning || isEnabled !== true) return;
     let cancelled = false;
     let timer: number | undefined;
 
@@ -132,5 +163,5 @@ export function useAutoNodeSelection(isRunning: boolean): void {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [isRunning]);
+  }, [isEnabled, isRunning]);
 }

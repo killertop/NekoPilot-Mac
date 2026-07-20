@@ -47,18 +47,24 @@ export async function selectExitGatewayNode(nodeTag: string): Promise<void> {
   if (identifier) lastSelectedNodeBySubscription.set(identifier, nodeTag);
 }
 
+export function preferredNodeForSubscription(
+  identifier: string,
+  nodes: string[],
+): string | undefined {
+  const remembered = lastSelectedNodeBySubscription.get(identifier);
+  if (remembered && nodes.includes(remembered)) return remembered;
+  const prefix = subscriptionNodePrefix(identifier);
+  return nodes.find((node) => node.startsWith(prefix));
+}
+
 /** Selects the first node belonging to a configuration without reloading sing-box. */
 export async function switchToSubscriptionNode(identifier: string): Promise<boolean> {
   const selector = await getExitGatewaySelector();
-  const prefix = subscriptionNodePrefix(identifier);
   const currentIdentifier = subscriptionIdentifierForNode(selector.now);
   if (currentIdentifier) {
     lastSelectedNodeBySubscription.set(currentIdentifier, selector.now);
   }
-  const remembered = lastSelectedNodeBySubscription.get(identifier);
-  const target = remembered && selector.all.includes(remembered)
-    ? remembered
-    : selector.all.find((node) => node.startsWith(prefix));
+  const target = preferredNodeForSubscription(identifier, selector.all);
   if (!target) return false;
   if (selector.now !== target) await selectExitGatewayNode(target);
   return true;

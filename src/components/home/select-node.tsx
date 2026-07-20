@@ -7,6 +7,7 @@ import { clashApiFetch } from "../../utils/clash-api";
 import { t } from "../../utils/helper";
 import { measureNodeDelays } from "../../utils/node-delay";
 import {
+    preferredNodeForSubscription,
     selectExitGatewayNode,
     subscriptionIdentifierForNode,
 } from "../../utils/node-pool";
@@ -17,7 +18,10 @@ import {
 } from "./apple-select-menu";
 import { buildNodeProtocolMap, nodeDisplayName, type NodeProtocolMap } from "./node-protocol";
 import NodeOption, { type DelayStatus } from "./node-option";
-import { NODE_SELECTOR_REFRESH_EVENT } from "./events";
+import {
+    NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT,
+    NODE_SELECTOR_REFRESH_EVENT,
+} from "./events";
 
 function compareNodesByDelay(
     left: string,
@@ -102,8 +106,29 @@ export default function SelectNode(props: SelectNodeProps) {
         const refresh = () => {
             void mutate();
         };
+        const optimisticallySelectConfiguration = (event: Event) => {
+            const identifier = (event as CustomEvent<string>).detail;
+            if (!identifier) return;
+            void mutate((current) => {
+                if (!current) return current;
+                const target = preferredNodeForSubscription(identifier, current.all);
+                return target && target !== current.now
+                    ? { ...current, now: target }
+                    : current;
+            }, { revalidate: false });
+        };
         window.addEventListener(NODE_SELECTOR_REFRESH_EVENT, refresh);
-        return () => window.removeEventListener(NODE_SELECTOR_REFRESH_EVENT, refresh);
+        window.addEventListener(
+            NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT,
+            optimisticallySelectConfiguration,
+        );
+        return () => {
+            window.removeEventListener(NODE_SELECTOR_REFRESH_EVENT, refresh);
+            window.removeEventListener(
+                NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT,
+                optimisticallySelectConfiguration,
+            );
+        };
     }, [mutate]);
 
     if (!isRunning) {

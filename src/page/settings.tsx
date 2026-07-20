@@ -1,5 +1,6 @@
 import AboutItem from "../components/settings/about";
 import ToggleAutoStart from "../components/settings/auto-start";
+import ToggleAutoSelectFastestNode from "../components/settings/auto-select-fastest-node";
 import ToggleDHCP from "../components/developer/dhcp-toggle";
 import DNSSettingsItem from "../components/developer/dns-settings";
 import ToggleNodeProtocol from "../components/developer/node-protocol-toggle";
@@ -16,6 +17,7 @@ export default function Settings() {
     <div className="onebox-scrollpage">
       <div className="onebox-page-inner">
         <div className="onebox-grouped-card mb-5">
+          <ToggleAutoSelectFastestNode />
           <ToggleAutoStart />
           <ToggleLan />
           <ProxyPortSetting />

@@ -8,6 +8,8 @@ import {
 } from "../config/merger/custom-rules";
 import {
   ALLOWLAN_STORE_KEY,
+  AUTO_SELECT_FASTEST_NODE_STORE_KEY,
+  DEFAULT_AUTO_SELECT_FASTEST_NODE,
   DEFAULT_PROXY_PORT,
   PROXY_PORT_STORE_KEY,
   SHOW_NODE_PROTOCOL_STORE_KEY,
@@ -74,6 +76,17 @@ export async function getAllowLan(): Promise<boolean> {
 
 export async function setAllowLan(value: boolean) {
   await setStoreValue(ALLOWLAN_STORE_KEY, value);
+}
+
+export async function getAutoSelectFastestNode(): Promise<boolean> {
+  const value = await getStoreValue(AUTO_SELECT_FASTEST_NODE_STORE_KEY);
+  return value === undefined || value === null
+    ? DEFAULT_AUTO_SELECT_FASTEST_NODE
+    : Boolean(value);
+}
+
+export async function setAutoSelectFastestNode(value: boolean): Promise<void> {
+  await setStoreValue(AUTO_SELECT_FASTEST_NODE_STORE_KEY, value);
 }
 
 /**

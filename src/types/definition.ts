@@ -8,6 +8,10 @@ export const SSI_STORE_KEY = "selected_subscription_identifier";
 export const USE_DHCP_STORE_KEY = "use_dhcp_key";
 // 是否在节点列表中显示协议类型标签
 export const SHOW_NODE_PROTOCOL_STORE_KEY = "show_node_protocol_key";
+export const AUTO_SELECT_FASTEST_NODE_STORE_KEY = "auto_select_fastest_node_key";
+export const AUTO_SELECT_FASTEST_NODE_CHANGED_EVENT =
+  "nekopilot-auto-select-fastest-node-changed";
+export const DEFAULT_AUTO_SELECT_FASTEST_NODE = true;
 export const SKIP_SYSTEM_PROXY_STORE_KEY = "skip_system_proxy_key";
 // User Agent 配置键
 export const USER_AGENT_STORE_KEY = "user_agent_key";

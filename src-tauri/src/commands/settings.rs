@@ -10,8 +10,9 @@ use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
 const PROXY_PORT_KEY: &str = "proxy_port_key";
-const BOOLEAN_KEYS: [&str; 4] = [
+const BOOLEAN_KEYS: [&str; 5] = [
     "allow_lan_key",
+    "auto_select_fastest_node_key",
     "use_dhcp_key",
     "show_node_protocol_key",
     "skip_system_proxy_key",
@@ -176,6 +177,8 @@ mod tests {
     fn rejects_invalid_critical_settings() {
         assert!(validate_setting("proxy_port_key", &serde_json::json!(0)).is_err());
         assert!(validate_setting("allow_lan_key", &serde_json::json!("true")).is_err());
+        assert!(validate_setting("auto_select_fastest_node_key", &serde_json::json!(true)).is_ok());
+        assert!(validate_setting("auto_select_fastest_node_key", &serde_json::json!("true")).is_err());
         assert!(validate_setting("custom_ruleset_direct", &serde_json::json!("bad json")).is_err());
         assert!(validate_setting("custom_ruleset_reject", &serde_json::json!("{}")).is_err());
         assert!(validate_setting(
