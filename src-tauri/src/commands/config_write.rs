@@ -19,9 +19,14 @@ pub(crate) fn write_atomically(dir: &Path, file_name: &str, data: &[u8]) -> Resu
     let target = dir.join(file_name);
     let temp = dir.join(format!(".{file_name}.{}.tmp", uuid::Uuid::new_v4()));
     let result = (|| -> Result<(), String> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
             .open(&temp)
             .map_err(|e| format!("create temporary config: {e}"))?;
         file.write_all(data)
@@ -45,6 +50,9 @@ pub(crate) fn write_atomically(dir: &Path, file_name: &str, data: &[u8]) -> Resu
 mod tests {
     use super::write_atomically;
 
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
     #[test]
     fn replaces_config_without_leaving_a_temp_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -61,5 +69,18 @@ mod tests {
     fn rejects_path_traversal() {
         let dir = tempfile::tempdir().unwrap();
         assert!(write_atomically(dir.path(), "../config.json", b"{}").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn generated_config_is_private_to_the_current_user() {
+        let dir = tempfile::tempdir().unwrap();
+        write_atomically(dir.path(), "config.json", br#"{"secret":"token"}"#).unwrap();
+        let mode = std::fs::metadata(dir.path().join("config.json"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
     }
 }

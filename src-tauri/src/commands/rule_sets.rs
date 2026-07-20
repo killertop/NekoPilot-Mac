@@ -26,6 +26,7 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 const REFRESH_POLL_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(20);
 const MIN_RULE_SET_BYTES: usize = 32;
+static REFRESH_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 struct RuleSetSource {
     tag: &'static str,
@@ -81,10 +82,10 @@ fn bundled_rule_set_path(app: &AppHandle, source: &RuleSetSource) -> Result<Path
 }
 
 fn is_valid_rule_set(bytes: &[u8]) -> bool {
-    // `.srs` is binary, but its internal format is intentionally owned by
-    // sing-box. A small, non-HTML payload catches common CDN/proxy failure
-    // pages without rejecting a future valid rule-set format.
-    bytes.len() >= MIN_RULE_SET_BYTES && !bytes.starts_with(b"<")
+    // sing-box binary rule sets start with the stable SRS signature followed
+    // by a format version. Size alone would accept JSON/CDN error bodies and
+    // atomically replace a working offline baseline with unusable data.
+    bytes.len() >= MIN_RULE_SET_BYTES && bytes.starts_with(b"SRS")
 }
 
 fn is_valid_rule_set_file(path: &Path) -> bool {
@@ -304,7 +305,11 @@ async fn local_proxy_is_ready(port: u16) -> bool {
     )
 }
 
-async fn refresh_cn_rule_sets_if_due(app: &AppHandle) {
+pub(crate) async fn refresh_cn_rule_sets_if_due(app: &AppHandle) {
+    // Startup, a newly Running engine and the periodic timer may all request a
+    // refresh together. Serialize and re-check the timestamp under the gate so
+    // only one pair of downloads can touch the managed files.
+    let _refresh_guard = REFRESH_GATE.lock().await;
     let Ok(paths) = ensure_cn_rule_set_baseline(app) else {
         log::warn!("[RULE-SETS] Bundled baseline is unavailable; skipping refresh");
         return;
@@ -402,7 +407,10 @@ mod tests {
     fn rejects_empty_and_html_payloads() {
         assert!(!is_valid_rule_set(b""));
         assert!(!is_valid_rule_set(b"<html>rule set download error</html>"));
-        assert!(is_valid_rule_set(&[0_u8; MIN_RULE_SET_BYTES]));
+        assert!(!is_valid_rule_set(&[b'J'; MIN_RULE_SET_BYTES]));
+        let mut valid = vec![0_u8; MIN_RULE_SET_BYTES];
+        valid[..3].copy_from_slice(b"SRS");
+        assert!(is_valid_rule_set(&valid));
     }
 
     #[tokio::test]

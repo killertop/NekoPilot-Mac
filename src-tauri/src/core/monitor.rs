@@ -121,25 +121,26 @@ pub(crate) fn spawn_process_monitor(
 /// prominent warn to the main OneBox.log so triage doesn't need to
 /// cross-reference two files.
 fn scan_stderr_for_bind_error(pid: u32, line: &str) {
-    let lc = line.to_ascii_lowercase();
-    if lc.contains("address already in use") || lc.contains("eaddrinuse") {
+    if is_tcp_listener_bind_error(line) {
         log::warn!("[sing-box] pid={} BIND FAILED: {}", pid, line.trim_end());
-    } else if lc.contains("listen tcp") && lc.contains("bind:") {
-        log::warn!("[sing-box] pid={} listener error: {}", pid, line.trim_end());
     }
 }
 
-/// Returns `true` when the termination handler was spawned for an older engine
-/// session and should be skipped. Mirrors the sibling check in
-/// `engine/common/readiness.rs:45`.
-///
-/// Three cases:
-///   `spawn == current` → same session, handle normally → `false`
-///   `spawn < current`  → superseded session, skip         → `true`
-///   `spawn > current`  → should never happen in prod; prefer drop over corrupt → `true`
+fn is_tcp_listener_bind_error(line: &str) -> bool {
+    let line = line.to_ascii_lowercase();
+    line.contains("listen tcp")
+        && (line.contains("address already in use")
+            || line.contains("eaddrinuse")
+            || line.contains("bind:"))
+}
+
+/// Returns `true` when a termination event no longer belongs to the engine
+/// process currently owned by ProcessManager. The state-machine epoch cannot
+/// be used here: it intentionally changes as a single process moves through
+/// Starting, Running and Stopping.
 #[inline]
-pub(crate) fn epoch_guard_stale(spawn_epoch: u64, current_epoch: u64) -> bool {
-    spawn_epoch != current_epoch
+pub(crate) fn session_guard_stale(spawn_epoch: u64, active_session: Option<u64>) -> bool {
+    active_session != Some(spawn_epoch)
 }
 
 /// Handle sing-box process termination (intentional stop or crash).
@@ -150,13 +151,21 @@ pub(crate) async fn handle_process_termination(
     payload: tauri_plugin_shell::process::TerminatedPayload,
     spawn_epoch: u64,
 ) {
-    let current_epoch = app_handle.state::<EngineStateCell>().snapshot().epoch();
-    let is_stale = epoch_guard_stale(spawn_epoch, current_epoch);
-    if is_stale {
+    // Serialize termination cleanup with user/tray start, stop, reload and
+    // wake-driven restart. Without this lock, an old event can pass its guard,
+    // then reset ProcessManager after a new child has already been seeded.
+    let _lifecycle_guard = super::LIFECYCLE_GATE.lock().await;
+    let active_session = ProcessManager::acquire().session_epoch;
+    if session_guard_stale(spawn_epoch, active_session) {
         log::info!(
-            "[monitor] guard: stale epoch captured={} current={} mode={:?} code={:?} — skipping cleanup",
-            spawn_epoch, current_epoch, process_mode, payload.code
+            "[monitor] guard: stale session captured={} active={:?} mode={:?} code={:?} — skipping cleanup",
+            spawn_epoch, active_session, process_mode, payload.code
         );
+        // A late Terminated event from the previous sing-box must be entirely
+        // invisible to the current session. Continuing below would still emit
+        // status-changed and transition a newer Starting/Running engine to
+        // Idle or Failed even though its cleanup was skipped.
+        return;
     }
 
     // Phase 1: confirm the exiting process belongs to the mode we think is
@@ -202,7 +211,7 @@ pub(crate) async fn handle_process_termination(
 
     // Only run cleanup when the mode matches and the event belongs to the
     // current engine session.
-    if should_cleanup && !is_stale {
+    if should_cleanup {
         if matches!(**process_mode, ProxyMode::SystemProxy) {
             if let Err(e) = crate::engine::clear_system_proxy(app_handle).await {
                 log::error!("Failed to unset proxy after process termination: {}", e);
@@ -266,64 +275,40 @@ pub(crate) async fn handle_process_termination(
 }
 
 #[cfg(test)]
-mod epoch_guard_tests {
-    use super::epoch_guard_stale;
+mod session_guard_tests {
+    use super::session_guard_stale;
 
     #[test]
-    fn same_epoch_is_not_stale() {
-        assert!(!epoch_guard_stale(5, 5));
+    fn same_session_is_not_stale() {
+        assert!(!session_guard_stale(5, Some(5)));
     }
 
     #[test]
-    fn older_spawn_epoch_is_stale() {
-        assert!(epoch_guard_stale(1, 3));
+    fn superseded_session_is_stale() {
+        assert!(session_guard_stale(1, Some(3)));
     }
 
     #[test]
-    fn spawn_epoch_ahead_of_current_is_stale() {
-        // Should never happen in prod; prefer drop over corrupt state.
-        assert!(epoch_guard_stale(3, 1));
+    fn cleared_session_is_stale() {
+        assert!(session_guard_stale(3, None));
     }
 }
 
 #[cfg(test)]
-mod engine_state_cell_integration_tests {
-    use super::epoch_guard_stale;
-    use crate::engine::state_machine::EngineStateCell;
+mod bind_error_tests {
+    use super::is_tcp_listener_bind_error;
 
-    /// Drive EngineStateCell through two start cycles using the real atomic
-    /// (via the public bump_epoch_for_test helper), simulating:
-    ///   Idle{ep=0} → Starting{ep=1} → Idle{ep=2} → Starting{ep=3}
-    ///
-    /// A stale handler carrying spawn_epoch=1 must trip the guard when the
-    /// cell has advanced to ep=3. A handler from the current session (ep=3)
-    /// must pass.
-    ///
-    /// Smoke-check: if epoch_guard_stale is changed to return false
-    /// unconditionally, the first assert below fails.
     #[test]
-    fn stale_handler_from_first_session_trips_guard_at_third_epoch() {
-        let cell = EngineStateCell::new();
-        assert_eq!(cell.current_epoch(), 0); // Idle{ep=0}
+    fn recognizes_local_tcp_listener_collision() {
+        assert!(is_tcp_listener_bind_error(
+            "listen tcp 127.0.0.1:16789: bind: address already in use"
+        ));
+    }
 
-        // First start: Idle → Starting{ep=1}
-        let ep1 = cell.bump_epoch_for_test();
-        assert_eq!(ep1, 1);
-        assert_eq!(cell.current_epoch(), 1);
-
-        // Stop: Starting → Idle{ep=2}
-        let _ep2 = cell.bump_epoch_for_test();
-        assert_eq!(cell.current_epoch(), 2);
-
-        // Second start: Idle → Starting{ep=3}
-        let ep3 = cell.bump_epoch_for_test();
-        assert_eq!(ep3, 3);
-        assert_eq!(cell.current_epoch(), 3);
-
-        // Stale handler from first session must be dropped.
-        assert!(epoch_guard_stale(ep1, cell.current_epoch()));
-
-        // Handler from current session must pass.
-        assert!(!epoch_guard_stale(ep3, cell.current_epoch()));
+    #[test]
+    fn ignores_nested_udp_dns_errors() {
+        assert!(!is_tcp_listener_bind_error(
+            "lookup example.com: listen udp4 0.0.0.0:68: bind: address already in use"
+        ));
     }
 }

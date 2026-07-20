@@ -16,6 +16,7 @@ use sqlx::{
     FromRow, SqlitePool,
 };
 use tauri::{AppHandle, Manager};
+use tokio::sync::OnceCell;
 use url::Url;
 
 use super::config_fetch;
@@ -46,6 +47,8 @@ CREATE TABLE IF NOT EXISTS subscription_configs (
     FOREIGN KEY (identifier) REFERENCES subscriptions(identifier) ON DELETE CASCADE
 )
 "#;
+
+static DATABASE_POOL: OnceCell<SqlitePool> = OnceCell::const_new();
 
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct SubscriptionRecord {
@@ -89,6 +92,13 @@ fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|error| format!("resolve subscription database: {error}"))
 }
 
+fn valid_official_website(value: &str) -> bool {
+    let Ok(url) = Url::parse(value.trim()) else {
+        return false;
+    };
+    matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
+}
+
 async fn database_at_path(path: &std::path::Path) -> Result<SqlitePool, String> {
     let options = SqliteConnectOptions::from_str(
         path.to_str()
@@ -128,11 +138,57 @@ async fn database_at_path(path: &std::path::Path) -> Result<SqlitePool, String> 
             return Err(format!("add subscription source type: {error}"));
         }
     }
+
+    // Normalize legacy databases before enforcing the invariants used by the
+    // current upsert path. Keeping only the newest row matches the historical
+    // read order and prevents duplicate node pools from increasing build time.
+    let mut migration = pool
+        .begin()
+        .await
+        .map_err(|error| format!("begin subscription migration: {error}"))?;
+    sqlx::query(
+        "DELETE FROM subscriptions WHERE subscription_url IS NOT NULL AND id NOT IN (SELECT MAX(id) FROM subscriptions WHERE subscription_url IS NOT NULL GROUP BY subscription_url)",
+    )
+    .execute(&mut *migration)
+    .await
+    .map_err(|error| format!("deduplicate legacy subscriptions: {error}"))?;
+    sqlx::query(
+        "DELETE FROM subscription_configs WHERE identifier NOT IN (SELECT identifier FROM subscriptions)",
+    )
+    .execute(&mut *migration)
+    .await
+    .map_err(|error| format!("remove orphaned subscription configs: {error}"))?;
+    sqlx::query(
+        "DELETE FROM subscription_configs WHERE id NOT IN (SELECT MAX(id) FROM subscription_configs GROUP BY identifier)",
+    )
+    .execute(&mut *migration)
+    .await
+    .map_err(|error| format!("deduplicate legacy subscription configs: {error}"))?;
+    sqlx::query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS subscriptions_url_unique ON subscriptions(subscription_url) WHERE subscription_url IS NOT NULL",
+    )
+    .execute(&mut *migration)
+    .await
+    .map_err(|error| format!("index subscription URLs: {error}"))?;
+    sqlx::query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS subscription_configs_identifier_unique ON subscription_configs(identifier)",
+    )
+    .execute(&mut *migration)
+    .await
+    .map_err(|error| format!("index subscription configs: {error}"))?;
+    migration
+        .commit()
+        .await
+        .map_err(|error| format!("commit subscription migration: {error}"))?;
     Ok(pool)
 }
 
 async fn database(app: &AppHandle) -> Result<SqlitePool, String> {
-    database_at_path(&database_path(app)?).await
+    let path = database_path(app)?;
+    let pool = DATABASE_POOL
+        .get_or_try_init(|| async { database_at_path(&path).await })
+        .await?;
+    Ok(pool.clone())
 }
 
 pub fn has_usable_node(config: &Value) -> bool {
@@ -196,6 +252,13 @@ fn decoded_fragment(url: &Url) -> Option<String> {
         .decode_utf8()
         .ok()
         .map(|value| value.into_owned())
+}
+
+fn decoded_uri_component(value: &str) -> Result<String, String> {
+    percent_decode_str(value)
+        .decode_utf8()
+        .map(|value| value.into_owned())
+        .map_err(|_| "invalid_proxy_link".to_owned())
 }
 
 fn add_tls(
@@ -290,19 +353,20 @@ fn parse_vless_or_trojan(link: &str, protocol: &str) -> Result<ParsedProxyLink, 
     let url = Url::parse(link).map_err(|_| "invalid_proxy_link".to_owned())?;
     let server = url.host_str().ok_or("proxy_link_missing_server")?;
     let server_port = url.port().ok_or("proxy_link_missing_port")?;
-    let credential = url.username().trim();
+    let credential = decoded_uri_component(url.username().trim())?;
     if credential.is_empty() {
         return Err("proxy_link_missing_credential".to_owned());
     }
     let params = link_parameters(&url);
-    let tag = node_tag(protocol, url.fragment(), server);
+    let label = decoded_fragment(&url);
+    let tag = node_tag(protocol, label.as_deref(), server);
     let mut outbound = Map::new();
     outbound.insert("type".into(), Value::String(protocol.to_owned()));
     outbound.insert("tag".into(), Value::String(tag.clone()));
     outbound.insert("server".into(), Value::String(server.to_owned()));
     outbound.insert("server_port".into(), Value::from(server_port));
     if protocol == "vless" {
-        outbound.insert("uuid".into(), Value::String(credential.to_owned()));
+        outbound.insert("uuid".into(), Value::String(credential.clone()));
         if let Some(flow) = nonempty(params.get("flow")) {
             outbound.insert("flow".into(), Value::String(flow.to_owned()));
         }
@@ -314,7 +378,7 @@ fn parse_vless_or_trojan(link: &str, protocol: &str) -> Result<ParsedProxyLink, 
         }
         add_tls(&mut outbound, &params, server, false)?;
     } else {
-        outbound.insert("password".into(), Value::String(credential.to_owned()));
+        outbound.insert("password".into(), Value::String(credential));
         add_tls(&mut outbound, &params, server, true)?;
     }
     add_transport(&mut outbound, &params);
@@ -329,7 +393,7 @@ fn parse_anytls(link: &str) -> Result<ParsedProxyLink, String> {
     let server = url.host_str().ok_or("proxy_link_missing_server")?;
     // AnyTLS URI defines 443 as the default port when it is omitted.
     let server_port = url.port().unwrap_or(443);
-    let password = url.username().trim();
+    let password = decoded_uri_component(url.username().trim())?;
     if password.is_empty() {
         return Err("proxy_link_missing_credential".to_owned());
     }
@@ -344,7 +408,7 @@ fn parse_anytls(link: &str) -> Result<ParsedProxyLink, String> {
     outbound.insert("tag".into(), Value::String(tag.clone()));
     outbound.insert("server".into(), Value::String(server.to_owned()));
     outbound.insert("server_port".into(), Value::from(server_port));
-    outbound.insert("password".into(), Value::String(password.to_owned()));
+    outbound.insert("password".into(), Value::String(password));
     add_tls(&mut outbound, &params, server, true)?;
     Ok(ParsedProxyLink {
         tag,
@@ -353,13 +417,54 @@ fn parse_anytls(link: &str) -> Result<ParsedProxyLink, String> {
 }
 
 fn decode_base64_text(encoded: &str, error: &str) -> Result<String, String> {
-    let encoded = encoded.trim();
+    let encoded = encoded
+        .chars()
+        .filter(|character| !character.is_ascii_whitespace())
+        .collect::<String>();
     let decoded = general_purpose::URL_SAFE_NO_PAD
-        .decode(encoded)
-        .or_else(|_| general_purpose::URL_SAFE.decode(encoded))
-        .or_else(|_| general_purpose::STANDARD.decode(encoded))
+        .decode(&encoded)
+        .or_else(|_| general_purpose::URL_SAFE.decode(&encoded))
+        .or_else(|_| general_purpose::STANDARD_NO_PAD.decode(&encoded))
+        .or_else(|_| general_purpose::STANDARD.decode(&encoded))
         .map_err(|_| error.to_owned())?;
     String::from_utf8(decoded).map_err(|_| error.to_owned())
+}
+
+pub(crate) fn decode_subscription_payload(body: &[u8]) -> Result<Value, String> {
+    if let Ok(json) = serde_json::from_slice::<Value>(body) {
+        return Ok(json);
+    }
+
+    let text = std::str::from_utf8(body)
+        .map(str::trim)
+        .map_err(|_| "subscription_response_invalid_format".to_owned())?;
+    if text.is_empty() {
+        return Err("subscription_response_invalid_format".to_owned());
+    }
+    let contains_plain_link = text.lines().any(|line| line.trim().contains("://"));
+    let links = if contains_plain_link {
+        text.to_owned()
+    } else {
+        decode_base64_text(text, "subscription_response_invalid_format")?
+    };
+
+    let mut outbounds = Vec::new();
+    for line in links.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        match parse_proxy_link(line) {
+            Ok(parsed) => outbounds.push(parsed.outbound),
+            Err(error) => {
+                let scheme = line
+                    .split_once("://")
+                    .map(|(scheme, _)| scheme)
+                    .unwrap_or("?");
+                log::warn!("Skipping unsupported subscription node scheme={scheme}: {error}");
+            }
+        }
+    }
+    if outbounds.is_empty() {
+        return Err("subscription_no_usable_nodes".to_owned());
+    }
+    Ok(serde_json::json!({ "outbounds": outbounds }))
 }
 
 fn parse_shadowsocks(link: &str) -> Result<ParsedProxyLink, String> {
@@ -372,14 +477,14 @@ fn parse_shadowsocks(link: &str) -> Result<ParsedProxyLink, String> {
     }
     let server = url.host_str().ok_or("proxy_link_missing_server")?;
     let server_port = url.port().ok_or("proxy_link_missing_port")?;
-    let username = url.username().trim();
+    let username = decoded_uri_component(url.username().trim())?;
     if username.is_empty() {
         return Err("proxy_link_missing_credential".to_owned());
     }
     let (method, password) = if let Some(password) = url.password() {
-        (username.to_owned(), password.to_owned())
+        (username, decoded_uri_component(password)?)
     } else {
-        let credentials = decode_base64_text(username, "invalid_proxy_link")?;
+        let credentials = decode_base64_text(&username, "invalid_proxy_link")?;
         let (method, password) = credentials
             .split_once(':')
             .ok_or("proxy_link_missing_credential")?;
@@ -388,7 +493,8 @@ fn parse_shadowsocks(link: &str) -> Result<ParsedProxyLink, String> {
     if method.trim().is_empty() || password.trim().is_empty() {
         return Err("proxy_link_missing_credential".to_owned());
     }
-    let tag = node_tag("shadowsocks", url.fragment(), server);
+    let label = decoded_fragment(&url);
+    let tag = node_tag("shadowsocks", label.as_deref(), server);
     Ok(ParsedProxyLink {
         tag: tag.clone(),
         outbound: serde_json::json!({
@@ -512,8 +618,10 @@ async fn upsert_into_database(
     let official_website = subscription
         .official_website
         .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| (source_type == "subscription").then_some(DEFAULT_OFFICIAL_WEBSITE));
+        .map(str::trim)
+        .filter(|value| valid_official_website(value))
+        .map(str::to_owned)
+        .or_else(|| (source_type == "subscription").then(|| DEFAULT_OFFICIAL_WEBSITE.to_owned()));
     let mut transaction = pool
         .begin()
         .await
@@ -541,7 +649,7 @@ async fn upsert_into_database(
                 "UPDATE subscriptions SET name = ?, official_website = ?, used_traffic = ?, total_traffic = ?, expire_time = ?, last_update_time = ?, source_type = ? WHERE identifier = ?",
             )
             .bind(name)
-            .bind(official_website)
+            .bind(official_website.as_deref())
             .bind(subscription.used_traffic)
             .bind(subscription.total_traffic)
             .bind(subscription.expire_time)
@@ -555,7 +663,7 @@ async fn upsert_into_database(
             sqlx::query(
                 "UPDATE subscriptions SET official_website = ?, used_traffic = ?, total_traffic = ?, expire_time = ?, last_update_time = ?, source_type = ? WHERE identifier = ?",
             )
-            .bind(official_website)
+            .bind(official_website.as_deref())
             .bind(subscription.used_traffic)
             .bind(subscription.total_traffic)
             .bind(subscription.expire_time)
@@ -580,7 +688,7 @@ async fn upsert_into_database(
         .bind(&identifier)
         .bind(name.unwrap_or("配置"))
         .bind(url)
-        .bind(official_website)
+        .bind(official_website.as_deref())
         .bind(subscription.used_traffic)
         .bind(subscription.total_traffic)
         .bind(subscription.expire_time)
@@ -916,39 +1024,53 @@ pub async fn get_subscription_url(app: AppHandle, identifier: String) -> Result<
     .ok_or_else(|| "subscription_not_exist".to_owned())
 }
 
-#[tauri::command]
-pub async fn deduplicate_subscriptions(app: AppHandle) -> Result<(), String> {
-    let pool = database(&app).await?;
-    let mut transaction = pool
-        .begin()
-        .await
-        .map_err(|error| format!("begin subscription deduplication: {error}"))?;
-    sqlx::query(
-        "DELETE FROM subscription_configs WHERE identifier NOT IN (SELECT identifier FROM subscriptions)",
-    )
-    .execute(&mut *transaction)
-    .await
-    .map_err(|error| format!("remove orphaned subscription configs: {error}"))?;
-    sqlx::query(
-        "DELETE FROM subscriptions WHERE id NOT IN (SELECT MAX(id) FROM subscriptions WHERE subscription_url IS NOT NULL GROUP BY subscription_url) AND subscription_url IS NOT NULL",
-    )
-    .execute(&mut *transaction)
-    .await
-    .map_err(|error| format!("deduplicate subscriptions: {error}"))?;
-    transaction
-        .commit()
-        .await
-        .map_err(|error| format!("commit subscription deduplication: {error}"))?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
+    use base64::{engine::general_purpose, Engine as _};
+
     use super::{
-        content_disposition_filename, database_at_path, has_usable_node, import_subscription_name,
-        parse_proxy_link, parse_subscription_userinfo, subscription_expiry_millis,
-        upsert_into_database, SubscriptionUpsert,
+        content_disposition_filename, database_at_path, decode_subscription_payload,
+        has_usable_node, import_subscription_name, parse_proxy_link, parse_subscription_userinfo,
+        subscription_expiry_millis, upsert_into_database, valid_official_website,
+        SubscriptionUpsert,
     };
+
+    #[test]
+    fn official_website_accepts_only_http_urls_with_a_host() {
+        assert!(valid_official_website("https://example.com/path"));
+        assert!(valid_official_website("http://127.0.0.1:8080"));
+        assert!(!valid_official_website("javascript:alert(1)"));
+        assert!(!valid_official_website("https-not-a-url"));
+        assert!(!valid_official_website("file:///tmp/index.html"));
+    }
+
+    #[test]
+    fn subscription_payload_accepts_json_plain_links_and_base64_links() {
+        let json = br#"{"outbounds":[{"type":"vless","tag":"JSON"}]}"#;
+        assert_eq!(
+            decode_subscription_payload(json).unwrap()["outbounds"][0]["tag"],
+            "JSON"
+        );
+
+        let link =
+            "vless://00000000-0000-0000-0000-000000000001@example.com:443?security=tls#Tokyo";
+        let plain = decode_subscription_payload(link.as_bytes()).unwrap();
+        assert_eq!(plain["outbounds"].as_array().unwrap().len(), 1);
+        assert_eq!(plain["outbounds"][0]["type"], "vless");
+
+        let encoded = general_purpose::STANDARD.encode(format!("unsupported://node\n{link}\n"));
+        let decoded = decode_subscription_payload(encoded.as_bytes()).unwrap();
+        assert_eq!(decoded["outbounds"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn subscription_payload_rejects_an_all_unsupported_list() {
+        let encoded = general_purpose::STANDARD.encode("hysteria2://unsupported.example:443");
+        assert_eq!(
+            decode_subscription_payload(encoded.as_bytes()),
+            Err("subscription_no_usable_nodes".to_owned())
+        );
+    }
 
     #[test]
     fn validates_a_real_node_not_a_group() {
@@ -1000,6 +1122,7 @@ mod tests {
             "public-key"
         );
         assert_eq!(parsed.outbound["transport"]["type"], "ws");
+        assert_eq!(parsed.tag, "VLESS · Tokyo");
         assert_eq!(
             parsed.outbound["transport"]["headers"]["Host"],
             "cdn.example.com"
@@ -1016,6 +1139,12 @@ mod tests {
             parse_proxy_link("trojan://secret@example.com:443?sni=example.com#Trojan").unwrap();
         assert_eq!(trojan.outbound["type"], "trojan");
         assert_eq!(trojan.outbound["tls"]["enabled"], true);
+
+        let encoded =
+            parse_proxy_link("trojan://p%40ss%3Aword@example.com:443?sni=example.com#Hong%20Kong")
+                .unwrap();
+        assert_eq!(encoded.tag, "TROJAN · Hong Kong");
+        assert_eq!(encoded.outbound["password"], "p@ss:word");
 
         let vmess_payload = base64::Engine::encode(
             &base64::engine::general_purpose::STANDARD,
@@ -1048,6 +1177,9 @@ mod tests {
             default_port.outbound["tls"]["server_name"],
             "edge.example.com"
         );
+        let encoded_password = parse_proxy_link("anytls://p%40ss@example.com#Hong%20Kong").unwrap();
+        assert_eq!(encoded_password.tag, "ANYTLS · Hong Kong");
+        assert_eq!(encoded_password.outbound["password"], "p@ss");
     }
 
     #[test]
@@ -1073,6 +1205,40 @@ mod tests {
             .unwrap();
             assert!(tables.iter().any(|table| table == "subscriptions"));
             assert!(tables.iter().any(|table| table == "subscription_configs"));
+            pool.close().await;
+        });
+    }
+
+    #[test]
+    fn schema_enforces_one_subscription_and_config_per_source() {
+        tauri::async_runtime::block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let pool = database_at_path(&dir.path().join("data.db")).await.unwrap();
+            sqlx::query(
+                "INSERT INTO subscriptions (identifier, subscription_url) VALUES ('first', 'https://example.com/sub')",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            assert!(sqlx::query(
+                "INSERT INTO subscriptions (identifier, subscription_url) VALUES ('second', 'https://example.com/sub')",
+            )
+            .execute(&pool)
+            .await
+            .is_err());
+
+            sqlx::query(
+                "INSERT INTO subscription_configs (identifier, config_content) VALUES ('first', '{}')",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            assert!(sqlx::query(
+                "INSERT INTO subscription_configs (identifier, config_content) VALUES ('first', '{}')",
+            )
+            .execute(&pool)
+            .await
+            .is_err());
             pool.close().await;
         });
     }

@@ -8,15 +8,6 @@ export { isLocalProxyLink } from './proxy-link';
 
 
 
-/**
- * Removes duplicate subscription rows by URL, keeping the most recently inserted entry.
- * Orphaned subscription_configs rows are removed automatically via CASCADE.
- * Intended to be called once on every app startup.
- */
-export async function deduplicateSubscriptionsByUrl(): Promise<void> {
-    await invoke('deduplicate_subscriptions');
-}
-
 // Tracks in-flight insertSubscription calls by URL.
 // A second call for the same URL reuses the existing Promise instead of
 // racing to INSERT a duplicate record into the database.

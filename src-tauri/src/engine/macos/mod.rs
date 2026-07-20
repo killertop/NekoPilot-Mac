@@ -51,6 +51,7 @@ impl EngineManager for MacOSEngine {
                     manager.mode = Some(Arc::new(mode));
                     manager.config_path = Some(Arc::new(config_path));
                     manager.child = Some(child);
+                    manager.session_epoch = Some(start_epoch);
                     manager.is_stopping = false;
                 }
                 if should_set_system_proxy {
@@ -63,10 +64,13 @@ impl EngineManager for MacOSEngine {
     }
 
     async fn stop(app: &AppHandle) -> Result<(), String> {
-        let (mode, child) = {
+        let (mode, child_pid) = {
             let mut manager = crate::core::ProcessManager::acquire();
             manager.is_stopping = true;
-            (manager.mode.clone(), manager.child.take())
+            (
+                manager.mode.clone(),
+                manager.child.as_ref().map(|child| child.pid()),
+            )
         };
         let Some(mode) = mode else {
             return Ok(());
@@ -80,9 +84,12 @@ impl EngineManager for MacOSEngine {
                         errors.push(format!("failed to clear system proxy: {error}"));
                     }
                 }
-                if let Some(child) = child {
-                    if let Err(error) = child.kill() {
-                        errors.push(format!("failed to stop sing-box: {error}"));
+                if let Some(child_pid) = child_pid {
+                    if unsafe { libc::kill(child_pid as i32, libc::SIGTERM) } != 0 {
+                        let error = std::io::Error::last_os_error();
+                        if error.raw_os_error() != Some(libc::ESRCH) {
+                            errors.push(format!("failed to stop sing-box: {error}"));
+                        }
                     }
                 }
                 if errors.is_empty() {

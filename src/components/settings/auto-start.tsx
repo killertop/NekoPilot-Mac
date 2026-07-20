@@ -8,6 +8,7 @@ import { t } from "../../utils/helper";
 
 export default function ToggleAutoStart() {
     const [isOn, setIsOn] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
 
     useEffect(() => {
         const checkAutoStart = async () => {
@@ -23,6 +24,7 @@ export default function ToggleAutoStart() {
     }, []);
 
     const handleToggle = async () => {
+        if (isSaving) return;
         // 保存当前状态用于可能的回滚
         const previousState = isOn;
 
@@ -30,6 +32,7 @@ export default function ToggleAutoStart() {
         setIsOn(!isOn);
 
         try {
+            setIsSaving(true);
             if (!isOn) {
                 await enable();
             } else {
@@ -41,6 +44,7 @@ export default function ToggleAutoStart() {
             console.error("切换自动启动设置失败:", error);
             toast.error(t("auto_start_failed_1"));
         } finally {
+            setIsSaving(false);
         }
     };
 
@@ -51,6 +55,7 @@ export default function ToggleAutoStart() {
                 title={t("auto_start")}
                 isEnabled={isOn}
                 onToggle={handleToggle}
+                disabled={isSaving}
             />
         </div>
     )

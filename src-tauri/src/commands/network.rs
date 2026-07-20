@@ -4,6 +4,7 @@ use tauri::http::{header::LOCATION, StatusCode};
 use tauri::AppHandle;
 use tauri_plugin_http::reqwest::{self, redirect::Policy};
 use tokio::process::Command;
+use url::Url;
 
 const DEFAULT_CAPTIVE_URL: &str = "http://captive.apple.com/hotspot-detect.html";
 
@@ -131,8 +132,14 @@ pub async fn get_lan_ip() -> Result<String, String> {
     }
 }
 
+fn safe_browser_url(value: &str) -> Option<String> {
+    let url = Url::parse(value).ok()?;
+    (matches!(url.scheme(), "http" | "https") && url.host_str().is_some()).then(|| url.to_string())
+}
+
 #[tauri::command]
 pub async fn open_browser(app: AppHandle, url: String) -> Result<(), String> {
+    let url = safe_browser_url(&url).ok_or_else(|| "invalid_browser_url".to_owned())?;
     // Captive-portal auth often requires stopping the proxy first so the
     // browser can reach the portal's local LAN address without being
     // routed through the now-misconfigured tunnel.
@@ -196,7 +203,7 @@ pub async fn get_captive_redirect_url() -> String {
                     .headers()
                     .get(LOCATION)
                     .and_then(|h| h.to_str().ok())
-                    .map(|s| s.to_string())
+                    .and_then(safe_browser_url)
                     .unwrap_or_else(|| DEFAULT_CAPTIVE_URL.to_string())
             } else {
                 log::error!("Unexpected status code: {}", status);
@@ -249,5 +256,16 @@ mod tests {
         assert!(is_private_ip("10.0.0.1"));
         assert!(is_private_ip("192.168.1.1"));
         assert!(!is_private_ip("8.8.8.8"));
+    }
+
+    #[test]
+    fn browser_urls_are_limited_to_http_with_a_host() {
+        assert_eq!(
+            safe_browser_url("https://example.com/login"),
+            Some("https://example.com/login".to_owned())
+        );
+        assert!(safe_browser_url("javascript:alert(1)").is_none());
+        assert!(safe_browser_url("file:///tmp/index.html").is_none());
+        assert!(safe_browser_url("https-not-a-url").is_none());
     }
 }

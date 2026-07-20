@@ -22,6 +22,11 @@ use super::whitelist::{load_whitelist_hashes, KNOWN_HOST_SHA256_LIST};
 // Compile-time accelerator URL — injected from ACCELERATE_URL env var via build.rs.
 // Empty string when not configured.
 const ACCELERATE_URL: &str = env!("ACCELERATE_URL");
+const MAX_SUBSCRIPTION_BYTES: usize = 16 * 1024 * 1024;
+
+fn subscription_scheme_supported(scheme: &str) -> bool {
+    matches!(scheme, "http" | "https")
+}
 
 pub(crate) fn compute_sha256_hex(s: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -94,7 +99,7 @@ pub async fn verify_deep_link_url(app: AppHandle, url: String) -> bool {
     verified
 }
 
-/// Probes TCP:443 reachability of the compiled-in ACCELERATE_URL (5 s timeout).
+/// Probes reachability of the compiled-in accelerator endpoint (5 s timeout).
 async fn check_accelerator_tcp() -> bool {
     if ACCELERATE_URL.is_empty() {
         return false;
@@ -105,11 +110,11 @@ async fn check_accelerator_tcp() -> bool {
     let Some(host) = parsed.host_str() else {
         return false;
     };
-    let addr = format!("{}:443", host);
+    let port = parsed.port_or_known_default().unwrap_or(443);
     matches!(
         tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            tokio::net::TcpStream::connect(&addr),
+            tokio::net::TcpStream::connect((host, port)),
         )
         .await,
         Ok(Ok(_))
@@ -144,6 +149,39 @@ fn collect_headers(headers: &reqwest::header::HeaderMap) -> HashMap<String, Stri
         .collect()
 }
 
+fn checked_subscription_body_size(current: usize, incoming: usize) -> Result<usize, String> {
+    let next = current
+        .checked_add(incoming)
+        .ok_or_else(|| "subscription_response_too_large".to_owned())?;
+    if next > MAX_SUBSCRIPTION_BYTES {
+        return Err("subscription_response_too_large".to_owned());
+    }
+    Ok(next)
+}
+
+async fn read_subscription_json(
+    mut response: reqwest::Response,
+) -> Result<serde_json::Value, String> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_SUBSCRIPTION_BYTES as u64)
+    {
+        return Err("subscription_response_too_large".to_owned());
+    }
+
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| format!("read subscription response: {error}"))?
+    {
+        let next_size = checked_subscription_body_size(body.len(), chunk.len())?;
+        body.reserve(next_size - body.len());
+        body.extend_from_slice(&chunk);
+    }
+    super::subscription::decode_subscription_payload(&body)
+}
+
 #[derive(serde::Serialize)]
 pub(crate) struct FetchConfigResponse {
     pub(crate) data: Option<serde_json::Value>,
@@ -166,6 +204,9 @@ pub(crate) async fn fetch_subscription_config(
     let t_total = Instant::now();
 
     let parsed_url = Url::parse(url).map_err(|e| e.to_string())?;
+    if !subscription_scheme_supported(parsed_url.scheme()) {
+        return Err("unsupported_subscription_scheme".to_owned());
+    }
     let hostname = parsed_url
         .host_str()
         .ok_or("missing host in URL")?
@@ -275,11 +316,7 @@ pub(crate) async fn fetch_subscription_config(
             let headers = collect_headers(response.headers());
             let t_body = Instant::now();
             let data = if status == 200 {
-                response
-                    .bytes()
-                    .await
-                    .ok()
-                    .and_then(|b| serde_json::from_slice(&b).ok())
+                Some(read_subscription_json(response).await?)
             } else {
                 None
             };
@@ -313,7 +350,7 @@ pub(crate) async fn fetch_subscription_config(
 
             // Three conditions must all hold for the fallback:
             // accelerator URL compiled in, domain verification passed,
-            // and TCP:443 reachable.
+            // and its configured TCP endpoint reachable.
             if ACCELERATE_URL.is_empty() {
                 log::warn!(
                     "[CONFIG_LOAD] 方式=ACCELERATOR_UNAVAILABLE, 原因=未配置加速地址, 回退中止"
@@ -335,7 +372,9 @@ pub(crate) async fn fetch_subscription_config(
             }
 
             if !check_accelerator_tcp().await {
-                log::warn!("[CONFIG_LOAD] 方式=ACCELERATOR_UNAVAILABLE, 原因=不可达:443, 回退中止");
+                log::warn!(
+                    "[CONFIG_LOAD] 方式=ACCELERATOR_UNAVAILABLE, 原因=加速地址不可达, 回退中止"
+                );
                 return Err(format!(
                     "[CONFIG_LOAD] PRIMARY_FAILED: {}, accelerator unreachable",
                     primary_reason
@@ -368,11 +407,7 @@ pub(crate) async fn fetch_subscription_config(
                     let headers = collect_headers(response.headers());
                     let t_body = Instant::now();
                     if status == 200 {
-                        let data = response
-                            .bytes()
-                            .await
-                            .ok()
-                            .and_then(|b| serde_json::from_slice(&b).ok());
+                        let data = Some(read_subscription_json(response).await?);
                         log::info!(
                             "[CONFIG_LOAD] 方式=FALLBACK_ACCELERATOR status={} primary_reason={} headers_elapsed={}ms body_elapsed={}ms total_elapsed={}ms",
                             status,
@@ -435,6 +470,30 @@ mod tests {
             hostname_suffix_candidates("a.b.c"),
             vec!["c".to_string(), "b.c".to_string(), "a.b.c".to_string()],
         );
+    }
+
+    #[test]
+    fn subscription_body_limit_accepts_exact_cap_and_rejects_larger_input() {
+        assert_eq!(
+            checked_subscription_body_size(MAX_SUBSCRIPTION_BYTES - 1, 1),
+            Ok(MAX_SUBSCRIPTION_BYTES)
+        );
+        assert_eq!(
+            checked_subscription_body_size(MAX_SUBSCRIPTION_BYTES, 1),
+            Err("subscription_response_too_large".to_owned())
+        );
+        assert_eq!(
+            checked_subscription_body_size(usize::MAX, 1),
+            Err("subscription_response_too_large".to_owned())
+        );
+    }
+
+    #[test]
+    fn subscription_fetch_accepts_only_http_transport() {
+        assert!(subscription_scheme_supported("https"));
+        assert!(subscription_scheme_supported("http"));
+        assert!(!subscription_scheme_supported("file"));
+        assert!(!subscription_scheme_supported("ftp"));
     }
 
     #[test]

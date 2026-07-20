@@ -13,6 +13,7 @@ import { ToggleSetting } from "./common";
 
 export default function ToggleAutoSelectFastestNode() {
   const [isEnabled, setIsEnabled] = useState(DEFAULT_AUTO_SELECT_FASTEST_NODE);
+  const [isSaving, setIsSaving] = useState(false);
   const didInteract = useRef(false);
 
   useEffect(() => {
@@ -26,6 +27,7 @@ export default function ToggleAutoSelectFastestNode() {
   }, []);
 
   const handleToggle = async () => {
+    if (isSaving) return;
     const previous = isEnabled;
     const next = !previous;
     didInteract.current = true;
@@ -37,6 +39,7 @@ export default function ToggleAutoSelectFastestNode() {
     );
 
     try {
+      setIsSaving(true);
       await setAutoSelectFastestNode(next);
     } catch (error) {
       setIsEnabled(previous);
@@ -46,6 +49,8 @@ export default function ToggleAutoSelectFastestNode() {
         }),
       );
       console.error("Failed to save automatic node selection setting", error);
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -56,6 +61,7 @@ export default function ToggleAutoSelectFastestNode() {
       subTitle={t("auto_select_fastest_node_desc")}
       isEnabled={isEnabled}
       onToggle={handleToggle}
+      disabled={isSaving}
     />
   );
 }

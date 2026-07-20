@@ -10,6 +10,7 @@ import { deleteSubscription } from "../../action/db";
 import { refreshSubscription } from "../../action/subscription-hooks";
 import { GET_SUBSCRIPTIONS_LIST_SWR_KEY, Subscription } from "../../types/definition";
 import { t } from "../../utils/helper";
+import { safeExternalHttpUrl } from "../../utils/external-url";
 import Avatar from "./avatar";
 import { SubscriptionDetailModal } from "./detail-modal";
 import { hasTrafficQuota, isLocalConfiguration } from "./subscription-metadata";
@@ -69,9 +70,8 @@ export const SubscriptionItem = React.memo(function SubscriptionItem({
 
     const handleAvatarClick = (e: React.MouseEvent) => {
         e.stopPropagation();
-        if (item.official_website && item.official_website.startsWith("http")) {
-            openUrl(item.official_website);
-        }
+        const website = safeExternalHttpUrl(item.official_website);
+        if (website) void openUrl(website);
     };
 
     const isBusy = isDeleting;

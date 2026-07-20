@@ -8,6 +8,7 @@ import { ToggleSetting } from "../settings/common";
 
 export default function ToggleNodeProtocol() {
     const [toggle, setToggle] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
 
     useEffect(() => {
         const loadState = async () => {
@@ -22,14 +23,18 @@ export default function ToggleNodeProtocol() {
     }, []);
 
     const handleToggle = async () => {
+        if (isSaving) return;
         const next = !toggle;
         setToggle(next);
         try {
+            setIsSaving(true);
             await setShowNodeProtocol(next);
             window.dispatchEvent(new Event(NODE_SELECTOR_REFRESH_EVENT));
         } catch (error) {
             setToggle(toggle);
             console.error("Error saving node protocol state:", error);
+        } finally {
+            setIsSaving(false);
         }
     };
 
@@ -40,6 +45,7 @@ export default function ToggleNodeProtocol() {
             subTitle={t("show_node_protocol_desc")}
             isEnabled={toggle}
             onToggle={handleToggle}
+            disabled={isSaving}
         />
     );
 }

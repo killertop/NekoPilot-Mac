@@ -32,6 +32,7 @@ export default function ProxyPortSetting() {
   const [currentPort, setCurrentPort] = useState(DEFAULT_PROXY_PORT);
   const [isLoading, setIsLoading] = useState(false);
   const [skipSystemProxy, setSkipSystemProxyState] = useState(false);
+  const [isSavingProxyMode, setIsSavingProxyMode] = useState(false);
 
   const loadState = async () => {
     const [savedPort, skipProxy] = await Promise.all([
@@ -52,6 +53,7 @@ export default function ProxyPortSetting() {
   }, [isOpen]);
 
   const handleToggleSkipProxy = async () => {
+    if (isSavingProxyMode) return;
     const next = !skipSystemProxy;
     setSkipSystemProxyState(next);
 
@@ -60,6 +62,7 @@ export default function ProxyPortSetting() {
     };
 
     try {
+      setIsSavingProxyMode(true);
       if (engineState.kind === "running") {
         await toast.promise(
           (async () => {
@@ -88,6 +91,8 @@ export default function ProxyPortSetting() {
       toast.error(
         t("system_proxy_save_failed", "Failed to save system proxy setting"),
       );
+    } finally {
+      setIsSavingProxyMode(false);
     }
   };
 
@@ -158,7 +163,7 @@ export default function ProxyPortSetting() {
         subtitle={t("proxy_port_desc", "HTTP/SOCKS mixed inbound")}
         confirmLabel={t("save")}
         onConfirm={handleSave}
-        confirmDisabled={parsedPort === null}
+        confirmDisabled={parsedPort === null || isSavingProxyMode}
         confirmLoading={isLoading}
       >
         <IOSTextField
@@ -194,6 +199,7 @@ export default function ProxyPortSetting() {
               className="onebox-toggle"
               checked={!skipSystemProxy}
               onChange={handleToggleSkipProxy}
+              disabled={isSavingProxyMode || isLoading}
             />
           </label>
         }

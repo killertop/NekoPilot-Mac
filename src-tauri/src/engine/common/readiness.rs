@@ -59,7 +59,16 @@ pub fn spawn(app: AppHandle, start_epoch: u64, clash_api_port: u16) {
 
             if probe_once(clash_api_port).await {
                 log::info!("[readiness] probe succeeded, transitioning to Running");
-                let _ = transition(&app, Intent::MarkRunning);
+                if transition(&app, Intent::MarkRunning).is_ok() {
+                    // The first startup refresh attempt happens before the
+                    // proxy listener exists. Trigger again at actual readiness
+                    // so a due seven-day update does not wait 30 minutes or get
+                    // missed by users who run the app only briefly.
+                    let refresh_app = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        crate::commands::rule_sets::refresh_cn_rule_sets_if_due(&refresh_app).await;
+                    });
+                }
                 return;
             }
 
@@ -71,6 +80,12 @@ pub fn spawn(app: AppHandle, start_epoch: u64, clash_api_port: u16) {
                         reason: "startup timeout".into(),
                     },
                 );
+                // A failed readiness probe is terminal for this session. Do
+                // not leave a half-started child or a macOS system proxy
+                // pointing at a listener that never became usable.
+                if let Err(error) = crate::core::stop(app.clone()).await {
+                    log::error!("[readiness] failed to clean up timed-out engine: {error}");
+                }
                 return;
             }
 

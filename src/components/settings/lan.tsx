@@ -25,6 +25,7 @@ export default function ToggleLan() {
   const [toggle, setToggle] = useState(false);
   const [lanIP, setLanIP] = useState<string>("127.0.0.1");
   const [proxyPort, setProxyPort] = useState(DEFAULT_PROXY_PORT);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     const loadTunState = async () => {
@@ -66,6 +67,7 @@ export default function ToggleLan() {
   }, []);
 
   const handleToggle = async () => {
+    if (isSaving) return;
     if (!lanIP || lanIP === "127.0.0.1") {
       await message(
         t(
@@ -78,9 +80,27 @@ export default function ToggleLan() {
       );
       return;
     } else {
-      await setAllowLan(!toggle);
-      setToggle(!toggle);
-      await vpnServiceManager.syncAndReload();
+      const next = !toggle;
+      setIsSaving(true);
+      try {
+        await setAllowLan(next);
+        setToggle(next);
+        await vpnServiceManager.syncAndReload();
+      } catch (error) {
+        setToggle(toggle);
+        try {
+          await setAllowLan(toggle);
+        } catch (rollbackError) {
+          console.error("Failed to roll back LAN setting:", rollbackError);
+        }
+        console.error("Failed to save or apply LAN setting:", error);
+        await message(t("save_failed", "Save failed"), {
+          title: t("error"),
+          kind: "error",
+        });
+      } finally {
+        setIsSaving(false);
+      }
     }
   };
 
@@ -91,6 +111,7 @@ export default function ToggleLan() {
       subTitle={`${lanIP}:${proxyPort}`}
       isEnabled={toggle}
       onToggle={handleToggle}
+      disabled={isSaving}
     />
   );
 }

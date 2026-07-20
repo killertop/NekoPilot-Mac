@@ -31,7 +31,8 @@ let statusPollerId: number | null = null;
 let statusPollInFlight = false;
 let toggleInFlight = false;
 let windowControlsSetup = false;
-let trayMenuUpdateChain: Promise<void> = Promise.resolve();
+let trayMenuUpdatePromise: Promise<void> | null = null;
+let trayMenuUpdateRequested = false;
 let idleTrayIcon: Image | Uint8Array | null = null;
 let runningTrayIcon: Image | null = null;
 
@@ -80,7 +81,8 @@ async function toggleProxyStatus(status: boolean) {
     if (status) {
       await vpnServiceManager.stop();
     } else {
-      await vpnServiceManager.syncConfig({});
+      const configReady = await vpnServiceManager.syncConfig({});
+      if (!configReady) return;
       await vpnServiceManager.start();
     }
   } finally {
@@ -190,10 +192,9 @@ async function getTrayIconImage(
   }
 
   if (!macos) {
-    const icon =
-      trayIconData !== undefined
-        ? await Image.fromBytes(trayIconData)
-        : (await defaultWindowIcon()) ?? undefined;
+    const icon = trayIconData !== undefined
+      ? await Image.fromBytes(trayIconData)
+      : (await defaultWindowIcon()) ?? undefined;
     if (icon) idleTrayIcon = icon;
     return icon;
   }
@@ -291,22 +292,33 @@ export async function setupTrayIcon() {
 }
 
 // 更新托盘菜单
-export async function updateTrayMenu() {
-  // Engine transitions can arrive back-to-back (Starting → Running). Keep
-  // menu rebuilds ordered so an older async rebuild cannot overwrite the
-  // most recent state with a stale checkbox or enabled action.
-  const update = trayMenuUpdateChain.then(async () => {
-    if (!trayInstance) return;
+export function updateTrayMenu(): Promise<void> {
+  // Starting → Running and Stopping → Idle can arrive back-to-back.
+  // Collapse bursts into the newest authoritative snapshot instead of
+  // rebuilding several native menus in sequence.
+  trayMenuUpdateRequested = true;
+  if (trayMenuUpdatePromise) return trayMenuUpdatePromise;
 
-    const state = await getEngineState();
-    await updateTrayIcon(state);
-    const newMenu = await createTrayMenu(state);
-    await trayInstance.setMenu(newMenu);
-  });
-  trayMenuUpdateChain = update.catch((error) => {
+  const update = (async () => {
+    while (trayMenuUpdateRequested) {
+      trayMenuUpdateRequested = false;
+      if (!trayInstance) continue;
+
+      const state = await getEngineState();
+      await updateTrayIcon(state);
+      const newMenu = await createTrayMenu(state);
+      await trayInstance.setMenu(newMenu);
+    }
+  })().catch((error) => {
     console.error("Failed to update tray menu:", error);
   });
-  return await update;
+  trayMenuUpdatePromise = update;
+  void update.finally(() => {
+    if (trayMenuUpdatePromise !== update) return;
+    trayMenuUpdatePromise = null;
+    if (trayMenuUpdateRequested) void updateTrayMenu();
+  });
+  return update;
 }
 
 // 处理连接失败

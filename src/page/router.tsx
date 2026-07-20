@@ -84,15 +84,23 @@ export default function RouterSettings() {
     // Persist the next sets and write every affected action's store key. Edit
     // can move a rule between two actions, so callers pass all touched actions.
     const applyRulesLive = async () => {
-        // The native write-and-reload command coalesces quick successive edits
-        // and reloads sing-box without disconnecting it.
+        // The native lifecycle gate serializes every write-triggered reload so
+        // the latest saved rule set is never dropped by a racing edit.
         if (engineState.kind !== "running") return;
         await vpnServiceManager.syncAndReload(0);
     };
 
     const persist = async (next: RuleSets, actions: RuleAction[]) => {
+        const previous = sets;
         setSets(next);
-        await Promise.all([...new Set(actions)].map((a) => setCustomRuleSet(a, next[a])));
+        try {
+            await Promise.all([...new Set(actions)].map((a) => setCustomRuleSet(a, next[a])));
+        } catch (error) {
+            setSets(previous);
+            console.error("Failed to save rules:", error);
+            toast.error(t("save_failed", "Save failed"));
+            return false;
+        }
         void applyRulesLive().catch((error) => {
             console.error("Failed to apply rules live:", error);
             toast.error(
@@ -102,6 +110,7 @@ export default function RouterSettings() {
                 ),
             );
         });
+        return true;
     };
 
     const handleAdd = async () => {
@@ -141,7 +150,7 @@ export default function RouterSettings() {
             return;
         }
 
-        await persist(next, [action]);
+        if (!await persist(next, [action])) return;
         setInput("");
         setJustChanged(`${action}-${kind}`);
 
@@ -154,9 +163,9 @@ export default function RouterSettings() {
         }
     };
 
-    const handleRemove = (rule: FlatRule) => {
+    const handleRemove = async (rule: FlatRule) => {
         const next = removeRule(sets, rule.action, rule.kind, rule.value);
-        persist(next, [rule.action]);
+        if (!await persist(next, [rule.action])) return;
         toast.success(t("delete_success", "Deleted successfully"));
     };
 
@@ -189,7 +198,7 @@ export default function RouterSettings() {
             toast.error(t("rule_exists", "Rule already exists"));
             return;
         }
-        await persist(out.sets, [editOriginal.action, editAction]);
+        if (!await persist(out.sets, [editOriginal.action, editAction])) return;
         setJustChanged(`${editAction}-${editKind}`);
         toast.success(
             out.conflictAction
@@ -251,7 +260,7 @@ export default function RouterSettings() {
                             rule={rule}
                             fresh={justChanged === `${rule.action}-${rule.kind}`}
                             onEdit={() => openEdit(rule)}
-                            onRemove={() => handleRemove(rule)}
+                            onRemove={() => void handleRemove(rule)}
                         />
                     ))}
                     {search.trim().length > 0 && visibleRules.length === 0 && (

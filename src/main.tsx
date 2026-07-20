@@ -12,9 +12,15 @@ import WindowManger from "./window-manger";
 const appWindow = getCurrentWindow();
 
 if (appWindow.label === "main") {
-  setupTrayIcon();
-  setupStatusListener();
-  setupTauriLogListener();
+  void setupTrayIcon().catch((error) => {
+    console.error("Failed to initialize tray icon:", error);
+  });
+  void setupStatusListener().catch((error) => {
+    console.error("Failed to initialize engine status listener:", error);
+  });
+  void setupTauriLogListener().catch((error) => {
+    console.error("Failed to initialize native log listener:", error);
+  });
   scheduleGitHubReleaseUpdateCheck();
 }
 

@@ -15,13 +15,18 @@ export function useEngineStateRoot(): EngineState {
             // Register listener FIRST to avoid missing events emitted
             // between the invoke response and listener registration.
             try {
-                unlisten = await listen<EngineState>(ENGINE_STATE_EVENT, (e) => {
+                const dispose = await listen<EngineState>(ENGINE_STATE_EVENT, (e) => {
                     const next = e.payload;
                     if (!next || typeof next.epoch !== 'number') return;
                     if (next.epoch <= lastEpoch) return;
                     lastEpoch = next.epoch;
                     setState(next);
                 });
+                if (cancelled) {
+                    dispose();
+                    return;
+                }
+                unlisten = dispose;
             } catch (e) {
                 console.error('[engine-state] listen failed:', e);
             }

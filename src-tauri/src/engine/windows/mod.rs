@@ -198,6 +198,7 @@ impl EngineManager for WindowsEngine {
                     mgr.mode = Some(Arc::new(mode));
                     mgr.config_path = Some(Arc::new(config_path));
                     mgr.child = Some(child);
+                    mgr.session_epoch = Some(start_epoch);
                     mgr.is_stopping = false;
                 }
                 if should_set_system_proxy {
@@ -220,6 +221,7 @@ impl EngineManager for WindowsEngine {
                     mgr.mode = Some(Arc::clone(&mode_arc));
                     mgr.config_path = Some(Arc::new(config_path));
                     mgr.child = None; // managed by the SCM service
+                    mgr.session_epoch = Some(start_epoch);
                     mgr.is_stopping = false;
                 }
                 // sing-box runs inside the service — no child rx to monitor.

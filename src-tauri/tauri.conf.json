@@ -49,11 +49,6 @@
           "nekopilot"
         ]
       }
-    },
-    "sql": {
-      "preload": [
-        "sqlite:data.db"
-      ]
     }
   }
 }

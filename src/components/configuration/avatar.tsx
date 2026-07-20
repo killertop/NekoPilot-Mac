@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ExclamationCircleFill, GlobeAsiaAustralia } from "react-bootstrap-icons";
+import { externalFaviconUrl } from "../../utils/external-url";
 
 type AvatarProps = {
     url: string;
@@ -17,11 +18,10 @@ type AvatarProps = {
 const faviconStatus = new Map<string, 'ok' | 'fail'>();
 
 // 36px rounded-square app-icon tile.
-// No hover ring — the row itself provides hit feedback. Favicon from HTTPS
+// No hover ring — the row itself provides hit feedback. Favicon from HTTP(S)
 // official_website, globe fallback, red warning tile for over-quota state.
 export default function Avatar({ url, danger }: AvatarProps) {
-    const isHttpsUrl = url && url.startsWith("https");
-    const faviconUrl = isHttpsUrl ? `${url}/favicon.ico` : null;
+    const faviconUrl = externalFaviconUrl(url);
 
     // Seed local state from the module cache so a known-failed URL skips
     // the <img> entirely on re-mount (no flash), and a known-good URL

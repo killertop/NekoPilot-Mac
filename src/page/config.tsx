@@ -12,6 +12,9 @@ import {
     GET_SUBSCRIPTIONS_LIST_SWR_KEY,
 } from "../types/definition";
 import { t } from "../utils/helper";
+import { mapSettledWithConcurrency } from "../utils/async-pool";
+
+const SUBSCRIPTION_REFRESH_CONCURRENCY = 3;
 
 
 export default function Configuration() {
@@ -42,8 +45,10 @@ function ConfigurationBody({
         const remoteSubscriptions = (data ?? []).filter(
             (item) => !isLocalConfiguration(item),
         );
-        const results = await Promise.allSettled(
-            remoteSubscriptions.map((item) => refreshSubscription(item.identifier)),
+        const results = await mapSettledWithConcurrency(
+            remoteSubscriptions,
+            SUBSCRIPTION_REFRESH_CONCURRENCY,
+            (item) => refreshSubscription(item.identifier),
         );
         if (results.some((result) => result.status === "rejected")) {
             toast.error(t("update_subscription_failed"));

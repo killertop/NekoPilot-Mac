@@ -9,6 +9,7 @@ use crate::utils::show_dashboard;
 pub fn app_setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(crate::app::state::AppData::new());
     app.manage(crate::engine::state_machine::EngineStateCell::new());
+    secure_app_config_directory(app.handle())?;
     stop_orphan_tun_service_on_startup();
 
     // Remove cache files from pre-v2 releases. The v2 cache is created lazily by
@@ -80,6 +81,22 @@ pub fn app_setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
+    Ok(())
+}
+
+fn secure_app_config_directory(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    let directory = app.path().app_config_dir()?;
+    secure_private_directory(&directory)?;
+    Ok(())
+}
+
+fn secure_private_directory(directory: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(directory)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))?;
+    }
     Ok(())
 }
 
@@ -283,6 +300,16 @@ fn schedule_engine_restart(
             log::info!("[{ctx}] epoch changed, aborting engine restart");
             return;
         }
+        let engine_state = handle
+            .state::<crate::engine::state_machine::EngineStateCell>()
+            .snapshot();
+        if !matches!(
+            engine_state,
+            crate::engine::state_machine::EngineState::Running { .. }
+        ) {
+            return;
+        }
+        let expected_engine_epoch = engine_state.epoch();
         let Some((mode, path)) = crate::core::get_running_config() else {
             return;
         };
@@ -297,12 +324,10 @@ fn schedule_engine_restart(
             return;
         }
         log::info!("[{ctx}] restarting engine (mode: {:?})", mode);
-        if let Err(e) = crate::core::stop(handle.clone()).await {
-            log::error!("[{ctx}] stop engine failed: {}", e);
-        } else if let Err(e) = crate::core::start(handle, path, mode).await {
-            log::error!("[{ctx}] restart engine failed: {}", e);
-        } else {
-            log::info!("[{ctx}] engine restarted");
+        match crate::core::restart_if_running(handle, path, mode, expected_engine_epoch).await {
+            Ok(true) => log::info!("[{ctx}] engine restarted"),
+            Ok(false) => log::info!("[{ctx}] restart skipped because engine session changed"),
+            Err(e) => log::error!("[{ctx}] engine restart failed: {}", e),
         }
     });
 }
@@ -472,6 +497,23 @@ fn handle_will_power_off() {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    #[cfg(unix)]
+    #[test]
+    fn app_config_directory_is_private_to_the_current_user() {
+        let root = tempfile::tempdir().expect("temporary directory");
+        let directory = root.path().join("config");
+        super::secure_private_directory(&directory).expect("secure directory");
+        let mode = std::fs::metadata(directory)
+            .expect("directory metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700);
+    }
+
     use super::extract_deep_link_data;
     use url::Url;
 

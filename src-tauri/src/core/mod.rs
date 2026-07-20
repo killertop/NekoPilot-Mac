@@ -5,8 +5,8 @@ pub use self::log::cleanup_old_onebox_logs;
 
 use lazy_static::lazy_static;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
 use crate::app::state::AppData;
@@ -35,19 +35,6 @@ pub(crate) fn next_action_token() -> u64 {
     COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Wall-clock of the previous `reload_config` entry. The frontend
-/// (`vpnServiceManager.reload`) does NOT serialize calls, so two
-/// quickly-successive config edits dispatch two `pkill -HUP` without
-/// any interlock. A short delta here flags that situation.
-fn note_reload_entry() -> Option<Duration> {
-    static LAST: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
-    let slot = LAST.get_or_init(|| Mutex::new(None));
-    let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
-    let elapsed = guard.map(|t| t.elapsed());
-    *guard = Some(Instant::now());
-    elapsed
-}
-
 /// NekoPilot's default HTTP/SOCKS mixed inbound. This deliberately avoids
 /// common proxy ports such as 7890 and 1080 to reduce collisions with other
 /// proxy clients and local development services.
@@ -57,27 +44,6 @@ pub(crate) const DEFAULT_MIXED_PROXY_PORT: u16 = 16789;
 /// explicitly provide one.  Keep it distinct from OneBox's long-standing
 /// 9191 default so both clients can run on the same Mac.
 pub(crate) const CLASH_API_PORT: u16 = 19191;
-const NATIVE_RELOAD_DEBOUNCE: Duration = Duration::from_millis(250);
-
-#[derive(Default)]
-struct ReloadGate {
-    last_dispatched_at: Option<Instant>,
-}
-
-impl ReloadGate {
-    fn claim(&mut self) -> bool {
-        let now = Instant::now();
-        let should_dispatch = self
-            .last_dispatched_at
-            .map(|last| now.duration_since(last) >= NATIVE_RELOAD_DEBOUNCE)
-            .unwrap_or(true);
-        if should_dispatch {
-            self.last_dispatched_at = Some(now);
-        }
-        should_dispatch
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct EnginePorts {
     pub(crate) mixed_proxy: u16,
@@ -208,6 +174,10 @@ pub(crate) struct ProcessManager {
     pub(crate) child: Option<CommandChild>,
     pub(crate) mode: Option<Arc<ProxyMode>>,
     pub(crate) config_path: Option<Arc<String>>,
+    /// Stable identity of the currently owned engine process. Unlike the
+    /// state-machine epoch, this value does not change when Starting becomes
+    /// Running or Running becomes Stopping.
+    pub(crate) session_epoch: Option<u64>,
     pub(crate) is_stopping: bool,
 }
 
@@ -225,6 +195,7 @@ impl ProcessManager {
         self.child = None;
         self.mode = None;
         self.config_path = None;
+        self.session_epoch = None;
         self.is_stopping = false;
     }
 }
@@ -235,13 +206,13 @@ lazy_static! {
             child: None,
             mode: None,
             config_path: None,
+            session_epoch: None,
             is_stopping: false,
     }));
-    /// Last-line protection for every caller of the Tauri reload command.
-    /// The renderer already batches configuration edits, but native wake and
-    /// tray events can bypass that path. Coalescing here prevents repeated
-    /// SIGHUPs from tearing down the mixed listener in rapid succession.
-    static ref RELOAD_GATE: tokio::sync::Mutex<ReloadGate> = tokio::sync::Mutex::new(ReloadGate::default());
+    /// Native authority for every engine mutation. Frontend queues cannot
+    /// protect lifecycle calls coming from the tray, wake listener, or another
+    /// WebView, so start/stop/reload and automatic restart serialize here.
+    static ref LIFECYCLE_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::new(());
 }
 
 // ── Start-time port guard ─────────────────────────────────────────────
@@ -278,6 +249,11 @@ async fn ensure_port_free_for_spawn(action: u64, port: u16) -> Result<(), String
 
 #[tauri::command]
 pub async fn start(app: tauri::AppHandle, path: String, mode: ProxyMode) -> Result<(), String> {
+    let _lifecycle_guard = LIFECYCLE_GATE.lock().await;
+    start_inner(app, path, mode).await
+}
+
+async fn start_inner(app: tauri::AppHandle, path: String, mode: ProxyMode) -> Result<(), String> {
     let action = next_action_token();
     let (pm_pid, pm_alive, pm_mode) = pm_snapshot();
     let ports = engine_ports_from_config_path(&path);
@@ -290,23 +266,27 @@ pub async fn start(app: tauri::AppHandle, path: String, mode: ProxyMode) -> Resu
         "[start] action={action} mode={:?} state={} pm_child_pid={:?} pm_child_alive={:?} pm_mode={:?} :{mixed_port}_listener={} :{clash_api_port}_listener={}",
         mode, cur_state_kind, pm_pid, pm_alive, pm_mode, port_listening, clash_listening
     );
+    // A child owned by this process can still be alive before its listeners
+    // are ready. Reject it before the port probes so a second start can never
+    // overwrite the only handle to the first child.
+    if matches!(pm_alive, Some(true)) {
+        ::log::warn!(
+            "[start] action={action} rejected: owned child pid={:?} is already alive",
+            pm_pid
+        );
+        return Err("engine_already_active".to_owned());
+    }
+
     // A listener on either required port means sing-box would hit EADDRINUSE.
     // Refuse safely; do not kill a process whose ownership cannot be proved.
     for port in ports_to_free(mixed_port, clash_api_port) {
         ensure_port_free_for_spawn(action, port).await?;
     }
-    if matches!(pm_alive, Some(true)) {
-        ::log::warn!(
-            "[start] action={action} pm_child_pid={:?} still alive on entry — spawning on top of a live process",
-            pm_pid
-        );
-    }
-
     {
         let cur = app.state::<EngineStateCell>().snapshot();
         if !matches!(cur, EngineState::Idle { .. } | EngineState::Failed { .. }) {
             ::log::warn!(
-                "[start] action={action} engine in {} state, forcing MarkIdle before restart",
+                "[start] action={action} engine in {} state without a live child, recovering to Idle",
                 cur.kind()
             );
             let _ = transition(&app, Intent::MarkIdle);
@@ -338,8 +318,21 @@ pub async fn start(app: tauri::AppHandle, path: String, mode: ProxyMode) -> Resu
         // Start can fail partway through (e.g. proxy set fails after the
         // child has already spawned). Ask the platform to tear down whatever
         // it did set up so we don't leak a half-started engine.
-        let _ = PlatformEngine::stop(&app).await;
-        ProcessManager::acquire().reset();
+        let cleanup_error = PlatformEngine::stop(&app).await.err();
+        let (_, cleanup_alive, _) = pm_snapshot();
+        if !matches!(cleanup_alive, Some(true)) {
+            ProcessManager::acquire().reset();
+        } else {
+            ::log::error!(
+                "[start] action={action} cleanup left the spawned child alive; retaining its handle"
+            );
+        }
+        if let Some(cleanup_error) = cleanup_error {
+            ::log::error!(
+                "[start] action={action} cleanup after failed start also failed: {cleanup_error}"
+            );
+            crate::engine::cleanup_on_shutdown();
+        }
         let _ = transition(&app, Intent::Fail { reason: e.clone() });
         return Err(e);
     }
@@ -359,8 +352,14 @@ pub async fn start(app: tauri::AppHandle, path: String, mode: ProxyMode) -> Resu
 
 #[tauri::command]
 pub async fn stop(app: tauri::AppHandle) -> Result<(), String> {
+    let _lifecycle_guard = LIFECYCLE_GATE.lock().await;
+    stop_inner(app).await
+}
+
+async fn stop_inner(app: tauri::AppHandle) -> Result<(), String> {
     let action = next_action_token();
     let (pm_pid, pm_alive, pm_mode) = pm_snapshot();
+    let mixed_port = mixed_proxy_port(&app);
     let is_stopping_before = ProcessManager::acquire().is_stopping;
     let cur_state_kind = app.state::<EngineStateCell>().snapshot().kind();
     ::log::info!(
@@ -371,11 +370,8 @@ pub async fn stop(app: tauri::AppHandle) -> Result<(), String> {
     {
         let cur = app.state::<EngineStateCell>().snapshot();
         match cur {
-            EngineState::Running { .. } => {
+            EngineState::Running { .. } | EngineState::Starting { .. } => {
                 let _ = transition(&app, Intent::Stop);
-            }
-            EngineState::Starting { .. } => {
-                let _ = transition(&app, Intent::MarkIdle);
             }
             _ => {}
         }
@@ -385,7 +381,7 @@ pub async fn stop(app: tauri::AppHandle) -> Result<(), String> {
     // applicable, and transitions whatever per-mode state it owns. Actual
     // process exit is observed asynchronously by the process monitor which
     // then calls PlatformEngine::on_process_terminated for DNS restore.
-    let platform_stop_error = PlatformEngine::stop(&app).await.err();
+    let mut platform_stop_error = PlatformEngine::stop(&app).await.err();
     if let Some(e) = platform_stop_error.as_ref() {
         ::log::error!(
             "[stop] action={action} PlatformEngine::stop returned error: {}",
@@ -397,50 +393,93 @@ pub async fn stop(app: tauri::AppHandle) -> Result<(), String> {
         crate::engine::cleanup_on_shutdown();
     }
 
-    // Snapshot state once, after PlatformEngine::stop returns, to guard
-    // the two side-effects below. On all platforms the monitor fires
-    // MarkIdle (Stopping→Idle) well within the 500 ms kill-sleep, so by
-    // the time we reach this point a concurrent start() may have already
-    // advanced the state machine to Starting or Running. Acting on a
-    // superseded state orphans the new sing-box process: it keeps holding
-    // the mixed port while the app loses its only handle to kill it.
-    let post_stop_state = app.state::<EngineStateCell>().snapshot();
-
-    // Windows/Linux: MarkIdle is not driven by the monitor path, so we
-    // push it explicitly — but only when still in Stopping.
-    // macOS: monitor handles the Stopping→Idle transition; skip.
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
-    if matches!(post_stop_state, EngineState::Stopping { .. }) {
-        let _ = transition(&app, Intent::MarkIdle);
-    }
-
-    // All platforms: skip reset if a concurrent start() already seeded
-    // ProcessManager with a new pid. Resetting would erase that handle
-    // and leave the child untrackable and unkillable.
-    if !matches!(
-        post_stop_state,
-        EngineState::Starting { .. } | EngineState::Running { .. }
-    ) {
-        ProcessManager::acquire().reset();
-    }
-
-    // Post-stop port probe: `PlatformEngine::stop` only SIGTERMs + sleeps
-    // 500ms, it does NOT wait for the process to actually exit. If this
-    // line reports the mixed-port listener as true, the next `start` call is about
-    // to collide with a still-alive sing-box.
-    let mixed_port = mixed_proxy_port(&app);
-    // `PlatformEngine::stop` only SIGTERMs + sleeps 500ms; the listener socket
-    // can take a little longer to actually release after the child exits.
-    // Re-probe over a short grace window so a normal slow release reads as
-    // "released" instead of a false STILL-LISTENING warning. Only a port still
-    // bound after the grace is a genuine survived-SIGTERM signal worth warning.
+    // Wait briefly for the owned process and listener to disappear. macOS
+    // sends SIGTERM without consuming the CommandChild handle, so a process
+    // that ignores the graceful signal can be identified and terminated with
+    // SIGKILL without guessing which process owns the port.
     let mut port_listening = probe_port_listening(mixed_port);
+    #[cfg(target_os = "macos")]
+    let mut owned_pid_alive = pm_pid.is_some_and(pid_is_alive);
     let mut waited_ms = 0u64;
-    while port_listening && waited_ms < 500 {
+    while (port_listening || {
+        #[cfg(target_os = "macos")]
+        {
+            owned_pid_alive
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    }) && waited_ms < 500
+    {
         tokio::time::sleep(Duration::from_millis(100)).await;
         waited_ms += 100;
         port_listening = probe_port_listening(mixed_port);
+        #[cfg(target_os = "macos")]
+        {
+            owned_pid_alive = pm_pid.is_some_and(pid_is_alive);
+        }
     }
+
+    #[cfg(target_os = "macos")]
+    if owned_pid_alive {
+        let pid = pm_pid.expect("checked above");
+        ::log::warn!("[stop] action={action} pid={pid} ignored SIGTERM; escalating to SIGKILL");
+        if unsafe { libc::kill(pid as i32, libc::SIGKILL) } == 0
+            || std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+        {
+            while (port_listening || owned_pid_alive) && waited_ms < 1_500 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                waited_ms += 100;
+                port_listening = probe_port_listening(mixed_port);
+                owned_pid_alive = pid_is_alive(pid);
+            }
+        } else {
+            let error = std::io::Error::last_os_error();
+            ::log::error!("[stop] action={action} failed to SIGKILL pid={pid}: {error}");
+            let force_error = format!("failed to force-stop sing-box: {error}");
+            platform_stop_error = Some(match platform_stop_error.take() {
+                Some(previous) => format!("{previous}; {force_error}"),
+                None => force_error,
+            });
+        }
+    }
+
+    let mut post_stop_state = app.state::<EngineStateCell>().snapshot();
+    let (_, child_alive_after_stop, mode_after_stop) = pm_snapshot();
+    let child_survived = matches!(child_alive_after_stop, Some(true));
+    if platform_stop_error.is_some() && child_survived {
+        let mode_label = match mode_after_stop {
+            Some(ProxyMode::TunProxy) => "tun",
+            _ => "mixed",
+        };
+        if matches!(post_stop_state, EngineState::Stopping { .. }) {
+            let _ = transition(
+                &app,
+                Intent::RollbackToRunning {
+                    mode: mode_label.to_owned(),
+                },
+            );
+        }
+        ::log::error!(
+            "[stop] action={action} child is still alive after stop failure; preserving process ownership"
+        );
+    } else {
+        // Stop owns the terminal state transition. The asynchronous monitor
+        // may arrive before or after this point; its stable session guard
+        // makes both orders safe and avoids leaving macOS stuck in Stopping.
+        if matches!(post_stop_state, EngineState::Stopping { .. }) {
+            let _ = transition(&app, Intent::MarkIdle);
+            post_stop_state = app.state::<EngineStateCell>().snapshot();
+        }
+        if !matches!(
+            post_stop_state,
+            EngineState::Starting { .. } | EngineState::Running { .. }
+        ) {
+            ProcessManager::acquire().reset();
+        }
+    }
+
     if port_listening {
         ::log::warn!(
             "[stop] action={action} returning with :{mixed_port} STILL LISTENING after {waited_ms}ms — pm_child_pid={:?} may have survived SIGTERM",
@@ -457,6 +496,32 @@ pub async fn stop(app: tauri::AppHandle) -> Result<(), String> {
     } else {
         Ok(())
     }
+}
+
+/// Restart only if the engine session observed by the lifecycle listener is
+/// still current. The check, stop and start share one native lock so a manual
+/// user stop can never be followed by a stale wake task that turns the proxy
+/// back on again.
+pub(crate) async fn restart_if_running(
+    app: tauri::AppHandle,
+    path: String,
+    mode: ProxyMode,
+    expected_epoch: u64,
+) -> Result<bool, String> {
+    let _lifecycle_guard = LIFECYCLE_GATE.lock().await;
+    let current = app.state::<EngineStateCell>().snapshot();
+    if !matches!(current, EngineState::Running { .. }) || current.epoch() != expected_epoch {
+        ::log::info!(
+            "[restart] skipped stale request expected_epoch={} current_state={} current_epoch={}",
+            expected_epoch,
+            current.kind(),
+            current.epoch()
+        );
+        return Ok(false);
+    }
+    stop_inner(app.clone()).await?;
+    start_inner(app, path, mode).await?;
+    Ok(true)
 }
 
 #[tauri::command]
@@ -491,35 +556,15 @@ pub fn get_running_config() -> Option<(ProxyMode, String)> {
 
 #[tauri::command]
 pub async fn reload_config(app: tauri::AppHandle) -> Result<String, String> {
+    let _lifecycle_guard = LIFECYCLE_GATE.lock().await;
     let action = next_action_token();
-    let mut gate = RELOAD_GATE.lock().await;
-    if !gate.claim() {
-        ::log::info!(
-            "[reload] action={action} coalesced: a native reload was dispatched less than {}ms ago",
-            NATIVE_RELOAD_DEBOUNCE.as_millis()
-        );
-        return Ok("Reload coalesced".into());
-    }
-    drop(gate);
-    let since_last = note_reload_entry();
-    let since_last_str = since_last
-        .map(|d| format!("{}ms", d.as_millis()))
-        .unwrap_or_else(|| "first".into());
     let (pm_pid, pm_alive, pm_mode) = pm_snapshot();
     let mixed_port = mixed_proxy_port(&app);
     let port_listening = probe_port_listening(mixed_port);
     ::log::info!(
-        "[reload] action={action} entry since_last={} pm_child_pid={:?} pm_child_alive={:?} pm_mode={:?} :{mixed_port}_listener={}",
-        since_last_str, pm_pid, pm_alive, pm_mode, port_listening
+        "[reload] action={action} entry pm_child_pid={:?} pm_child_alive={:?} pm_mode={:?} :{mixed_port}_listener={}",
+        pm_pid, pm_alive, pm_mode, port_listening
     );
-    if let Some(delta) = since_last {
-        if delta.as_millis() < 2000 {
-            ::log::warn!(
-                "[reload] action={action} back-to-back: only {}ms since last dispatched reload",
-                delta.as_millis()
-            );
-        }
-    }
     if !port_listening {
         ::log::warn!(
             "[reload] action={action} :{mixed_port} NOT listening on entry — sing-box may already be down; SIGHUP will no-op"
@@ -558,6 +603,12 @@ pub async fn reload_config(app: tauri::AppHandle) -> Result<String, String> {
                 ::log::warn!(
                     "[reload] action={action} :{mixed_port} NOT listening 500ms after SIGHUP — sing-box rebind FAILED or process died"
                 );
+                if let Err(error) = crate::engine::clear_system_proxy(&app).await {
+                    ::log::error!(
+                        "[reload] action={action} failed to clear proxy after rebind failure: {error}"
+                    );
+                }
+                return Err("Config reload failed: mixed proxy listener did not recover".to_owned());
             } else {
                 ::log::info!(
                     "[reload] action={action} :{mixed_port} listener up 500ms after SIGHUP"
@@ -587,10 +638,7 @@ pub async fn reload_config(app: tauri::AppHandle) -> Result<String, String> {
 
 #[cfg(test)]
 mod port_guard_tests {
-    use super::{
-        engine_ports_from_config_path, ports_to_free, EnginePorts, ReloadGate, CLASH_API_PORT,
-        NATIVE_RELOAD_DEBOUNCE,
-    };
+    use super::{engine_ports_from_config_path, ports_to_free, EnginePorts, CLASH_API_PORT};
     use std::fs;
     use tempfile::NamedTempFile;
 
@@ -629,16 +677,6 @@ mod port_guard_tests {
                 clash_api: 9291
             },
         );
-    }
-
-    #[test]
-    fn reload_gate_coalesces_bursts_but_allows_a_later_reload() {
-        let mut gate = ReloadGate::default();
-        assert!(gate.claim());
-        assert!(!gate.claim());
-
-        gate.last_dispatched_at = Some(std::time::Instant::now() - NATIVE_RELOAD_DEBOUNCE);
-        assert!(gate.claim());
     }
 }
 

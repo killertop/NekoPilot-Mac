@@ -71,7 +71,12 @@ pub(crate) async fn set_system_proxy(app: &AppHandle) -> anyhow::Result<()> {
             format!("Start set system proxy: {}:{}", PROXY_HOST, proxy_port),
         ),
     );
-    platform_set_system_proxy(proxy_port, DEFAULT_BYPASS)?;
+    // networksetup is synchronous and can take noticeable time while macOS is
+    // rebuilding network services after wake. Keep it off Tokio's async
+    // workers so state events, tray updates and cancellation remain responsive.
+    tokio::task::spawn_blocking(move || platform_set_system_proxy(proxy_port, DEFAULT_BYPASS))
+        .await
+        .map_err(|error| anyhow::anyhow!("join system proxy setup: {error}"))??;
     #[cfg(target_os = "macos")]
     {
         *managed_proxy_port()
@@ -87,7 +92,10 @@ pub(crate) async fn set_system_proxy(app: &AppHandle) -> anyhow::Result<()> {
 /// on other platforms it flips the active service's `enable` to false.
 pub(crate) async fn clear_system_proxy(app: &AppHandle) -> anyhow::Result<()> {
     let _ = app.emit(EVENT_TAURI_LOG, (0, "Start unset system proxy"));
-    if let Err(e) = platform_clear_system_proxy() {
+    let clear_result = tokio::task::spawn_blocking(platform_clear_system_proxy)
+        .await
+        .map_err(|error| anyhow::anyhow!("join system proxy cleanup: {error}"))?;
+    if let Err(e) = clear_result {
         let msg = format!("clear system proxy failed: {}", e);
         let _ = app.emit(EVENT_TAURI_LOG, (1, msg.clone()));
         return Err(anyhow::anyhow!(msg));

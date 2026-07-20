@@ -44,7 +44,6 @@ export default defineConfig(async () => ({
           if (id.includes("framer-motion")) return "motion-vendor";
           if (id.includes("@tauri-apps")) return "tauri-vendor";
           if (id.includes("react-bootstrap-icons")) return "icons-vendor";
-          if (id.includes("jsonc")) return "json-vendor";
         },
       },
     },

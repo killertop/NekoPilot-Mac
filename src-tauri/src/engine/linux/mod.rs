@@ -274,6 +274,7 @@ impl EngineManager for LinuxEngine {
                     mgr.mode = Some(Arc::new(mode));
                     mgr.config_path = Some(Arc::new(config_path));
                     mgr.child = Some(child);
+                    mgr.session_epoch = Some(start_epoch);
                     mgr.is_stopping = false;
                 }
                 if should_set_system_proxy {
@@ -327,6 +328,7 @@ impl EngineManager for LinuxEngine {
                     mgr.mode = Some(Arc::new(mode));
                     mgr.config_path = Some(Arc::new(config_path));
                     mgr.child = Some(child);
+                    mgr.session_epoch = Some(start_epoch);
                     mgr.is_stopping = false;
                 }
                 let _ = clear_system_proxy(app).await;

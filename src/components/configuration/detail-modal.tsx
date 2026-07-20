@@ -16,6 +16,7 @@ import { mutate } from "swr";
 import { deleteSubscription, getSubscriptionConfig, renameSubscription } from "../../action/db";
 import { GET_SUBSCRIPTIONS_LIST_SWR_KEY, Subscription } from "../../types/definition";
 import { t } from "../../utils/helper";
+import { safeExternalHttpUrl } from "../../utils/external-url";
 import { Portal, useBodyScrollLock } from "../common/portal";
 import Avatar from "./avatar";
 import { extractLocalNodeInfo, type LocalNodeInfo } from "./local-node-info";
@@ -136,7 +137,8 @@ export function SubscriptionDetailModal({
             : t("security_none")
         : undefined;
 
-    const hasOfficialSite = item.official_website && item.official_website.startsWith('http');
+    const officialWebsite = safeExternalHttpUrl(item.official_website);
+    const hasOfficialSite = Boolean(officialWebsite);
 
     const nameChanged = nameDraft.trim() && nameDraft.trim() !== item.name;
 
@@ -352,8 +354,11 @@ export function SubscriptionDetailModal({
                                                             onClick={(e) => {
                                                                 e.preventDefault();
                                                                 import('@tauri-apps/plugin-opener').then(
-                                                                    ({ openUrl }) =>
-                                                                        openUrl(item.official_website),
+                                                                    ({ openUrl }) => {
+                                                                        if (officialWebsite) {
+                                                                            return openUrl(officialWebsite);
+                                                                        }
+                                                                    },
                                                                 );
                                                             }}
                                                             className="mt-0.5 inline-flex items-center gap-1 text-[11px]"
@@ -361,10 +366,9 @@ export function SubscriptionDetailModal({
                                                         >
                                                             <Globe size={9} />
                                                             <span className="truncate">
-                                                                {(() => {
-                                                                    try { return new URL(item.official_website).host; }
-                                                                    catch { return item.official_website; }
-                                                                })()}
+                                                                {officialWebsite
+                                                                    ? new URL(officialWebsite).host
+                                                                    : ""}
                                                             </span>
                                                         </a>
                                                     )}

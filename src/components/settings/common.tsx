@@ -15,6 +15,7 @@ interface ToggleSettingProps {
     subTitle?: string;
     isEnabled: boolean;
     onToggle: () => void;
+    disabled?: boolean;
 }
 
 // iOS Settings row. 52px minimum height (Apple HIG minimum touch target).
@@ -83,9 +84,10 @@ export function ToggleSetting({
     subTitle,
     isEnabled,
     onToggle,
+    disabled = false,
 }: ToggleSettingProps) {
     return (
-        <label className="w-full flex items-center gap-3 px-4 py-3 cursor-pointer">
+        <label className={`w-full flex items-center gap-3 px-4 py-3 ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
             <div className="size-7 flex items-center justify-center shrink-0">
                 {icon}
             </div>
@@ -112,6 +114,7 @@ export function ToggleSetting({
                 className="onebox-toggle"
                 checked={isEnabled}
                 onChange={onToggle}
+                disabled={disabled}
             />
         </label>
     );

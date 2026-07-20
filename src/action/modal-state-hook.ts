@@ -8,7 +8,7 @@ export type ValidationErrors = {
     url?: string;
 };
 
-const acceptedConfigLink = /^(https?|file|vless|trojan|vmess|ss|anytls):\/\//i;
+const acceptedConfigLink = /^(https?|vless|trojan|vmess|ss|anytls):\/\//i;
 
 const subscriptionSchema = z.object({
     name: z.string().optional(),

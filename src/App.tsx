@@ -10,7 +10,6 @@ import { Toaster } from 'sonner';
 
 import React from 'react';
 import useSWR from "swr";
-import { deduplicateSubscriptionsByUrl } from "./action/db";
 import { primeAllConfigTemplateCaches, purgeLegacyTemplateCache } from "./hooks/useSwr";
 import { EngineStateContext, useEngineStateRoot } from "./hooks/useEngineState";
 import { useAutoNodeSelection } from "./hooks/useAutoNodeSelection";
@@ -179,7 +178,6 @@ function App() {
 
   useEffect(() => {
     void cleanupRemovedDeveloperSettings();
-    deduplicateSubscriptionsByUrl();
     const refreshSystemLanguage = () => {
       void initLanguage().then((nextLanguage) => {
         setLanguage(nextLanguage);

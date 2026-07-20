@@ -5,7 +5,10 @@ use crate::{
 
 use tauri::AppHandle;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri_plugin_shell::ShellExt;
+
+static QUIT_STARTED: AtomicBool = AtomicBool::new(false);
 
 #[tauri::command]
 pub fn get_tray_icon(app: AppHandle) -> Result<Vec<u8>, String> {
@@ -64,7 +67,13 @@ async fn quit(app: AppHandle) {
 }
 
 pub fn sync_quit(app: AppHandle) {
-    // 同步退出应用
+    // CloseRequested, Destroyed and the tray menu can converge on the same
+    // shutdown. Only the first caller may stop the child and request exit;
+    // later callbacks are a consequence of that same exit, not a new quit.
+    if QUIT_STARTED.swap(true, Ordering::AcqRel) {
+        log::info!("Application quit already in progress; ignoring duplicate request");
+        return;
+    }
     tauri::async_runtime::block_on(quit(app));
 }
 

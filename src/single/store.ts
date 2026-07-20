@@ -58,7 +58,10 @@ export async function getStoreValue(
 
   // zh: 如果 defaultValue 存在且 value 为 undefined、null 或空字符串，则返回 val
   // en: If defaultValue exists and value is undefined, null, or an empty string, return val
-  if (defaultValue && (value === undefined || value === null || value === "")) {
+  if (
+    defaultValue !== undefined &&
+    (value === undefined || value === null || value === "")
+  ) {
     console.debug(`Store key "${key}" is empty, returning default value.`);
     return defaultValue;
   }

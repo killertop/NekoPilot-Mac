@@ -61,7 +61,6 @@ pub fn run() {
             commands::subscription::get_subscription_config,
             commands::subscription::get_subscription_url,
             commands::subscription::refresh_subscription,
-            commands::subscription::deduplicate_subscriptions,
             commands::settings::get_setting,
             commands::settings::set_setting,
             commands::settings::delete_setting,

@@ -2,11 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import * as path from "@tauri-apps/api/path";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { arch, locale, type, version } from "@tauri-apps/plugin-os";
-import {
-  OsInfo,
-  SING_BOX_VERSION,
-  SSI_STORE_KEY,
-} from "../types/definition";
+import { OsInfo, SING_BOX_VERSION, SSI_STORE_KEY } from "../types/definition";
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { message } from "@tauri-apps/plugin-dialog";
@@ -21,6 +17,7 @@ import {
   getUserAgent,
 } from "../single/store";
 import { createLifecycleQueue } from "./lifecycle-queue";
+import { runConfigSync } from "./config-sync";
 const appWindow = getCurrentWindow();
 const enLang = en as Record<string, string>;
 const zhLang = zh as Record<string, string>;
@@ -118,8 +115,8 @@ export async function getSingBoxConfigPath() {
 type vpnServiceManagerMode = "SystemProxy" | "ManualProxy";
 
 type SyncConfigProps = {
-  onError?: (error: any) => void;
-  onSuccess?: () => void;
+  onError?: (error: any) => void | Promise<void>;
+  onSuccess?: () => void | Promise<void>;
   onRequirePrivileged?: () => void;
 };
 
@@ -151,15 +148,18 @@ async function compileConfig(reloadIfRunning = false) {
 }
 
 async function syncConfig(props: SyncConfigProps) {
-  return lifecycleQueue.run(async () => {
-    try {
-      await compileConfig(false);
-      await props.onSuccess?.();
-    } catch (error: any) {
-      console.error("Failed to sync VPN config:", error);
-      await props.onError?.(error);
-    }
-  });
+  return lifecycleQueue.run(() =>
+    runConfigSync(
+      () => compileConfig(false),
+      {
+        onSuccess: props.onSuccess,
+        onError: async (error) => {
+          console.error("Failed to sync VPN config:", error);
+          await props.onError?.(error);
+        },
+      },
+    )
+  );
 }
 
 async function reloadEngine(delay: number) {

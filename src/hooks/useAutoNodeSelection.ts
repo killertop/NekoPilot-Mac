@@ -16,7 +16,6 @@ import {
 const INITIAL_TEST_DELAY_MS = 5_000;
 export const AUTO_SELECT_INTERVAL_MS = 10 * 60_000;
 const LONG_CONNECTION_AGE_MS = 60_000;
-const LONG_CONNECTION_RECHECK_MS = 30_000;
 
 export function automaticSelectionDelayMs(
   nowMs: number,
@@ -24,7 +23,6 @@ export function automaticSelectionDelayMs(
 ): number {
   return Math.max(INITIAL_TEST_DELAY_MS, deferUntilMs - nowMs);
 }
-
 type ConnectionRecord = {
   start?: unknown;
 };
@@ -71,10 +69,6 @@ async function fetchConnections(): Promise<ConnectionsPayload> {
   const response = await clashApiFetch("/connections");
   if (!response.ok) throw new Error(`connections_http_${response.status}`);
   return await response.json() as ConnectionsPayload;
-}
-
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 /**
@@ -146,29 +140,28 @@ export function useAutoNodeSelection(isRunning: boolean): void {
       timer = window.setTimeout(() => void runCycle(), delayMs);
     };
 
-    const waitUntilSafeAndSwitch = async (candidate: string) => {
-      while (!cancelled) {
-        const selector = await getExitGatewaySelector();
-        if (!selector.all.includes(candidate) || selector.now === candidate) return;
+    const switchIfSafe = async (candidate: string) => {
+      const selector = await getExitGatewaySelector();
+      if (!selector.all.includes(candidate) || selector.now === candidate) return;
 
-        let connections: ConnectionsPayload;
-        try {
-          connections = await fetchConnections();
-        } catch (error) {
-          // If connection state is unavailable, preserve existing traffic and
-          // defer the switch instead of guessing that it is safe.
-          console.warn("Automatic node switch deferred: connection state unavailable", error);
-          return;
-        }
-        if (!hasLongLivedConnection(connections)) {
-          await selectExitGatewayNode(candidate);
-          window.dispatchEvent(new Event(NODE_SELECTOR_REFRESH_EVENT));
-          console.info(`[auto-node] switched to ${candidate}`);
-          return;
-        }
-        console.info("[auto-node] waiting for long-lived connections to finish");
-        await wait(LONG_CONNECTION_RECHECK_MS);
+      let connections: ConnectionsPayload;
+      try {
+        connections = await fetchConnections();
+      } catch (error) {
+        // If connection state is unavailable, preserve existing traffic and
+        // defer the switch instead of guessing that it is safe.
+        console.warn("Automatic node switch deferred: connection state unavailable", error);
+        return;
       }
+      if (hasLongLivedConnection(connections)) {
+        // Do not keep a 30-second polling loop alive for an indefinitely long
+        // download or tunnel. The next normal ten-minute cycle will reassess.
+        console.info("[auto-node] switch deferred until the next cycle because a long-lived connection is active");
+        return;
+      }
+      await selectExitGatewayNode(candidate);
+      window.dispatchEvent(new Event(NODE_SELECTOR_REFRESH_EVENT));
+      console.info(`[auto-node] switched to ${candidate}`);
     };
 
     const runCycle = async () => {
@@ -181,7 +174,7 @@ export function useAutoNodeSelection(isRunning: boolean): void {
           });
           const fastest = pickFastestNode(delays);
           if (!cancelled && fastest && fastest.node !== selector.now) {
-            await waitUntilSafeAndSwitch(fastest.node);
+            await switchIfSafe(fastest.node);
           }
         }
       } catch (error) {
