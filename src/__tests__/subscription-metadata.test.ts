@@ -3,9 +3,15 @@ import { extractLocalNodeInfo } from "../components/configuration/local-node-inf
 import {
     hasTrafficQuota,
     isLocalConfiguration,
+    normalizeTimestampMs,
 } from "../components/configuration/subscription-metadata";
 
 describe("subscription metadata visibility", () => {
+    it("normalizes legacy second timestamps without changing milliseconds", () => {
+        expect(normalizeTimestampMs(1_700_000_000)).toBe(1_700_000_000_000);
+        expect(normalizeTimestampMs(1_700_000_000_123)).toBe(1_700_000_000_123);
+    });
+
     it("never treats a local node as a traffic quota", () => {
         const local = {
             source_type: "local_link" as const,

@@ -76,7 +76,7 @@ export function DeepLinkApplyProgressModal({
     ? (errorTitle || t("connect_failed", "Connection failed"))
     : done
     ? labelFor("done")
-    : t("dl_phase_title", "Applying configuration");
+    : t("dl_phase_title", "Applying config");
 
   return (
     <OperationProgressDialog
@@ -91,5 +91,3 @@ export function DeepLinkApplyProgressModal({
     />
   );
 }
-
-export default DeepLinkApplyProgressModal;

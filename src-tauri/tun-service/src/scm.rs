@@ -474,10 +474,18 @@ pub fn stop_service() -> Result<(), String> {
         Ok(h) => h,
         Err(_) => return Ok(()), // not installed or already gone
     };
-    let mut status = SERVICE_STATUS::default();
-    let _ = unsafe { ControlService(svc.0, SERVICE_CONTROL_STOP, &mut status) };
-    let _ = wait_until_stopped(&svc, 10_000);
-    Ok(())
+    let state = state_from_u32(query_status(&svc)?.dwCurrentState.0);
+    if matches!(state, QueriedState::Stopped) {
+        return Ok(());
+    }
+    if !matches!(state, QueriedState::StopPending) {
+        let mut status = SERVICE_STATUS::default();
+        unsafe {
+            ControlService(svc.0, SERVICE_CONTROL_STOP, &mut status)
+                .map_err(|error| format!("ControlService(STOP) failed: {error}"))?;
+        }
+    }
+    wait_until_stopped(&svc, 10_000)
 }
 
 // ============================== tests ================================

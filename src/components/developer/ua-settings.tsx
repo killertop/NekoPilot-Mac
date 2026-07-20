@@ -47,24 +47,40 @@ export default function UASettingsItem() {
   const [selectedUA, setSelectedUA] = useState<UAKey>("default");
   const [customUA, setCustomUA] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isStateLoading, setIsStateLoading] = useState(false);
   const uaOptions = userAgentOptions();
 
   useEffect(() => {
-    if (isOpen) loadUA();
+    if (!isOpen) return;
+    let cancelled = false;
+    setIsStateLoading(true);
+    void getUserAgent()
+      .then((ua) => {
+        if (cancelled) return;
+        const option = userAgentOptions().find((item) => item.value === ua);
+        if (option) {
+          setSelectedUA(option.key);
+        } else {
+          setSelectedUA("custom");
+          setCustomUA(ua);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.error("Failed to load User Agent setting", error);
+          toast.error(t("ua_load_failed", "Failed to load User Agent settings"));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsStateLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [isOpen]);
 
-  const loadUA = async () => {
-    const ua = await getUserAgent();
-    const option = uaOptions.find((opt) => opt.value === ua);
-    if (option) {
-      setSelectedUA(option.key);
-    } else {
-      setSelectedUA("custom");
-      setCustomUA(ua);
-    }
-  };
-
   const handleSave = async () => {
+    if (isLoading || isStateLoading) return;
     if (selectedUA === "custom" && !customUA.trim()) {
       toast.error(t("ua_cannot_empty", "User Agent cannot be empty"));
       return;
@@ -105,7 +121,9 @@ export default function UASettingsItem() {
         title={t("user_agent_settings", "User Agent Settings")}
         confirmLabel={t("save")}
         onConfirm={handleSave}
-        confirmLoading={isLoading}
+        confirmDisabled={isStateLoading ||
+          (selectedUA === "custom" && !customUA.trim())}
+        confirmLoading={isLoading || isStateLoading}
       >
         <div className="space-y-3">
           <RadioOptionList
@@ -113,6 +131,7 @@ export default function UASettingsItem() {
             onChange={setSelectedUA}
             options={radioOptions}
             ariaLabel={t("user_agent_settings", "User Agent Settings")}
+            disabled={isLoading || isStateLoading}
           />
           {selectedUA === "custom" && (
             <IOSTextField
@@ -123,6 +142,7 @@ export default function UASettingsItem() {
                 "custom_ua_placeholder",
                 "Enter custom User Agent",
               )}
+              disabled={isLoading || isStateLoading}
               monospace
             />
           )}

@@ -66,9 +66,7 @@ pub async fn get_lan_ip() -> Result<String, String> {
     }
     #[cfg(target_os = "macos")]
     {
-        let output = Command::new("bash")
-            .arg("-c")
-            .arg("ifconfig")
+        let output = Command::new("ifconfig")
             .output()
             .await
             .map_err(|e| e.to_string())?;

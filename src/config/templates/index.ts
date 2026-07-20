@@ -1,8 +1,6 @@
 import type { configType } from '../common';
 import { BUILD_TIME_TEMPLATE_SOURCE, BUILT_IN_TEMPLATE_OBJECTS } from './generated';
 
-export { BUILD_TIME_TEMPLATE_SOURCE };
-
 /**
  * ZH: 返回 build 时从本仓库快照烘进来的模板的 JSON 字符串。
  *     `generated.ts` 里存的是真正的 TS 对象字面量（不是 JSON 字符串），

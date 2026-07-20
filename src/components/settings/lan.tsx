@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Router } from "react-bootstrap-icons";
 import { getAllowLan, getProxyPort, setAllowLan } from "../../single/store";
 import { ToggleSetting } from "./common";
@@ -26,31 +26,35 @@ export default function ToggleLan() {
   const [lanIP, setLanIP] = useState<string>("127.0.0.1");
   const [proxyPort, setProxyPort] = useState(DEFAULT_PROXY_PORT);
   const [isSaving, setIsSaving] = useState(false);
+  const didInteract = useRef(false);
 
   useEffect(() => {
+    let cancelled = false;
     const loadTunState = async () => {
       try {
         const state: boolean = await getAllowLan();
+        if (cancelled || didInteract.current) return;
         if (state !== undefined) {
           setToggle(state);
         } else {
           setToggle(false);
         }
       } catch (error) {
-        console.error("Failed to load tun state:", error);
+        if (!cancelled) console.error("Failed to load tun state:", error);
       }
     };
 
     const fetchLanIP = async () => {
       const ip = await getLanIP();
-
-      setLanIP(ip);
+      if (!cancelled) setLanIP(ip);
     };
-    fetchLanIP();
-    loadTunState();
-    getProxyPort().then(setProxyPort).catch(() =>
-      setProxyPort(DEFAULT_PROXY_PORT)
-    );
+    void fetchLanIP();
+    void loadTunState();
+    void getProxyPort().then((port) => {
+      if (!cancelled) setProxyPort(port);
+    }).catch(() => {
+      if (!cancelled) setProxyPort(DEFAULT_PROXY_PORT);
+    });
 
     const handleProxyPortChanged = (event: Event) => {
       const nextPort = (event as CustomEvent<number>).detail;
@@ -59,11 +63,13 @@ export default function ToggleLan() {
       }
     };
     window.addEventListener(PROXY_PORT_CHANGED_EVENT, handleProxyPortChanged);
-    return () =>
+    return () => {
+      cancelled = true;
       window.removeEventListener(
         PROXY_PORT_CHANGED_EVENT,
         handleProxyPortChanged,
       );
+    };
   }, []);
 
   const handleToggle = async () => {
@@ -81,6 +87,7 @@ export default function ToggleLan() {
       return;
     } else {
       const next = !toggle;
+      didInteract.current = true;
       setIsSaving(true);
       try {
         await setAllowLan(next);

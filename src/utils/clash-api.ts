@@ -1,12 +1,10 @@
 import { fetch as httpFetch } from "@tauri-apps/plugin-http";
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useRef, useState } from "react";
-import { LogEntry } from "../components/log/types";
+import { useEffect, useState } from "react";
 import { getClashApiSecret } from "../single/store";
 
-const MAX_LOG_ENTRIES = 2_000;
-const LOG_FLUSH_INTERVAL_MS = 100;
 const TRAFFIC_FLUSH_INTERVAL_MS = 250;
+const MAX_STREAM_REMAINDER_BYTES = 256 * 1024;
 
 // plugin-http 的 reqwest 默认读取系统代理（auto_sys_proxy=true）；在“不设置系统代理”模式下，
 // 若机器已有外部代理，发往 127.0.0.1:9191 的请求会被带进代理而失败（reqwest 对回环地址无隐式豁免）。
@@ -46,35 +44,22 @@ export async function clashApiFetch(
   });
 }
 
-// 下面的流式方法沿用 webview 全局 fetch：浏览器对回环地址自动豁免代理，且 plugin-http
-// 不适合 /logs、/traffic 这类无限分块流；故这里不经过 clashApiFetch。
-export const ClashService = {
-  async fetchLogs() {
-    const [secret, baseUrl] = await Promise.all([getClashApiSecret(), getClashApiBaseUrl()]);
-    return fetch(`${baseUrl}/logs`, {
-      headers: {
-        "Authorization": `Bearer ${secret}`,
-      },
-    });
-  },
-  async fetchTraffic() {
-    const [secret, baseUrl] = await Promise.all([getClashApiSecret(), getClashApiBaseUrl()]);
-    return fetch(`${baseUrl}/traffic`, {
-      headers: {
-        "Authorization": `Bearer ${secret}`,
-      },
-    });
-  },
-  async deleteConnections() {
-    const [secret, baseUrl] = await Promise.all([getClashApiSecret(), getClashApiBaseUrl()]);
-    return fetch(`${baseUrl}/connections`, {
-      method: "DELETE",
-      headers: {
-        "Authorization": `Bearer ${secret}`,
-      },
-    });
-  },
-};
+// 流式流量接口沿用 webview 全局 fetch：浏览器对回环地址自动豁免代理，且 plugin-http
+// 不适合 /traffic 这类无限分块流；故这里不经过 clashApiFetch。
+async function fetchTraffic(signal?: AbortSignal) {
+  const [secret, baseUrl] = await Promise.all([
+    getClashApiSecret(),
+    getClashApiBaseUrl(),
+  ]);
+  const response = await fetch(`${baseUrl}/traffic`, {
+    signal,
+    headers: {
+      Authorization: `Bearer ${secret}`,
+    },
+  });
+  if (!response.ok) throw new Error(`traffic_http_${response.status}`);
+  return response;
+}
 
 type JsonFrameResult<T> = {
   values: T[];
@@ -115,104 +100,15 @@ export function consumeJsonFrames<T>(buffer: string): JsonFrameResult<T> {
     }
   }
 
+  // A malformed endpoint response without line breaks must not grow memory
+  // without bound for the lifetime of the app. Traffic frames are tiny, so a
+  // 256 KiB incomplete frame is necessarily corrupt and can be discarded.
+  if (remainder.length > MAX_STREAM_REMAINDER_BYTES) {
+    console.warn("Dropped oversized incomplete Clash stream frame");
+    remainder = "";
+  }
+
   return { values, remainder };
-}
-
-function appendBounded<T>(existing: T[], incoming: T[], limit: number): T[] {
-  const merged = existing.concat(incoming);
-  return merged.length > limit ? merged.slice(-limit) : merged;
-}
-
-export function useLogSource() {
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const pendingLogsRef = useRef<LogEntry[]>([]);
-
-  useEffect(() => {
-    let readerRef: ReadableStreamDefaultReader<Uint8Array> | null = null;
-    let cancelled = false;
-    let flushTimer: ReturnType<typeof setTimeout> | undefined;
-
-    const flush = () => {
-      flushTimer = undefined;
-      const pending = pendingLogsRef.current;
-      if (pending.length === 0) return;
-      pendingLogsRef.current = [];
-      setLogs((previous) => appendBounded(previous, pending, MAX_LOG_ENTRIES));
-    };
-
-    const scheduleFlush = () => {
-      if (flushTimer === undefined) {
-        flushTimer = setTimeout(flush, LOG_FLUSH_INTERVAL_MS);
-      }
-    };
-
-    const setup = async () => {
-      try {
-        const response = await ClashService.fetchLogs();
-        const reader = response.body?.getReader();
-        if (!reader) return;
-
-        readerRef = reader;
-        const decoder = new TextDecoder();
-        let remainder = "";
-
-        while (!cancelled) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          remainder += decoder.decode(value, { stream: true });
-          const result = consumeJsonFrames<{ type: string; payload: string }>(
-            remainder,
-          );
-          remainder = result.remainder;
-
-          if (result.values.length > 0) {
-            pendingLogsRef.current.push(...result.values.map((data) => ({
-              type: data.type,
-              payload: data.payload,
-              message: `[${data.type}] ${data.payload}`,
-              timestamp: new Date().toTimeString().split(" ")[0],
-            })));
-            scheduleFlush();
-          }
-        }
-
-        const finalResult = consumeJsonFrames<
-          { type: string; payload: string }
-        >(
-          remainder + decoder.decode(),
-        );
-        if (finalResult.values.length > 0) {
-          pendingLogsRef.current.push(...finalResult.values.map((data) => ({
-            type: data.type,
-            payload: data.payload,
-            message: `[${data.type}] ${data.payload}`,
-            timestamp: new Date().toTimeString().split(" ")[0],
-          })));
-        }
-        flush();
-      } catch (error) {
-        if (!cancelled) {
-          console.error("Failed to read Clash log stream:", error);
-        }
-      }
-    };
-
-    setup();
-
-    return () => {
-      cancelled = true;
-      if (flushTimer !== undefined) clearTimeout(flushTimer);
-      pendingLogsRef.current = [];
-      void readerRef?.cancel();
-    };
-  }, []);
-
-  const clearLogs = () => {
-    pendingLogsRef.current = [];
-    setLogs([]);
-  };
-
-  return { logs, clearLogs };
 }
 
 export interface NetworkSpeed {
@@ -237,8 +133,16 @@ export function useNetworkSpeed(enabled: boolean = true) {
   const [speed, setSpeed] = useState<NetworkSpeed>({ upload: 0, download: 0 });
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) {
+      setSpeed((previous) => (
+        previous.upload === 0 && previous.download === 0
+          ? previous
+          : { upload: 0, download: 0 }
+      ));
+      return;
+    }
 
+    const controller = new AbortController();
     let readerRef: ReadableStreamDefaultReader<Uint8Array> | null = null;
     let cancelled = false;
     let flushTimer: ReturnType<typeof setTimeout> | undefined;
@@ -246,6 +150,10 @@ export function useNetworkSpeed(enabled: boolean = true) {
 
     const flush = () => {
       flushTimer = undefined;
+      if (cancelled) {
+        pendingSpeed = undefined;
+        return;
+      }
       const next = pendingSpeed;
       pendingSpeed = undefined;
       if (!next) return;
@@ -257,18 +165,22 @@ export function useNetworkSpeed(enabled: boolean = true) {
     };
 
     const scheduleFlush = () => {
-      if (flushTimer === undefined) {
+      if (!cancelled && flushTimer === undefined) {
         flushTimer = setTimeout(flush, TRAFFIC_FLUSH_INTERVAL_MS);
       }
     };
 
     const setup = async () => {
       try {
-        const response = await ClashService.fetchTraffic();
+        const response = await fetchTraffic(controller.signal);
         const reader = response.body?.getReader();
         if (!reader) return;
 
         readerRef = reader;
+        if (cancelled) {
+          await reader.cancel();
+          return;
+        }
         const decoder = new TextDecoder();
         let remainder = "";
 
@@ -288,7 +200,7 @@ export function useNetworkSpeed(enabled: boolean = true) {
             scheduleFlush();
           }
         }
-        flush();
+        if (!cancelled) flush();
       } catch (error) {
         if (!cancelled) {
           console.error("Failed to read Clash traffic stream:", error);
@@ -300,7 +212,9 @@ export function useNetworkSpeed(enabled: boolean = true) {
 
     return () => {
       cancelled = true;
+      controller.abort();
       if (flushTimer !== undefined) clearTimeout(flushTimer);
+      pendingSpeed = undefined;
       void readerRef?.cancel();
     };
   }, [enabled]);

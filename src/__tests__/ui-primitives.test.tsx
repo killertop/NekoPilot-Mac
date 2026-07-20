@@ -11,6 +11,7 @@ import {
 } from "../components/common/list-row";
 import { RadioOptionList } from "../components/common/radio-option-list";
 import { SettingsModal } from "../components/common/settings-modal";
+import Avatar from "../components/configuration/avatar";
 import { PowerToggle } from "../components/home/power-toggle";
 
 vi.mock("../utils/helper", () => ({
@@ -191,6 +192,22 @@ describe("UI primitives", () => {
     });
     expect(host.querySelector("button")?.className).toContain(
       "focus-visible:outline-2",
+    );
+  });
+
+  it("retries a favicon when a subscription changes its website", async () => {
+    await act(async () => {
+      root.render(<Avatar url="https://old.example" danger={false} />);
+    });
+    const first = host.querySelector("img") as HTMLImageElement;
+    await act(async () => first.dispatchEvent(new Event("error")));
+    expect(host.querySelector("img")).toBeNull();
+
+    await act(async () => {
+      root.render(<Avatar url="https://new.example" danger={false} />);
+    });
+    expect(host.querySelector("img")?.src).toBe(
+      "https://new.example/favicon.ico",
     );
   });
 });

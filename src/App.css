@@ -322,6 +322,12 @@ main.onebox-surface {
   cursor: not-allowed;
 }
 
+.onebox-toggle:focus-visible,
+.onebox-dock button:focus-visible {
+  outline: 2px solid var(--onebox-blue);
+  outline-offset: -2px;
+}
+
 /* ==========================================================================
  * iOS-style bottom dock. Replaces daisyUI's .dock, which we used to set
  * a base colour on and fight its default shadow.

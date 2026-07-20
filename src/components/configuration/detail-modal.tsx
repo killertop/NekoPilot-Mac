@@ -27,7 +27,10 @@ import { DialogHeader } from "../common/dialog-header";
 import { InfoRow, ListRow } from "../common/list-row";
 import Avatar from "./avatar";
 import { extractLocalNodeInfo, type LocalNodeInfo } from "./local-node-info";
-import { hasTrafficQuota } from "./subscription-metadata";
+import {
+  hasTrafficQuota,
+  normalizeTimestampMs,
+} from "./subscription-metadata";
 
 interface SubscriptionDetailModalProps {
   item: Subscription | null;
@@ -158,13 +161,14 @@ export function SubscriptionDetailModal({
     ? Math.min(100, Math.floor((item.used_traffic / item.total_traffic) * 100))
     : 0;
   const danger = usage >= 100;
-  const locale = typeof navigator !== "undefined" ? navigator.language : "en";
+  const locale = document.documentElement.lang || navigator.language || "en";
 
   const trafficText = `${bytes(item.used_traffic) ?? "0"} / ${
     bytes(item.total_traffic) ?? "0"
   }`;
-  const lastUpdateRelative = formatRelative(item.last_update_time, locale);
-  const lastUpdateAbsolute = formatAbsolute(item.last_update_time, locale);
+  const lastUpdateTimestamp = normalizeTimestampMs(item.last_update_time);
+  const lastUpdateRelative = formatRelative(lastUpdateTimestamp, locale);
+  const lastUpdateAbsolute = formatAbsolute(lastUpdateTimestamp, locale);
   const localSecurity = localNodeInfo
     ? localNodeInfo.tls
       ? [

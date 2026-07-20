@@ -1,6 +1,8 @@
 use serde::Serialize;
 use std::sync::Mutex;
 
+const MAX_BUFFERED_LOG_BYTES: usize = 64 * 1024;
+
 /// deep link 解析结果
 #[derive(Serialize, Clone)]
 pub struct DeepLinkPayload {
@@ -35,17 +37,23 @@ impl AppData {
         }
     }
 
-    pub fn write(&self, log: String, log_type: LogType) {
+    pub fn write(&self, mut log: String, log_type: LogType) {
         let buffer = match log_type {
             LogType::Info => &self.log_buffer,
             LogType::Error => &self.error_log_buffer,
         };
 
-        if let Ok(mut buffer) = buffer.lock() {
-            buffer.push(log);
-            if buffer.len() > 10 {
-                buffer.remove(0);
+        if log.len() > MAX_BUFFERED_LOG_BYTES {
+            let mut boundary = MAX_BUFFERED_LOG_BYTES;
+            while boundary > 0 && !log.is_char_boundary(boundary) {
+                boundary -= 1;
             }
+            log.truncate(boundary);
+        }
+        let mut buffer = buffer.lock().unwrap_or_else(|error| error.into_inner());
+        buffer.push(log);
+        if buffer.len() > 10 {
+            buffer.remove(0);
         }
     }
 
@@ -89,5 +97,20 @@ impl AppData {
         if let Ok(mut sec) = self.clash_secret.lock() {
             *sec = secret;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retained_frontend_logs_are_bounded() {
+        let data = AppData::new();
+        data.write("x".repeat(MAX_BUFFERED_LOG_BYTES + 1), LogType::Info);
+        assert_eq!(
+            data.read_cleared(LogType::Info).len(),
+            MAX_BUFFERED_LOG_BYTES
+        );
     }
 }

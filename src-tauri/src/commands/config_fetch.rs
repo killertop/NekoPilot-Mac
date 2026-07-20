@@ -9,23 +9,81 @@
 //! `<ACCELERATE_URL>/<domain_sha256><path>?<query>`.
 
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Instant;
 
 use tauri::{AppHandle, Manager};
 use tauri_plugin_http::reqwest;
 use url::Url;
 
-use super::dns::{get_best_dns_server, is_ip_address, resolve_a_record};
+use super::dns::{get_best_dns_server, resolve_a_record};
 use super::whitelist::{load_whitelist_hashes, KNOWN_HOST_SHA256_LIST};
 
 // Compile-time accelerator URL — injected from ACCELERATE_URL env var via build.rs.
 // Empty string when not configured.
 const ACCELERATE_URL: &str = env!("ACCELERATE_URL");
 const MAX_SUBSCRIPTION_BYTES: usize = 16 * 1024 * 1024;
+const MAX_SUBSCRIPTION_URL_BYTES: usize = 16 * 1024;
+const MAX_REDIRECTS: usize = 5;
+const DNS_FALLBACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 fn subscription_scheme_supported(scheme: &str) -> bool {
     matches!(scheme, "http" | "https")
+}
+
+/// Subscription URLs are renderer-controlled and may also arrive through a
+/// deep link.  Only publicly routable destinations are valid: loopback,
+/// private, link-local and transition/documentation ranges would turn the
+/// native HTTP client into an SSRF primitive against services that the
+/// WebView itself cannot reach.
+fn is_public_destination_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => is_public_ipv4(ip),
+        IpAddr::V6(ip) => is_public_ipv6(ip),
+    }
+}
+
+fn is_public_ipv4(ip: Ipv4Addr) -> bool {
+    let [a, b, c, d] = ip.octets();
+    if a == 0
+        || a == 10
+        || a == 127
+        || (a == 100 && (64..=127).contains(&b))
+        || (a == 169 && b == 254)
+        || (a == 172 && (16..=31).contains(&b))
+        || (a == 192 && b == 168)
+        || (a == 192 && b == 0 && c == 0)
+        || (a == 192 && b == 0 && c == 2)
+        || (a == 192 && b == 88 && c == 99)
+        || (a == 198 && (b == 18 || b == 19))
+        || (a == 198 && b == 51 && c == 100)
+        || (a == 203 && b == 0 && c == 113)
+        || a >= 224
+    {
+        return false;
+    }
+
+    // Azure's instance metadata endpoint is a public-range address and is not
+    // covered by the RFC1918/link-local checks above.
+    !(a == 168 && b == 63 && c == 129 && d == 16)
+}
+
+fn is_public_ipv6(ip: Ipv6Addr) -> bool {
+    if let Some(mapped) = ip.to_ipv4_mapped() {
+        return is_public_ipv4(mapped);
+    }
+    let segments = ip.segments();
+    // Current globally-routable unicast space is 2000::/3. Keeping the allow
+    // side narrow also rejects ULA, link-local, multicast and NAT64 encodings.
+    if !(0x2000..=0x3fff).contains(&segments[0]) {
+        return false;
+    }
+    // Documentation, ORCHID/benchmark and 6to4 ranges are not valid remote
+    // subscription endpoints.  Blocking 6to4 also prevents embedded private
+    // IPv4 destinations from bypassing the IPv4 checks.
+    !(segments[0] == 0x2001
+        && (segments[1] == 0x0db8 || segments[1] == 0x0002 || segments[1] == 0x0010))
+        && segments[0] != 0x2002
 }
 
 pub(crate) fn compute_sha256_hex(s: &str) -> String {
@@ -50,15 +108,21 @@ fn subscription_log_target(url: &Url) -> String {
 }
 
 /// Progressive suffix candidates, shortest first.
-/// `a.b.c` → `["c", "b.c", "a.b.c"]`. IPs / single-label hostnames return
-/// just the input. Any matching hash in the whitelist approves the entire
-/// subtree rooted at that suffix.
+/// `a.b.c` → `["b.c", "a.b.c"]`. IPs and single-label hostnames return no
+/// candidates. Any matching hash in the whitelist approves the entire subtree
+/// rooted at that suffix; a bare TLD can never authorize unrelated domains.
 fn hostname_suffix_candidates(hostname: &str) -> Vec<String> {
-    if hostname.is_empty() {
+    let hostname = hostname.trim_end_matches('.').to_ascii_lowercase();
+    if hostname.is_empty() || hostname.parse::<IpAddr>().is_ok() {
         return Vec::new();
     }
     let parts: Vec<&str> = hostname.split('.').collect();
-    (0..parts.len())
+    // Never authorize a whole TLD (or a local single-label hostname) from a
+    // single hash. Two labels is the broadest supported suffix.
+    if parts.len() < 2 || parts.iter().any(|part| part.is_empty()) {
+        return Vec::new();
+    }
+    (0..parts.len() - 1)
         .rev()
         .map(|i| parts[i..].join("."))
         .collect()
@@ -88,6 +152,10 @@ pub async fn verify_deep_link_url(app: AppHandle, url: String) -> bool {
         log::warn!("[deep-link] verify: URL parse failed");
         return false;
     };
+    if !subscription_scheme_supported(parsed.scheme()) {
+        log::warn!("[deep-link] verify: unsupported URL scheme");
+        return false;
+    }
     let Some(host) = parsed.host_str() else {
         log::warn!("[deep-link] verify: missing host");
         return false;
@@ -100,21 +168,162 @@ pub async fn verify_deep_link_url(app: AppHandle, url: String) -> bool {
 }
 
 /// Probes reachability of the compiled-in accelerator endpoint (5 s timeout).
-async fn check_accelerator_tcp() -> bool {
+async fn resolve_public_socket_addr(
+    url: &Url,
+    dns_server: &str,
+) -> Result<(String, SocketAddr), String> {
+    let hostname = url
+        .host_str()
+        .ok_or_else(|| "missing host in URL".to_owned())?
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| "subscription_url_missing_port".to_owned())?;
+
+    if let Ok(ip) = hostname.parse::<IpAddr>() {
+        if !is_public_destination_ip(ip) {
+            return Err("subscription_destination_not_public".to_owned());
+        }
+        return Ok((hostname, SocketAddr::new(ip, port)));
+    }
+    if !hostname.contains('.') {
+        return Err("subscription_destination_not_public".to_owned());
+    }
+
+    if let Some(ip) = resolve_a_record(&hostname, dns_server).await {
+        if !is_public_ipv4(ip) {
+            return Err("subscription_destination_not_public".to_owned());
+        }
+        return Ok((hostname, SocketAddr::new(IpAddr::V4(ip), port)));
+    }
+
+    // Public resolvers can be unreachable on some networks. Keep the system
+    // resolver fallback, but pin only a public result so split-DNS or search
+    // domains cannot redirect the subsequent HTTP connection to the LAN.
+    let addresses = tokio::time::timeout(
+        DNS_FALLBACK_TIMEOUT,
+        tokio::net::lookup_host((hostname.as_str(), port)),
+    )
+    .await
+    .map_err(|_| "subscription_dns_resolution_failed".to_owned())?
+    .map_err(|_| "subscription_dns_resolution_failed".to_owned())?;
+    let address = addresses
+        .into_iter()
+        .find(|address| is_public_destination_ip(address.ip()))
+        .ok_or_else(|| "subscription_destination_not_public".to_owned())?;
+    Ok((hostname, address))
+}
+
+async fn build_pinned_client(url: &Url, dns_server: &str) -> Result<reqwest::Client, String> {
+    let (hostname, address) = resolve_public_socket_addr(url, dns_server).await?;
+    let mut builder = reqwest::ClientBuilder::new()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy();
+    if hostname.parse::<IpAddr>().is_err() {
+        builder = builder.resolve(&hostname, address);
+    }
+    builder
+        .build()
+        .map_err(|_| "subscription_client_failed".to_owned())
+}
+
+#[derive(Debug)]
+struct RequestFailure {
+    reason: String,
+    accelerator_eligible: bool,
+}
+
+fn request_failure(error: &reqwest::Error) -> RequestFailure {
+    if error.is_timeout() {
+        RequestFailure {
+            reason: "TIMEOUT".to_owned(),
+            accelerator_eligible: true,
+        }
+    } else if error.is_connect() {
+        RequestFailure {
+            reason: "CONNECT_ERROR".to_owned(),
+            accelerator_eligible: true,
+        }
+    } else {
+        RequestFailure {
+            reason: "REQUEST_ERROR".to_owned(),
+            accelerator_eligible: false,
+        }
+    }
+}
+
+async fn send_subscription_request(
+    initial_url: &Url,
+    user_agent: &str,
+    dns_server: &str,
+) -> Result<reqwest::Response, RequestFailure> {
+    let mut current = initial_url.clone();
+    for redirect_count in 0..=MAX_REDIRECTS {
+        if !subscription_scheme_supported(current.scheme()) {
+            return Err(RequestFailure {
+                reason: "unsupported_subscription_scheme".to_owned(),
+                accelerator_eligible: false,
+            });
+        }
+        let client = build_pinned_client(&current, dns_server)
+            .await
+            .map_err(|reason| RequestFailure {
+                reason,
+                accelerator_eligible: false,
+            })?;
+        let response = client
+            .get(current.clone())
+            .header(reqwest::header::USER_AGENT, user_agent)
+            .send()
+            .await
+            .map_err(|error| request_failure(&error))?;
+        if !response.status().is_redirection() {
+            return Ok(response);
+        }
+        if redirect_count == MAX_REDIRECTS {
+            return Err(RequestFailure {
+                reason: "subscription_too_many_redirects".to_owned(),
+                accelerator_eligible: false,
+            });
+        }
+        let location = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .ok_or_else(|| RequestFailure {
+                reason: "subscription_redirect_missing_location".to_owned(),
+                accelerator_eligible: false,
+            })?;
+        current = current.join(location).map_err(|_| RequestFailure {
+            reason: "subscription_redirect_invalid".to_owned(),
+            accelerator_eligible: false,
+        })?;
+    }
+    Err(RequestFailure {
+        reason: "subscription_too_many_redirects".to_owned(),
+        accelerator_eligible: false,
+    })
+}
+
+async fn check_accelerator_tcp(dns_server: &str) -> bool {
     if ACCELERATE_URL.is_empty() {
         return false;
     }
     let Ok(parsed) = Url::parse(ACCELERATE_URL) else {
         return false;
     };
-    let Some(host) = parsed.host_str() else {
+    if !subscription_scheme_supported(parsed.scheme()) {
+        return false;
+    }
+    let Ok((_, address)) = resolve_public_socket_addr(&parsed, dns_server).await else {
         return false;
     };
-    let port = parsed.port_or_known_default().unwrap_or(443);
     matches!(
         tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            tokio::net::TcpStream::connect((host, port)),
+            tokio::net::TcpStream::connect(address),
         )
         .await,
         Ok(Ok(_))
@@ -173,7 +382,7 @@ async fn read_subscription_json(
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|error| format!("read subscription response: {error}"))?
+        .map_err(|_| "subscription_response_read_failed".to_owned())?
     {
         let next_size = checked_subscription_body_size(body.len(), chunk.len())?;
         body.reserve(next_size - body.len());
@@ -203,7 +412,10 @@ pub(crate) async fn fetch_subscription_config(
     // bracket each phase so the log reveals which step dominates.
     let t_total = Instant::now();
 
-    let parsed_url = Url::parse(url).map_err(|e| e.to_string())?;
+    if url.len() > MAX_SUBSCRIPTION_URL_BYTES {
+        return Err("subscription_url_too_large".to_owned());
+    }
+    let parsed_url = Url::parse(url).map_err(|_| "invalid_subscription_url".to_owned())?;
     if !subscription_scheme_supported(parsed_url.scheme()) {
         return Err("unsupported_subscription_scheme".to_owned());
     }
@@ -211,7 +423,9 @@ pub(crate) async fn fetch_subscription_config(
         .host_str()
         .ok_or("missing host in URL")?
         .to_string();
-    let port = parsed_url.port_or_known_default().unwrap_or(443);
+    let port = parsed_url
+        .port_or_known_default()
+        .ok_or_else(|| "subscription_url_missing_port".to_owned())?;
     let log_target = subscription_log_target(&parsed_url);
 
     log::info!(
@@ -268,48 +482,8 @@ pub(crate) async fn fetch_subscription_config(
         t_dns_probe.elapsed().as_millis()
     );
 
-    let client_builder = reqwest::ClientBuilder::new()
-        .timeout(std::time::Duration::from_secs(30))
-        .no_proxy();
-
-    let t_resolve = Instant::now();
-    let primary_client = if !is_ip_address(&hostname) {
-        match resolve_a_record(&hostname, &dns_server).await {
-            Some(ip) => {
-                let addr = SocketAddr::new(IpAddr::V4(ip), port);
-                log::info!(
-                    "[CONFIG_LOAD] A记录解析成功 {} -> {} via DNS {} elapsed={}ms",
-                    hostname,
-                    ip,
-                    dns_server,
-                    t_resolve.elapsed().as_millis()
-                );
-                client_builder
-                    .resolve(&hostname, addr)
-                    .build()
-                    .map_err(|e| e.to_string())?
-            }
-            None => {
-                log::warn!(
-                    "[CONFIG_LOAD] A记录解析失败 {} via {} elapsed={}ms, 回退系统DNS",
-                    hostname,
-                    dns_server,
-                    t_resolve.elapsed().as_millis()
-                );
-                client_builder.build().map_err(|e| e.to_string())?
-            }
-        }
-    } else {
-        client_builder.build().map_err(|e| e.to_string())?
-    };
-
     let t_primary = Instant::now();
-    match primary_client
-        .get(url)
-        .header("User-Agent", user_agent)
-        .send()
-        .await
-    {
+    match send_subscription_request(&parsed_url, user_agent, &dns_server).await {
         Ok(response) => {
             let t_headers = t_primary.elapsed();
             let status = response.status().as_u16();
@@ -334,13 +508,9 @@ pub(crate) async fn fetch_subscription_config(
                 status,
             })
         }
-        Err(primary_err) if primary_err.is_connect() || primary_err.is_timeout() => {
+        Err(primary_err) if primary_err.accelerator_eligible => {
             let primary_elapsed = t_primary.elapsed().as_millis();
-            let primary_reason = if primary_err.is_timeout() {
-                "TIMEOUT".to_string()
-            } else {
-                format!("CONNECT_ERROR({})", primary_err)
-            };
+            let primary_reason = primary_err.reason;
             log::warn!(
                 "[CONFIG_LOAD] 主地址失败 reason={} primary_elapsed={}ms target={}",
                 primary_reason,
@@ -371,7 +541,7 @@ pub(crate) async fn fetch_subscription_config(
                 ));
             }
 
-            if !check_accelerator_tcp().await {
+            if !check_accelerator_tcp(&dns_server).await {
                 log::warn!(
                     "[CONFIG_LOAD] 方式=ACCELERATOR_UNAVAILABLE, 原因=加速地址不可达, 回退中止"
                 );
@@ -388,19 +558,11 @@ pub(crate) async fn fetch_subscription_config(
                 ));
             };
 
-            let fallback_client = reqwest::ClientBuilder::new()
-                .timeout(std::time::Duration::from_secs(30))
-                .no_proxy()
-                .build()
-                .map_err(|e| e.to_string())?;
+            let accelerated_url = Url::parse(&accelerated_url)
+                .map_err(|_| "invalid_accelerated_subscription_url".to_owned())?;
 
             let t_fallback = Instant::now();
-            match fallback_client
-                .get(&accelerated_url)
-                .header("User-Agent", user_agent)
-                .send()
-                .await
-            {
+            match send_subscription_request(&accelerated_url, user_agent, &dns_server).await {
                 Ok(response) => {
                     let t_headers = t_fallback.elapsed();
                     let status = response.status().as_u16();
@@ -437,11 +599,7 @@ pub(crate) async fn fetch_subscription_config(
                     }
                 }
                 Err(acc_err) => {
-                    let acc_reason = if acc_err.is_timeout() {
-                        "TIMEOUT".to_string()
-                    } else {
-                        format!("CONNECT_ERROR({})", acc_err)
-                    };
+                    let acc_reason = acc_err.reason;
                     log::error!(
                         "[CONFIG_LOAD] 方式=BOTH_FAILED 主地址原因={} 加速地址原因={} fallback_elapsed={}ms total_elapsed={}ms",
                         primary_reason,
@@ -456,7 +614,7 @@ pub(crate) async fn fetch_subscription_config(
                 }
             }
         }
-        Err(e) => Err(e.to_string()),
+        Err(error) => Err(error.reason),
     }
 }
 
@@ -468,7 +626,7 @@ mod tests {
     fn suffix_candidates_shortest_first() {
         assert_eq!(
             hostname_suffix_candidates("a.b.c"),
-            vec!["c".to_string(), "b.c".to_string(), "a.b.c".to_string()],
+            vec!["b.c".to_string(), "a.b.c".to_string()],
         );
     }
 
@@ -509,10 +667,7 @@ mod tests {
 
     #[test]
     fn suffix_candidates_single_label() {
-        assert_eq!(
-            hostname_suffix_candidates("localhost"),
-            vec!["localhost".to_string()],
-        );
+        assert!(hostname_suffix_candidates("localhost").is_empty());
     }
 
     #[test]
@@ -525,7 +680,6 @@ mod tests {
         assert_eq!(
             hostname_suffix_candidates("w.x.y.z"),
             vec![
-                "z".to_string(),
                 "y.z".to_string(),
                 "x.y.z".to_string(),
                 "w.x.y.z".to_string(),
@@ -607,5 +761,43 @@ mod tests {
     fn allowlist_rejects_empty_inputs() {
         assert!(!matches_allowlist("", &[]));
         assert!(!matches_allowlist("anything.test", &[]));
+    }
+
+    #[test]
+    fn allowlist_never_authorizes_a_tld_or_ip_suffix() {
+        let tld_hash = compute_sha256_hex("example");
+        assert!(!matches_allowlist("host.example", &[tld_hash.as_str()]));
+        assert!(hostname_suffix_candidates("127.0.0.1").is_empty());
+        assert!(hostname_suffix_candidates("host.example.").contains(&"host.example".to_owned()));
+    }
+
+    #[test]
+    fn subscription_destinations_reject_local_and_special_networks() {
+        for blocked in [
+            "0.0.0.0",
+            "10.0.0.1",
+            "100.64.0.1",
+            "127.0.0.1",
+            "169.254.169.254",
+            "172.16.0.1",
+            "192.168.1.1",
+            "198.18.0.1",
+            "224.0.0.1",
+            "168.63.129.16",
+            "::1",
+            "fc00::1",
+            "fe80::1",
+            "2001:db8::1",
+            "::ffff:127.0.0.1",
+        ] {
+            assert!(
+                !is_public_destination_ip(blocked.parse().unwrap()),
+                "{blocked} must be blocked"
+            );
+        }
+        assert!(is_public_destination_ip("1.1.1.1".parse().unwrap()));
+        assert!(is_public_destination_ip(
+            "2606:4700:4700::1111".parse().unwrap()
+        ));
     }
 }

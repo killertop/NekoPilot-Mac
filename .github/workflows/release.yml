@@ -11,7 +11,7 @@ on:
           - beta
           - stable
           - manual
-        default: dev
+        default: manual
 
   push:
     paths:
@@ -23,31 +23,44 @@ on:
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: true
+  # A cancelled publishing run can leave a partially populated Release. Queue
+  # a later release for the same ref instead of interrupting external writes.
+  cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   # ── 1. Resolve channel-specific parameters ──────────────────────────
   resolve:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       channel: ${{ steps.params.outputs.channel }}
       version: ${{ steps.params.outputs.version }}
       tag_name: ${{ steps.params.outputs.tag_name }}
       release_name: ${{ steps.params.outputs.release_name }}
       prerelease: ${{ steps.params.outputs.prerelease }}
-      conf_template_branch: ${{ steps.params.outputs.conf_template_branch }}
       delete_tag: ${{ steps.params.outputs.delete_tag }}
       copy_from_tag: ${{ steps.params.outputs.copy_from_tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set Up Deno
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: v2.9.3
+
+      - name: Verify synchronized application versions
+        run: deno task check:versions
 
       - name: Resolve channel parameters
         id: params
         shell: bash
         run: |
+          set -euo pipefail
+
           # Determine channel from trigger
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             CHANNEL="${{ inputs.channel }}"
@@ -60,14 +73,25 @@ jobs:
             esac
           fi
 
-          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          case "$CHANNEL" in
+            dev) EXPECTED_REF="feature/dev" ;;
+            beta) EXPECTED_REF="feature/beta" ;;
+            stable) EXPECTED_REF="main" ;;
+            manual) EXPECTED_REF="" ;;
+            *) echo "::error::Unknown release channel: $CHANNEL"; exit 1 ;;
+          esac
+          if [ -n "$EXPECTED_REF" ] && [ "${{ github.ref_name }}" != "$EXPECTED_REF" ]; then
+            echo "::error::Channel '$CHANNEL' must be dispatched from '$EXPECTED_REF', not '${{ github.ref_name }}'"
+            exit 1
+          fi
+
+          VERSION=$(jq -er '.version' src-tauri/tauri.conf.json)
 
           case "$CHANNEL" in
             dev)
               TAG_NAME="dev"
               RELEASE_NAME="Dev"
               PRERELEASE="true"
-              CONF_BRANCH="dev"
               DELETE_TAG="dev"
               COPY_FROM=""
               ;;
@@ -75,7 +99,6 @@ jobs:
               TAG_NAME="beta"
               RELEASE_NAME="Beta"
               PRERELEASE="true"
-              CONF_BRANCH="beta"
               DELETE_TAG="beta"
               COPY_FROM="dev"
               ;;
@@ -83,7 +106,6 @@ jobs:
               TAG_NAME="v${VERSION}"
               RELEASE_NAME="v${VERSION}"
               PRERELEASE="false"
-              CONF_BRANCH="stable"
               DELETE_TAG=""
               COPY_FROM="beta"
               ;;
@@ -91,7 +113,6 @@ jobs:
               TAG_NAME="manual"
               RELEASE_NAME="Manual"
               PRERELEASE="true"
-              CONF_BRANCH="stable"
               DELETE_TAG="manual"
               COPY_FROM=""
               ;;
@@ -102,45 +123,143 @@ jobs:
           echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
           echo "release_name=$RELEASE_NAME" >> $GITHUB_OUTPUT
           echo "prerelease=$PRERELEASE" >> $GITHUB_OUTPUT
-          echo "conf_template_branch=$CONF_BRANCH" >> $GITHUB_OUTPUT
           echo "delete_tag=$DELETE_TAG" >> $GITHUB_OUTPUT
           echo "copy_from_tag=$COPY_FROM" >> $GITHUB_OUTPUT
 
           echo "Channel: $CHANNEL"
           echo "Version: $VERSION"
           echo "Tag: $TAG_NAME | Release: $RELEASE_NAME | Prerelease: $PRERELEASE"
-          echo "Template branch: $CONF_BRANCH"
           echo "Delete old tag: ${DELETE_TAG:-'(none)'}"
           echo "Copy from: ${COPY_FROM:-'(none, always build)'}"
 
-  # ── 2. Delete old rolling release (dev/beta/manual) ────────────────
-  delete-old-release:
+          # Stable version tags are immutable. Allow an idempotent re-run of
+          # the same commit, but never overwrite an existing version from a
+          # different source commit.
+          if [ "$CHANNEL" = "stable" ] && \
+             git ls-remote --exit-code --tags origin "refs/tags/$TAG_NAME" >/dev/null 2>&1; then
+            git fetch --force origin "refs/tags/$TAG_NAME:refs/tags/$TAG_NAME"
+            TAG_COMMIT=$(git rev-list -n 1 "$TAG_NAME")
+            if [ "$TAG_COMMIT" != "$GITHUB_SHA" ]; then
+              echo "::error::$TAG_NAME already points to $TAG_COMMIT; bump the version before releasing $GITHUB_SHA"
+              exit 1
+            fi
+          fi
+
+  # ── 2. Validate release inputs before external mutations ───────────
+  # A version push starts Test and Release concurrently, so branch protection
+  # cannot gate this workflow. Repeat release-critical checks before mutating
+  # any GitHub Release state.
+  preflight:
     needs: resolve
+    runs-on: ubuntu-24.04
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      CARGO_HTTP_MULTIPLEXING: "false"
+      CARGO_NET_RETRY: "10"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set Up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.18.0
+
+      - name: Set Up Deno
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: v2.9.3
+
+      - name: Install Linux Dependencies
+        run: |
+          sudo apt update
+          sudo apt install libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Set Up Rust Toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable action
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # pinned v2 branch commit
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install locked frontend dependencies
+        run: deno install --frozen
+
+      - name: Audit frontend dependencies
+        run: deno audit --lock=deno.lock
+
+      - name: Build and test frontend
+        run: |
+          deno task build
+          deno task test
+
+      - name: Download and verify sidecar binaries
+        run: deno task download-binaries
+
+      - name: Fetch locked Rust dependencies
+        run: |
+          for attempt in 1 2 3; do
+            cargo fetch --manifest-path src-tauri/Cargo.toml --locked && exit 0
+            echo "::warning::cargo fetch attempt ${attempt} failed; retrying..."
+            sleep $((attempt * 5))
+          done
+          echo "::error::cargo fetch failed after 3 attempts"
+          exit 1
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+
+      - name: Lint Rust workspace
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --all-targets --locked --offline -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --workspace --locked --offline
+
+  # ── 3. Delete old rolling release (dev/beta/manual) ────────────────
+  delete-old-release:
+    needs: [resolve, preflight]
     if: needs.resolve.outputs.delete_tag != ''
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - name: Delete old ${{ needs.resolve.outputs.delete_tag }} release
-        uses: dev-drprasad/delete-tag-and-release@v1.1
-        with:
-          tag_name: ${{ needs.resolve.outputs.delete_tag }}
-          delete_release: true
-          repo: ${{ github.repository }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        continue-on-error: true
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG_NAME: ${{ needs.resolve.outputs.delete_tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG_NAME" --repo "$REPO" >/dev/null 2>&1; then
+            gh release delete "$TAG_NAME" --repo "$REPO" --cleanup-tag --yes
+          elif gh api "repos/$REPO/git/ref/tags/$TAG_NAME" >/dev/null 2>&1; then
+            gh api --method DELETE "repos/$REPO/git/refs/tags/$TAG_NAME"
+          else
+            echo "No previous release or tag named $TAG_NAME"
+          fi
 
-  # ── 3. Check if we can reuse upstream artifacts (beta/stable only) ──
+  # ── 4. Check if we can reuse upstream artifacts (beta/stable only) ──
   check-reuse:
-    needs: resolve
+    needs: [resolve, preflight]
     if: needs.resolve.outputs.copy_from_tag != ''
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       can_reuse: ${{ steps.check.outputs.can_reuse }}
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
@@ -151,6 +270,8 @@ jobs:
           COPY_FROM_TAG: ${{ needs.resolve.outputs.copy_from_tag }}
           CURRENT_VERSION: ${{ needs.resolve.outputs.version }}
         run: |
+          set -euo pipefail
+
           # Check if upstream release exists
           if ! gh release view "$COPY_FROM_TAG" >/dev/null 2>&1; then
             echo "::warning::$COPY_FROM_TAG release not found, will build from source"
@@ -173,38 +294,53 @@ jobs:
             exit 0
           fi
 
-          UPSTREAM_VERSION=$(git show "refs/tags/$COPY_FROM_TAG:src-tauri/tauri.conf.json" 2>/dev/null | jq -r '.version' 2>&1)
-          if [ -z "$UPSTREAM_VERSION" ] || [ "$UPSTREAM_VERSION" = "null" ]; then
-            UPSTREAM_VERSION=$(git show "refs/tags/$COPY_FROM_TAG:src-tauri/tauri.conf.json" | grep -oP '"version":\s*"\K[^"]+' || echo "")
-          fi
-
-          if [ -z "$UPSTREAM_VERSION" ]; then
+          if ! UPSTREAM_VERSION=$(git show "refs/tags/$COPY_FROM_TAG:src-tauri/tauri.conf.json" | jq -er '.version'); then
             echo "::warning::Failed to extract version from $COPY_FROM_TAG tag, will build from source"
             echo "can_reuse=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
           echo "Version check: current=$CURRENT_VERSION, $COPY_FROM_TAG=$UPSTREAM_VERSION"
-          if [ "$CURRENT_VERSION" = "$UPSTREAM_VERSION" ]; then
-            echo "✅ Same version, will reuse $COPY_FROM_TAG artifacts"
-            echo "can_reuse=true" >> $GITHUB_OUTPUT
-          else
+          if [ "$CURRENT_VERSION" != "$UPSTREAM_VERSION" ]; then
             echo "Version mismatch, will build from source"
             echo "can_reuse=false" >> $GITHUB_OUTPUT
+            exit 0
           fi
 
-  # ── 4. Copy artifacts from upstream release ─────────────────────────
+          # A matching version is not proof that the binary was built from the
+          # current source. Compare every build input's Git object ID so a
+          # source/config/script change at the same version forces a rebuild.
+          BUILD_INPUTS=(
+            src src-tauri scripts public lang index.html CHANGELOG.MD
+            package.json deno.json deno.lock tsconfig.json tsconfig.node.json
+            vite.config.ts vitest.config.ts .github/workflows/release.yml
+          )
+          CURRENT_BUILD_TREE=$(git ls-tree -r "$GITHUB_SHA" -- "${BUILD_INPUTS[@]}" | sha256sum | cut -d' ' -f1)
+          UPSTREAM_BUILD_TREE=$(git ls-tree -r "refs/tags/$COPY_FROM_TAG" -- "${BUILD_INPUTS[@]}" | sha256sum | cut -d' ' -f1)
+          echo "Build input fingerprint: current=$CURRENT_BUILD_TREE, $COPY_FROM_TAG=$UPSTREAM_BUILD_TREE"
+          if [ "$CURRENT_BUILD_TREE" != "$UPSTREAM_BUILD_TREE" ]; then
+            echo "Build inputs differ, will build from source"
+            echo "can_reuse=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "✅ Version and build inputs match; will reuse $COPY_FROM_TAG artifacts"
+          echo "can_reuse=true" >> $GITHUB_OUTPUT
+
+  # ── 5. Copy artifacts from upstream release ─────────────────────────
   copy-release:
     needs: [resolve, delete-old-release, check-reuse]
     # Run only when reuse is possible; tolerate skipped delete-old-release (stable)
     if: |
       !failure() && !cancelled() &&
       needs.check-reuse.outputs.can_reuse == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Copy artifacts from ${{ needs.resolve.outputs.copy_from_tag }} to ${{ needs.resolve.outputs.tag_name }}
         timeout-minutes: 15
@@ -235,10 +371,37 @@ jobs:
             done
           }
 
-          # Get upstream release body
-          CHANGELOG=$(gh release view "$COPY_FROM_TAG" --json body -q '.body')
+          # Download and validate before creating the destination Release. A
+          # failed download must not leave behind an empty formal release.
+          TEMP_DIR=$(mktemp -d)
+          trap 'rm -rf -- "$TEMP_DIR"' EXIT
+          # Reuse only package types this repository is allowed to publish.
+          # Windows installers are deliberately excluded even when an older
+          # upstream channel still contains them.
+          retry 3 gh release download "$COPY_FROM_TAG" --dir "$TEMP_DIR" \
+            --pattern '*.dmg' \
+            --pattern '*.app.tar.gz' \
+            --pattern '*.deb' \
+            --pattern '*.rpm' \
+            --pattern '*.AppImage'
 
-          # Build create flags
+          FILE_COUNT=$(find "$TEMP_DIR" -maxdepth 1 -type f | wc -l | tr -d ' ')
+          if [ "$FILE_COUNT" -eq 0 ]; then
+            echo "::error::No assets found in $COPY_FROM_TAG release"
+            exit 1
+          fi
+          for pattern in '*aarch64.dmg' '*x64.dmg' '*aarch64.app.tar.gz' '*x64.app.tar.gz'; do
+            if ! find "$TEMP_DIR" -maxdepth 1 -type f -name "$pattern" -print -quit | grep -q .; then
+              echo "::error::$COPY_FROM_TAG is missing required macOS asset: $pattern"
+              exit 1
+            fi
+          done
+          if find "$TEMP_DIR" -maxdepth 1 -type f \( -name 'latest.json' -o -name '*.sig' \) -print -quit | grep -q .; then
+            echo "::error::Updater metadata/signatures found although the updater is disabled"
+            exit 1
+          fi
+
+          CHANGELOG=$(gh release view "$COPY_FROM_TAG" --json body -q '.body')
           CREATE_FLAGS=(
             --title "$RELEASE_NAME"
             --notes "$CHANGELOG"
@@ -247,71 +410,58 @@ jobs:
           if [ "$PRERELEASE" = "true" ]; then
             CREATE_FLAGS+=(--prerelease)
           fi
-
-          gh release create "$TAG_NAME" "${CREATE_FLAGS[@]}"
-
-          # Download and re-upload assets
-          TEMP_DIR=$(mktemp -d)
-          retry 3 gh release download "$COPY_FROM_TAG" --dir "$TEMP_DIR" --pattern '*'
-
-          FILE_COUNT=$(ls -1 "$TEMP_DIR" 2>/dev/null | wc -l)
-          if [ "$FILE_COUNT" -gt 0 ]; then
-            # Rewrite latest.json download URLs
-            if [ -f "$TEMP_DIR/latest.json" ]; then
-              sed -i "s|/releases/download/$COPY_FROM_TAG/|/releases/download/$TAG_NAME/|g" "$TEMP_DIR/latest.json"
-              echo "✅ Updated latest.json URLs to point to $TAG_NAME"
-            fi
-
-            retry 3 gh release upload "$TAG_NAME" "$TEMP_DIR"/* --clobber
-            echo "✅ Copied $FILE_COUNT assets from $COPY_FROM_TAG to $TAG_NAME"
-          else
-            echo "::warning::No assets found in $COPY_FROM_TAG release"
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release create "$TAG_NAME" "${CREATE_FLAGS[@]}"
           fi
 
-          rm -rf "$TEMP_DIR"
+          retry 3 gh release upload "$TAG_NAME" "$TEMP_DIR"/* --clobber
+          echo "✅ Copied $FILE_COUNT verified assets from $COPY_FROM_TAG to $TAG_NAME"
 
-  # ── 5. Full build (when no reuse is possible) ──────────────────────
+  # ── 6. Full build (when no reuse is possible) ──────────────────────
   #
   # macOS aarch64 and x86 are split into separate jobs (not a matrix) so that
   # swatinem/rust-cache's auto-generated cache key, which includes
   # `${{ github.job }}`, differs between the two targets. A shared matrix
   # would collide on the job id and only one target's artifacts would
   # survive across runs — in practice x86 was always rebuilding from scratch.
-  # Linux and Windows are also separate jobs for symmetry.
+  # Linux remains a separate best-effort job. Windows publishing is disabled.
 
   build-macos-arm64:
     needs: [resolve, delete-old-release, check-reuse]
     if: |
       !failure() && !cancelled() &&
       (needs.check-reuse.result == 'skipped' || needs.check-reuse.outputs.can_reuse == 'false')
-    runs-on: macos-latest
+    runs-on: macos-15
+    permissions:
+      contents: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set Up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: lts/*
+          node-version: 24.18.0
 
       - name: Set Up Deno
-        uses: denoland/setup-deno@v2
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
         with:
-          deno-version: v2.x
+          deno-version: v2.9.3
 
       - name: Set Up Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable action
         with:
+          toolchain: 1.97.1
           targets: aarch64-apple-darwin
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # pinned v2 branch commit
         with:
           workspaces: './src-tauri -> target'
 
       - name: Install Frontend Dependencies
-        run: deno install
+        run: deno install --frozen
 
       - name: Process CHANGELOG
         run: deno task process-changelog
@@ -344,7 +494,7 @@ jobs:
           echo "✓ committed template snapshot verified"
 
       - name: Build and publish ad-hoc macOS package
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACCELERATE_URL: ${{ secrets.ACCELERATE_URL }}
@@ -360,7 +510,8 @@ jobs:
 
             ## macOS installation
             This GitHub package is ad-hoc signed and is not Apple-notarized. On first launch, macOS may require **Open** from the context menu or approval in **Privacy & Security**.
-          args: --target aarch64-apple-darwin
+          args: --target aarch64-apple-darwin -- --locked
+          includeUpdaterJson: false
           prerelease: ${{ needs.resolve.outputs.prerelease == 'true' }}
 
   build-macos-x86:
@@ -368,34 +519,37 @@ jobs:
     if: |
       !failure() && !cancelled() &&
       (needs.check-reuse.result == 'skipped' || needs.check-reuse.outputs.can_reuse == 'false')
-    runs-on: macos-latest
+    runs-on: macos-15
+    permissions:
+      contents: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set Up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: lts/*
+          node-version: 24.18.0
 
       - name: Set Up Deno
-        uses: denoland/setup-deno@v2
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
         with:
-          deno-version: v2.x
+          deno-version: v2.9.3
 
       - name: Set Up Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable action
         with:
+          toolchain: 1.97.1
           targets: x86_64-apple-darwin
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # pinned v2 branch commit
         with:
           workspaces: './src-tauri -> target'
 
       - name: Install Frontend Dependencies
-        run: deno install
+        run: deno install --frozen
 
       - name: Process CHANGELOG
         run: deno task process-changelog
@@ -428,7 +582,7 @@ jobs:
           echo "✓ committed template snapshot verified"
 
       - name: Build and publish ad-hoc macOS package
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACCELERATE_URL: ${{ secrets.ACCELERATE_URL }}
@@ -441,7 +595,8 @@ jobs:
 
             ## macOS installation
             This GitHub package is ad-hoc signed and is not Apple-notarized. On first launch, macOS may require **Open** from the context menu or approval in **Privacy & Security**.
-          args: --target x86_64-apple-darwin
+          args: --target x86_64-apple-darwin -- --locked
+          includeUpdaterJson: false
           prerelease: ${{ needs.resolve.outputs.prerelease == 'true' }}
 
   build-linux:
@@ -450,20 +605,22 @@ jobs:
       !failure() && !cancelled() &&
       (needs.check-reuse.result == 'skipped' || needs.check-reuse.outputs.can_reuse == 'false')
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set Up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: lts/*
+          node-version: 24.18.0
 
       - name: Set Up Deno
-        uses: denoland/setup-deno@v2
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
         with:
-          deno-version: v2.x
+          deno-version: v2.9.3
 
       - name: Install Linux Dependencies
         run: |
@@ -479,15 +636,17 @@ jobs:
             librsvg2-dev
 
       - name: Set Up Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable action
+        with:
+          toolchain: 1.97.1
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # pinned v2 branch commit
         with:
           workspaces: './src-tauri -> target'
 
       - name: Install Frontend Dependencies
-        run: deno install
+        run: deno install --frozen
 
       - name: Process CHANGELOG
         run: deno task process-changelog
@@ -520,7 +679,7 @@ jobs:
           echo "✓ committed template snapshot verified"
 
       - name: Build and Release with Tauri Action
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACCELERATE_URL: ${{ secrets.ACCELERATE_URL }}
@@ -529,101 +688,18 @@ jobs:
           releaseName: ${{ needs.resolve.outputs.release_name }}
           releaseBody: |
             ${{ steps.decode.outputs.content }}
-          args: ""
+          args: -- --locked
+          includeUpdaterJson: false
           prerelease: ${{ needs.resolve.outputs.prerelease == 'true' }}
 
-  build-windows:
-    needs: [resolve, delete-old-release, check-reuse]
-    if: |
-      !failure() && !cancelled() &&
-      (needs.check-reuse.result == 'skipped' || needs.check-reuse.outputs.can_reuse == 'false')
-    runs-on: windows-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set Up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
-
-      - name: Set Up Deno
-        uses: denoland/setup-deno@v2
-        with:
-          deno-version: v2.x
-
-      - name: Set Up Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: './src-tauri -> target'
-
-      - name: Install Frontend Dependencies
-        run: deno install
-
-      - name: Process CHANGELOG
-        run: deno task process-changelog
-
-      - name: Read CHANGELOG
-        id: decode
-        shell: bash
-        run: |
-          content=$(cat CHANGELOG.MD)
-          echo "content<<EOF" >> $GITHUB_OUTPUT
-          echo "$content" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Download Binaries
-        run: deno task download-binaries
-
-      - name: Verify committed config template snapshot
-        shell: bash
-        run: |
-          set -euo pipefail
-          deno task sync-templates
-          test -f src/config/templates/generated.ts \
-            || { echo "::error::committed generated.ts is missing"; exit 1; }
-          grep -q "BUILT_IN_TEMPLATE_OBJECTS" src/config/templates/generated.ts \
-            || { echo "::error::generated.ts missing BUILT_IN_TEMPLATE_OBJECTS export"; exit 1; }
-          grep -q "BUILD_TIME_TEMPLATE_SOURCE" src/config/templates/generated.ts \
-            || { echo "::error::generated.ts missing BUILD_TIME_TEMPLATE_SOURCE metadata"; exit 1; }
-          grep -q "singBoxVersion: 'v" src/config/templates/generated.ts \
-            || { echo "::error::generated.ts missing singBoxVersion"; exit 1; }
-          echo "✓ committed template snapshot verified"
-
-      - name: Build tun-service
-        shell: bash
-        run: |
-          set -euo pipefail
-          deno task build:tun-service --release
-          test -f src-tauri/binaries/tun-service-x86_64-pc-windows-msvc.exe \
-            || { echo "::error::tun-service binary was not staged for Tauri externalBin"; exit 1; }
-          echo "✓ tun-service staged for Tauri externalBin"
-
-      - name: Build and Release with Tauri Action
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ACCELERATE_URL: ${{ secrets.ACCELERATE_URL }}
-        with:
-          tagName: ${{ needs.resolve.outputs.tag_name }}
-          releaseName: ${{ needs.resolve.outputs.release_name }}
-          releaseBody: |
-            ${{ steps.decode.outputs.content }}
-          args: ""
-          prerelease: ${{ needs.resolve.outputs.prerelease == 'true' }}
-
-  # ── 6. Delete oversized caches produced by this run ───────────────
+  # ── 7. Delete oversized caches produced by this run ───────────────
   # Runs after all build jobs (including their rust-cache post-save steps)
   # complete. Only prunes caches above the size threshold; the weekly
   # cache-cleanup workflow handles "keep N most recent" pruning.
   cleanup-oversized-caches:
-    needs: [build-macos-arm64, build-macos-x86, build-linux, build-windows]
+    needs: [build-macos-arm64, build-macos-x86, build-linux]
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       actions: write
       contents: read
@@ -641,7 +717,7 @@ jobs:
           threshold_human=$(numfmt --to=iec --suffix=B "$MAX_BYTES" 2>/dev/null || echo "$MAX_BYTES B")
           echo "Scanning caches in $REPO for entries larger than $threshold_human"
 
-          gh cache list --repo "$REPO" --limit 100 \
+          gh cache list --repo "$REPO" --limit 10000 \
             --json id,key,sizeInBytes > caches.json
 
           jq -r --argjson max_bytes "$MAX_BYTES" \

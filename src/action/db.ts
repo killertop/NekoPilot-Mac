@@ -4,8 +4,6 @@ import { toast } from 'sonner';
 import { getSingBoxUserAgent, t } from '../utils/helper';
 import { isLocalProxyLink } from './proxy-link';
 
-export { isLocalProxyLink } from './proxy-link';
-
 
 
 // Tracks in-flight insertSubscription calls by URL.
@@ -16,6 +14,40 @@ const inflightInsertions = new Map<string, Promise<string>>();
 /** Converts the stable native import error codes into actionable UI copy. */
 export function formatSubscriptionImportError(error: unknown): string {
     const code = error instanceof Error ? error.message : String(error);
+    if (code.includes('subscription_destination_not_public')) {
+        return t('import_remote_address_blocked');
+    }
+    if (code.includes('unsupported_subscription_scheme')) {
+        return t('import_remote_scheme_unsupported');
+    }
+    if (code.includes('subscription_dns_resolution_failed')) {
+        return t('import_dns_resolution_failed');
+    }
+    if (
+        code.includes('subscription_too_many_redirects') ||
+        code.includes('subscription_redirect_missing_location') ||
+        code.includes('subscription_redirect_invalid')
+    ) {
+        return t('import_redirect_invalid');
+    }
+    if (code.includes('subscription_response_too_large')) {
+        return t('import_response_too_large');
+    }
+    if (
+        code.includes('subscription_client_failed') ||
+        code.includes('subscription_response_read_failed') ||
+        code.includes('invalid_accelerated_subscription_url') ||
+        code.includes('[CONFIG_LOAD] PRIMARY_FAILED') ||
+        code.includes('[CONFIG_LOAD] BOTH_FAILED') ||
+        code.includes('TIMEOUT') ||
+        code.includes('CONNECT_ERROR') ||
+        code.includes('REQUEST_ERROR')
+    ) {
+        return t('import_fetch_failed');
+    }
+    if (code.includes('subscription_response_invalid_format')) {
+        return t('import_response_invalid');
+    }
     if (code.includes('proxy_link_missing_reality_public_key')) {
         return t('import_missing_reality_public_key');
     }
@@ -43,13 +75,15 @@ export function formatSubscriptionImportError(error: unknown): string {
  * prevent the TOCTOU race that would otherwise create duplicate DB records.
  */
 export function insertSubscription(url: string, name?: string): Promise<string> {
-    const inflight = inflightInsertions.get(url);
+    const normalizedUrl = url.trim();
+    const normalizedName = name?.trim() || undefined;
+    const inflight = inflightInsertions.get(normalizedUrl);
     if (inflight) return inflight;
 
-    const promise = _insertSubscription(url, name).finally(() => {
-        inflightInsertions.delete(url);
+    const promise = _insertSubscription(normalizedUrl, normalizedName).finally(() => {
+        inflightInsertions.delete(normalizedUrl);
     });
-    inflightInsertions.set(url, promise);
+    inflightInsertions.set(normalizedUrl, promise);
     return promise;
 }
 

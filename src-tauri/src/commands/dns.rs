@@ -42,7 +42,8 @@ pub(crate) static DNSSERVERDICT: [&str; 29] = [
     "9.9.9.9", // Quad9 DNS
 ];
 
-pub(crate) fn is_ip_address(s: &str) -> bool {
+#[cfg(test)]
+fn is_ip_address(s: &str) -> bool {
     s.parse::<std::net::IpAddr>().is_ok()
 }
 
@@ -72,14 +73,13 @@ pub(crate) async fn probe_dns_server(
         return;
     }
 
-    // A-query for www.baidu.com — universally resolvable, short label.
-    let mut payload = vec![
-        0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    ];
-    payload.extend_from_slice(&[
-        3, b'w', b'w', b'w', 5, b'b', b'a', b'i', b'd', b'u', 3, b'c', b'o', b'm', 0,
-    ]);
-    payload.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
+    // A-query for www.baidu.com — universally resolvable, short label. A
+    // fresh transaction ID prevents a delayed/spoofed response from a prior
+    // probe being counted as success.
+    let transaction_id: u16 = rand::random();
+    let Some(payload) = build_dns_a_query("www.baidu.com", transaction_id) else {
+        return;
+    };
 
     if socket.send(&payload).await.is_err() {
         return;
@@ -87,7 +87,7 @@ pub(crate) async fn probe_dns_server(
 
     let mut buf = [0u8; 512];
     match timeout(Duration::from_millis(500), socket.recv(&mut buf)).await {
-        Ok(Ok(len)) if len >= 12 && buf[0] == 0x12 && buf[1] == 0x34 => {
+        Ok(Ok(len)) if dns_response_header_valid(&buf[..len], transaction_id) => {
             let elapsed = start.elapsed();
             let padded_dns: String = format!("{:<20}", dns);
             log::info!(
@@ -155,9 +155,10 @@ pub async fn get_best_dns_server() -> Option<String> {
 
 // ── Low-level A-record resolver ───────────────────────────────────────
 
-fn build_dns_a_query(hostname: &str) -> Option<Vec<u8>> {
+fn build_dns_a_query(hostname: &str, transaction_id: u16) -> Option<Vec<u8>> {
+    let [id_high, id_low] = transaction_id.to_be_bytes();
     let mut payload = vec![
-        0xAB, 0xCD, // Transaction ID
+        id_high, id_low, // Transaction ID
         0x01, 0x00, // Flags: standard query, recursion desired
         0x00, 0x01, // QDCOUNT = 1
         0x00, 0x00, // ANCOUNT = 0
@@ -189,14 +190,29 @@ fn skip_dns_name(buf: &[u8], mut pos: usize) -> Option<usize> {
         }
         // Compression pointer: top two bits set.
         if (len & 0xC0) == 0xC0 {
-            return Some(pos + 2);
+            return (pos + 1 < buf.len()).then_some(pos + 2);
         }
-        pos += 1 + len;
+        if (len & 0xC0) != 0 {
+            return None;
+        }
+        pos = pos.checked_add(1 + len)?;
     }
 }
 
-fn parse_dns_a_record(buf: &[u8]) -> Option<Ipv4Addr> {
-    if buf.len() < 12 {
+fn dns_response_header_valid(buf: &[u8], expected_id: u16) -> bool {
+    if buf.len() < 12 || u16::from_be_bytes([buf[0], buf[1]]) != expected_id {
+        return false;
+    }
+    let flags = u16::from_be_bytes([buf[2], buf[3]]);
+    let is_response = flags & 0x8000 != 0;
+    let is_truncated = flags & 0x0200 != 0;
+    let response_code = flags & 0x000f;
+    let question_count = u16::from_be_bytes([buf[4], buf[5]]);
+    is_response && !is_truncated && response_code == 0 && question_count == 1
+}
+
+fn parse_dns_a_record(buf: &[u8], expected_id: u16) -> Option<Ipv4Addr> {
+    if !dns_response_header_valid(buf, expected_id) {
         return None;
     }
     let ancount = u16::from_be_bytes([buf[6], buf[7]]) as usize;
@@ -204,17 +220,20 @@ fn parse_dns_a_record(buf: &[u8]) -> Option<Ipv4Addr> {
         return None;
     }
     let mut pos = skip_dns_name(buf, 12)?;
-    pos += 4; // QTYPE + QCLASS
+    pos = pos.checked_add(4)?; // QTYPE + QCLASS
+    if pos > buf.len() {
+        return None;
+    }
 
     for _ in 0..ancount {
         pos = skip_dns_name(buf, pos)?;
-        if pos + 10 > buf.len() {
+        if pos.checked_add(10)? > buf.len() {
             return None;
         }
         let rtype = u16::from_be_bytes([buf[pos], buf[pos + 1]]);
         let rdlength = u16::from_be_bytes([buf[pos + 8], buf[pos + 9]]) as usize;
-        pos += 10;
-        if rtype == 1 && rdlength == 4 && pos + 4 <= buf.len() {
+        pos = pos.checked_add(10)?;
+        if rtype == 1 && rdlength == 4 && pos.checked_add(4)? <= buf.len() {
             return Some(Ipv4Addr::new(
                 buf[pos],
                 buf[pos + 1],
@@ -222,7 +241,10 @@ fn parse_dns_a_record(buf: &[u8]) -> Option<Ipv4Addr> {
                 buf[pos + 3],
             ));
         }
-        pos += rdlength;
+        pos = pos.checked_add(rdlength)?;
+        if pos > buf.len() {
+            return None;
+        }
     }
     None
 }
@@ -238,7 +260,8 @@ pub(crate) async fn resolve_a_record(hostname: &str, dns_server: &str) -> Option
         "[::]:0"
     };
 
-    let payload = build_dns_a_query(hostname)?;
+    let transaction_id: u16 = rand::random();
+    let payload = build_dns_a_query(hostname, transaction_id)?;
     let socket = UdpSocket::bind(bind_addr).await.ok()?;
     socket.connect(ns_addr).await.ok()?;
     socket.send(&payload).await.ok()?;
@@ -249,7 +272,7 @@ pub(crate) async fn resolve_a_record(hostname: &str, dns_server: &str) -> Option
         .ok()? // timeout elapsed -> None
         .ok()?; // io::Error -> None
 
-    parse_dns_a_record(&buf[..len])
+    parse_dns_a_record(&buf[..len], transaction_id)
 }
 
 // Keep an explicit unused warning-killer for IpAddr when compiled on
@@ -294,16 +317,16 @@ mod tests {
 
     #[test]
     fn builds_only_valid_dns_a_queries() {
-        let query = build_dns_a_query("www.example.com").expect("valid query");
+        let query = build_dns_a_query("www.example.com", 0xABCD).expect("valid query");
         assert_eq!(&query[..2], &[0xAB, 0xCD]);
         assert_eq!(&query[query.len() - 4..], &[0, 1, 0, 1]);
-        assert!(build_dns_a_query("bad..example").is_none());
-        assert!(build_dns_a_query(&format!("{}.example", "a".repeat(64))).is_none());
+        assert!(build_dns_a_query("bad..example", 1).is_none());
+        assert!(build_dns_a_query(&format!("{}.example", "a".repeat(64)), 1).is_none());
     }
 
     #[test]
     fn parses_a_record_from_a_complete_response() {
-        let mut response = build_dns_a_query("www.example.com").expect("valid query");
+        let mut response = build_dns_a_query("www.example.com", 0xABCD).expect("valid query");
         response[2] = 0x81;
         response[3] = 0x80;
         response[6] = 0;
@@ -317,11 +340,34 @@ mod tests {
             203, 0, 113, 7,
         ]);
         assert_eq!(
-            parse_dns_a_record(&response),
+            parse_dns_a_record(&response, 0xABCD),
             Some(Ipv4Addr::new(203, 0, 113, 7)),
         );
         response.truncate(response.len() - 2);
-        assert_eq!(parse_dns_a_record(&response), None);
+        assert_eq!(parse_dns_a_record(&response, 0xABCD), None);
+    }
+
+    #[test]
+    fn rejects_spoofed_or_invalid_dns_responses() {
+        let mut response = build_dns_a_query("www.example.com", 0xABCD).expect("valid query");
+        response[2] = 0x81;
+        response[3] = 0x80;
+        response[6] = 0;
+        response[7] = 1;
+        response.extend_from_slice(&[
+            0xC0, 0x0C, 0x00, 0x01, 0x00, 0x01, 0, 0, 0, 60, 0, 4, 1, 1, 1, 1,
+        ]);
+
+        assert!(parse_dns_a_record(&response, 0x1234).is_none());
+        response[2] = 0x01; // query, not response
+        assert!(parse_dns_a_record(&response, 0xABCD).is_none());
+        response[2] = 0x81;
+        response[3] = 0x83; // NXDOMAIN
+        assert!(parse_dns_a_record(&response, 0xABCD).is_none());
+        response[3] = 0x80;
+        response[2] |= 0x02; // truncated
+        assert!(parse_dns_a_record(&response, 0xABCD).is_none());
+        assert!(!dns_response_header_valid(&response[..8], 0xABCD));
     }
 
     #[test]

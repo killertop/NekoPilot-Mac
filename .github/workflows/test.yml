@@ -19,27 +19,30 @@ jobs:
   # Frontend unit tests (vitest). Lightweight — no Rust toolchain, no
   # Linux system deps. Runs in parallel with the cargo job below.
   frontend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set Up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: lts/*
+          node-version: 24.18.0
 
       - name: Set Up Deno
-        uses: denoland/setup-deno@v2
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
         with:
-          deno-version: v2.x
+          deno-version: v2.9.3
 
-      - name: Install Dependencies
-        run: deno install
+      - name: Install locked dependencies
+        run: deno install --frozen
 
-      - name: Check UI Standards
-        run: deno task check:ui
+      - name: Audit dependencies
+        run: deno audit --lock=deno.lock
+
+      - name: Build production frontend
+        run: deno task build
 
       - name: Run Frontend Tests
         run: deno task test
@@ -63,7 +66,7 @@ jobs:
       CARGO_HTTP_MULTIPLEXING: "false"
       CARGO_NET_RETRY: "10"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install Linux Dependencies
         run: |
@@ -79,26 +82,29 @@ jobs:
             librsvg2-dev
 
       - name: Set Up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: lts/*
+          node-version: 24.18.0
 
       - name: Set Up Deno
-        uses: denoland/setup-deno@v2
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
         with:
-          deno-version: v2.x
+          deno-version: v2.9.3
 
       - name: Install Frontend Dependencies
-        run: deno install
+        run: deno install --frozen
 
       - name: Download Sidecar Binaries
         run: deno task download-binaries
 
       - name: Set Up Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable action
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # pinned v2 branch commit
         with:
           workspaces: './src-tauri -> target'
 
@@ -111,12 +117,18 @@ jobs:
       - name: Fetch Rust Dependencies
         run: |
           for attempt in 1 2 3; do
-            cargo fetch --manifest-path src-tauri/Cargo.toml && exit 0
+            cargo fetch --manifest-path src-tauri/Cargo.toml --locked && exit 0
             echo "::warning::cargo fetch attempt ${attempt} failed (transient crates.io network error); retrying..."
             sleep $((attempt * 5))
           done
           echo "::error::cargo fetch failed after 3 attempts"
           exit 1
 
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+
+      - name: Lint Rust workspace
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --all-targets --locked --offline -- -D warnings
+
       - name: Run Rust Tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib --offline
+        run: cargo test --manifest-path src-tauri/Cargo.toml --workspace --locked --offline

@@ -215,11 +215,11 @@ All four release channels (dev, beta, stable, manual) are served by a **single w
 1. A `push` that modifies `src-tauri/tauri.conf.json` on the channel's own branch (dev: `feature/dev`, beta: `feature/beta`, stable: `main`), or
 2. A manual `workflow_dispatch` from the Actions tab, where the operator picks the channel.
 
-The workflow's `resolve` job maps the trigger to a channel, then derives all channel-specific parameters (tag name, prerelease flag, template branch, etc.). Beta and stable have a `check-reuse` job that can skip the full build by copying artifacts from the upstream channel (dev→beta, beta→stable) when the version matches.
+The workflow's `resolve` job maps the trigger to a channel, then derives all channel-specific parameters (tag name and prerelease flag). Beta and stable have a `check-reuse` job that can skip the full build by copying artifacts from the upstream channel (dev→beta, beta→stable) only when both the version and the Git-object fingerprint of every build input match.
 
 Do **not** split this back into per-channel workflow files. The earlier multi-file design wasted GitHub Actions cache (each workflow had its own Rust cache namespace) and required every build-step change to be replicated four times. Do **not** chain releases with `workflow_run` triggers — an earlier design caused an automatic dev→beta→stable cascade on every dev push. If you see a reason to re-introduce either pattern, treat it as a design change that needs explicit discussion, not a "missing feature" to patch back in.
 
-The canonical way to cut a release on any channel is `make bump` on that channel's branch, then push. Nothing else.
+The canonical way to prepare a release version is `make bump` on that channel's branch. It synchronizes the four application-version fields and deliberately does not stage or commit anything. Update `CHANGELOG.MD`, run the release preflight, then explicitly commit and push the release change.
 
 ## Privileged helper version bump (macOS)
 
@@ -318,18 +318,18 @@ Use `make linux-check` instead (wraps `scripts/linux-check.sh`). The
 script:
 
 1. `ssh`s into the Linux VM (default `root@100.91.1.95`; override with
-   `ONEBOX_LINUX_VM=user@host`). If the VM is unreachable it prints a
+   `NEKOPILOT_LINUX_VM=user@host`). The legacy `ONEBOX_LINUX_VM` name remains
+   a fallback for existing local setups. If the VM is unreachable it prints a
    note asking me to start the VM manually and exits — **never try to
    guess the VM's up state or attempt to boot it automatically**, I have
    a snapshot and will start it.
-2. `git fetch` + `git checkout --detach <local HEAD>` on the VM so the
-   committed baseline matches local.
-3. Pipes `git diff HEAD --binary` through `git apply` on the VM so
-   whatever WIP I have in the working tree lands without a commit.
-4. Runs `cargo check` on the VM and tails the output.
-
-A second invocation re-runs cleanly because step 2 starts with
-`git reset --hard HEAD` to unwind the previous patch.
+2. Fetches the commit, then creates a detached worktree below
+   `/tmp/nekopilot-linux-check.*`; it never switches, resets, or cleans the
+   VM's normal checkout.
+3. Pipes the tracked `git diff HEAD --binary` through `git apply` in that
+   isolated worktree. Untracked files are listed and deliberately not copied.
+4. Runs locked workspace `cargo check` there and removes the temporary
+   worktree on exit.
 
 **CWD reminder**: every `Bash` call starts from the project root; shell state does NOT persist between calls (per global CLAUDE.md). Use absolute paths (`cargo check --manifest-path src-tauri/Cargo.toml`, `bash /abs/path/to/scripts/build-helper.sh`) instead of `cd src-tauri && …` — chaining `cd` breaks the next tool call's assumptions and wastes rounds re-locating files.
 

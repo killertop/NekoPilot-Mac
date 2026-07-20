@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import Body from "../components/home/body";
 import { useVPNOperations } from "../components/home/hooks";
 import { PowerToggle } from "../components/home/power-toggle";
@@ -43,9 +42,9 @@ export default function HomePage() {
     void toggleService(isEmpty);
   };
 
-  const statusText = useMemo(() => {
+  const statusText = (() => {
     if (subscriptionsError) {
-      return t("subscription_load_failed", "Subscription list unavailable");
+      return t("subscription_load_failed", "Config list unavailable");
     }
     if (subscriptionsLoading) return t("loading");
     switch (operationStatus) {
@@ -56,7 +55,7 @@ export default function HomePage() {
       default:
         return isRunning ? t("connected") : t("not_connected");
     }
-  }, [operationStatus, isRunning, subscriptionsError, subscriptionsLoading]);
+  })();
 
   const phase: "idle" | "connecting" | "on" = isLoading
     ? "connecting"

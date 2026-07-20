@@ -139,11 +139,13 @@ export function useAutoNodeSelection(isRunning: boolean): void {
 
     const switchIfSafe = async (candidate: string) => {
       const selector = await getExitGatewaySelector();
+      if (cancelled) return;
       if (!selector.all.includes(candidate) || selector.now === candidate) return;
 
       let connections: ConnectionsPayload;
       try {
         connections = await fetchConnections();
+        if (cancelled) return;
       } catch (error) {
         // If connection state is unavailable, preserve existing traffic and
         // defer the switch instead of guessing that it is safe.
@@ -156,15 +158,19 @@ export function useAutoNodeSelection(isRunning: boolean): void {
         console.info("[auto-node] switch deferred until the next cycle because a long-lived connection is active");
         return;
       }
+      if (cancelled) return;
       await selectExitGatewayNode(candidate);
+      if (cancelled) return;
       const identifier = subscriptionIdentifierForNode(candidate);
       try {
-        const writes = [setStoreValue(SELECTED_NODE_STORE_KEY, candidate)];
-        if (identifier) writes.push(setStoreValue(SSI_STORE_KEY, identifier));
-        await Promise.all(writes);
+        await setStoreValue(SELECTED_NODE_STORE_KEY, candidate);
+        if (identifier) await setStoreValue(SSI_STORE_KEY, identifier);
       } catch (error) {
-        console.warn("Failed to persist automatically selected node", error);
+        if (!cancelled) {
+          console.warn("Failed to persist automatically selected node", error);
+        }
       }
+      if (cancelled) return;
       window.dispatchEvent(new Event(NODE_SELECTOR_REFRESH_EVENT));
       console.info(`[auto-node] switched to ${candidate}`);
     };
@@ -173,6 +179,7 @@ export function useAutoNodeSelection(isRunning: boolean): void {
       if (cancelled) return;
       try {
         const selector = await getExitGatewaySelector();
+        if (cancelled) return;
         if (selector.all.length > 1) {
           const delays = await measureNodeDelays(selector.all, {
             // The scheduled optimizer always owns a fresh measurement cycle.
@@ -180,6 +187,7 @@ export function useAutoNodeSelection(isRunning: boolean): void {
             force: true,
             isCancelled: () => cancelled,
           });
+          if (cancelled) return;
           const fastest = pickFastestNode(delays);
           if (!cancelled && fastest && fastest.node !== selector.now) {
             await switchIfSafe(fastest.node);

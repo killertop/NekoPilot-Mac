@@ -58,6 +58,9 @@ export const useApplyPipelineRoot = () => {
   // always be cancelled, but stale completions must never update the current
   // modal or start an older configuration.
   const applyRunRef = useRef(0);
+  useEffect(() => () => {
+    applyRunRef.current += 1;
+  }, []);
 
   // 失败状态: 弹窗提示并回到 Idle, 避免前端永久卡在 failed。
   // Suppressed while the apply modal is live — the modal surfaces the error
@@ -66,13 +69,22 @@ export const useApplyPipelineRoot = () => {
     if (engineState.kind !== "failed") return;
     if (applyPhase !== null) return;
     const reason = engineState.reason;
-    (async () => {
-      await message(`${t("connect_failed")}: ${reason}`, {
-        title: t("error"),
-        kind: "error",
-      });
-      await clearEngineError();
-    })();
+    let cancelled = false;
+    void (async () => {
+      try {
+        await message(`${t("connect_failed")}: ${reason}`, {
+          title: t("error"),
+          kind: "error",
+        });
+      } finally {
+        if (!cancelled) await clearEngineError();
+      }
+    })().catch((error) => {
+      if (!cancelled) console.error("Failed to handle engine error:", error);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [engineState.kind === "failed" ? engineState.epoch : null, applyPhase]);
 
   // Drive apply modal to 'done' / 'error' based on engine transitions that
@@ -147,26 +159,38 @@ export const useApplyPipelineRoot = () => {
       if (!isCurrentRun()) return;
       setApplyPhase("import");
 
+      let id: string;
       try {
-        const id = await insertSubscription(url, name || undefined);
+        id = await insertSubscription(url, name || undefined);
+      } catch (error) {
         if (!isCurrentRun()) return;
+        setApplyErrorTitle(t("import_failed"));
+        setApplyErrorMessage(formatSubscriptionImportError(error));
+        setApplyPhase("error");
+        return;
+      }
+
+      if (!isCurrentRun()) return;
+      try {
+        const selectImportedConfig = async () => {
+          // Clear the exact-node key first. If selecting the new config then
+          // fails, the previous SSI value remains authoritative instead of a
+          // stale exact node silently overriding the new source.
+          await setStoreValue(SELECTED_NODE_STORE_KEY, "");
+          await setStoreValue(SSI_STORE_KEY, id);
+          void swrMutate(GET_SUBSCRIPTIONS_LIST_SWR_KEY).catch((error) => {
+            console.warn("Failed to refresh config list after import:", error);
+          });
+        };
         if (autoStart) {
-          await Promise.all([
-            setStoreValue(SSI_STORE_KEY, id),
-            setStoreValue(SELECTED_NODE_STORE_KEY, ""),
-            swrMutate(GET_SUBSCRIPTIONS_LIST_SWR_KEY),
-            vpnServiceManager.stop().catch(() => {}),
-          ]);
+          await vpnServiceManager.stop();
+          await selectImportedConfig();
         } else {
           // A user explicitly chose this link, so it should become the
           // current node source immediately. When already connected, rebuild
           // the unified pool with a live reload so its nodes appear without a
           // disconnect/reconnect cycle.
-          await Promise.all([
-            setStoreValue(SSI_STORE_KEY, id),
-            setStoreValue(SELECTED_NODE_STORE_KEY, ""),
-            swrMutate(GET_SUBSCRIPTIONS_LIST_SWR_KEY),
-          ]);
+          await selectImportedConfig();
           if (engineState.kind === "running") {
             await vpnServiceManager.syncAndReload(0);
             window.dispatchEvent(new Event(NODE_SELECTOR_REFRESH_EVENT));
@@ -174,8 +198,11 @@ export const useApplyPipelineRoot = () => {
         }
       } catch (error) {
         if (!isCurrentRun()) return;
-        setApplyErrorTitle(t("import_failed"));
-        setApplyErrorMessage(formatSubscriptionImportError(error));
+        const fallback = autoStart ? t("connect_failed") : t("save_failed");
+        setApplyErrorTitle(fallback);
+        setApplyErrorMessage(
+          error instanceof Error && error.message ? error.message : fallback,
+        );
         setApplyPhase("error");
         return;
       }
@@ -201,7 +228,7 @@ export const useApplyPipelineRoot = () => {
           if (!isCurrentRun()) return;
           try {
             await vpnServiceManager.start();
-          } catch (error: any) {
+          } catch (error: unknown) {
             console.error("启动服务失败:", error);
             // syncConfig owns the error handoff for this pipeline. Without
             // rethrowing, a synchronous start failure would leave the modal
@@ -285,15 +312,11 @@ export const useVPNOperations = () => {
   const pendingStartRef = useRef<(() => void) | null>(null);
 
   const stopService = useCallback(async () => {
-    try {
-      await vpnServiceManager.stop();
-    } catch (error) {
-      console.error("停止服务失败:", error);
-    }
+    await vpnServiceManager.stop();
   }, []);
 
   const performSyncAndStart = useCallback(
-    async (onSyncError: (error: any) => Promise<void>) => {
+    async (onSyncError: (error: unknown) => Promise<void>) => {
       if (startInFlightRef.current) return;
       startInFlightRef.current = true;
       setIsPreparingStart(true);
@@ -302,7 +325,7 @@ export const useVPNOperations = () => {
           onSuccess: async () => {
             try {
               await vpnServiceManager.start();
-            } catch (error: any) {
+            } catch (error: unknown) {
               console.error("启动服务失败:", error);
               // Let syncConfig route the failure to its single error path.
               throw error;
@@ -349,17 +372,20 @@ export const useVPNOperations = () => {
       pendingStartRef.current = () => {
         void performSyncAndStart(async (error) => {
           console.error("同步配置失败:", error);
-          if (error?.message === "subscription_config_missing") {
+          const errorCode = error instanceof Error
+            ? error.message
+            : String(error);
+          if (errorCode.includes("subscription_config_missing")) {
             await message(t("subscription_config_missing"), {
               title: t("error"),
               kind: "error",
             });
           }
-          if (error?.message === "subscription_no_usable_nodes") {
+          if (errorCode.includes("subscription_no_usable_nodes")) {
             await message(
               t(
                 "subscription_no_usable_nodes",
-                "The subscription has no usable nodes.",
+                "The config has no usable nodes.",
               ),
               {
                 title: t("error"),
@@ -376,17 +402,18 @@ export const useVPNOperations = () => {
 
     await performSyncAndStart(async (error) => {
       console.error("同步配置失败:", error);
-      if (error?.message === "subscription_config_missing") {
+      const errorCode = error instanceof Error ? error.message : String(error);
+      if (errorCode.includes("subscription_config_missing")) {
         await message(t("subscription_config_missing"), {
           title: t("error"),
           kind: "error",
         });
       }
-      if (error?.message === "subscription_no_usable_nodes") {
+      if (errorCode.includes("subscription_no_usable_nodes")) {
         await message(
           t(
             "subscription_no_usable_nodes",
-            "The subscription has no usable nodes.",
+            "The config has no usable nodes.",
           ),
           {
             title: t("error"),

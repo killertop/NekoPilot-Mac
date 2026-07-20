@@ -3,10 +3,11 @@ use tauri::{AppHandle, Builder, Manager, Wry};
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
 
-// OneBox.log rotation policy — rotate when the active file exceeds 50 MB,
-// keep all rotated files (renamed to OneBox_YYYY-MM-DD_HH-MM-SS.log). A
-// startup sweep in `core::log::cleanup_old_onebox_logs` deletes rotated
-// files older than 7 days. Uncompressed — triage speed trumps disk cost.
+// NekoPilot.log rotation policy — rotate when the active file exceeds 50 MB,
+// keep all rotated files (renamed to NekoPilot_YYYY-MM-DD_HH-MM-SS.log). A
+// startup sweep in `core::log::cleanup_old_app_logs` deletes rotated files
+// older than 7 days and also cleans legacy OneBox archives. Uncompressed —
+// triage speed trumps disk cost.
 const ONEBOX_LOG_MAX_FILE_SIZE: u128 = 50 * 1024 * 1024;
 
 #[allow(unused_variables)]
@@ -48,7 +49,6 @@ pub fn register_plugins(builder: Builder<Wry>) -> Builder<Wry> {
         })
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_http::init())
-        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_os::init())

@@ -713,15 +713,6 @@ async fn upsert_into_database(
     Ok(identifier)
 }
 
-#[tauri::command]
-pub async fn upsert_subscription(
-    app: AppHandle,
-    subscription: SubscriptionUpsert,
-) -> Result<String, String> {
-    let pool = database(&app).await?;
-    upsert_into_database(&pool, subscription).await
-}
-
 fn content_disposition_filename(header: Option<&String>) -> Option<String> {
     let header = header?;
     let mut plain_filename = None;
@@ -1009,19 +1000,6 @@ pub(crate) async fn subscription_configs_for_build(
         }
     }
     Ok(configs)
-}
-
-#[tauri::command]
-pub async fn get_subscription_url(app: AppHandle, identifier: String) -> Result<String, String> {
-    let pool = database(&app).await?;
-    sqlx::query_scalar::<_, String>(
-        "SELECT subscription_url FROM subscriptions WHERE identifier = ?",
-    )
-    .bind(identifier)
-    .fetch_optional(&pool)
-    .await
-    .map_err(|error| format!("get subscription url: {error}"))?
-    .ok_or_else(|| "subscription_not_exist".to_owned())
 }
 
 #[cfg(test)]

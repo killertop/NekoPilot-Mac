@@ -156,5 +156,3 @@ export function PrestartRepairModal({
     />
   );
 }
-
-export default PrestartRepairModal;

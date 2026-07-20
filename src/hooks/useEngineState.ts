@@ -16,6 +16,7 @@ export function useEngineStateRoot(): EngineState {
             // between the invoke response and listener registration.
             try {
                 const dispose = await listen<EngineState>(ENGINE_STATE_EVENT, (e) => {
+                    if (cancelled) return;
                     const next = e.payload;
                     if (!next || typeof next.epoch !== 'number') return;
                     if (next.epoch <= lastEpoch) return;
@@ -28,7 +29,7 @@ export function useEngineStateRoot(): EngineState {
                 }
                 unlisten = dispose;
             } catch (e) {
-                console.error('[engine-state] listen failed:', e);
+                if (!cancelled) console.error('[engine-state] listen failed:', e);
             }
 
             // Then fetch the current snapshot. If an event arrived between
@@ -42,7 +43,7 @@ export function useEngineStateRoot(): EngineState {
                     setState(snapshot);
                 }
             } catch (e) {
-                console.error('[engine-state] get_engine_state failed:', e);
+                if (!cancelled) console.error('[engine-state] get_engine_state failed:', e);
             }
         })();
 

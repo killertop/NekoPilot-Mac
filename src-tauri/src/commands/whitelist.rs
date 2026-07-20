@@ -6,6 +6,8 @@
 //! a client update. The live list is persisted via `tauri-plugin-store`
 //! so an offline restart still has the last known whitelist on hand.
 
+use std::collections::HashSet;
+
 use serde_json::json;
 use tauri::{AppHandle, Wry};
 use tauri_plugin_http::reqwest;
@@ -33,12 +35,47 @@ const WHITELIST_KEY_UPDATED_AT: &str = "updated_at";
 const WHITELIST_TTL_SECS: u64 = 24 * 3600;
 /// How often the background task wakes up to check staleness.
 const WHITELIST_CHECK_INTERVAL_SECS: u64 = 6 * 3600;
+const MAX_WHITELIST_RESPONSE_BYTES: usize = 512 * 1024;
+const MAX_WHITELIST_ENTRIES: usize = 4_096;
 
 fn now_unix_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+fn is_valid_sha256_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn normalize_whitelist_hashes<'a>(
+    values: impl IntoIterator<Item = &'a str>,
+) -> Result<Vec<String>, &'static str> {
+    let mut seen = HashSet::new();
+    let mut hashes = Vec::new();
+    for value in values {
+        let value = value.trim();
+        if value.is_empty() || value.starts_with('#') {
+            continue;
+        }
+        if !is_valid_sha256_hex(value) {
+            return Err("whitelist_invalid_hash");
+        }
+        if seen.insert(value.to_owned()) {
+            if hashes.len() >= MAX_WHITELIST_ENTRIES {
+                return Err("whitelist_too_many_entries");
+            }
+            hashes.push(value.to_owned());
+        }
+    }
+    if hashes.is_empty() {
+        return Err("whitelist_empty");
+    }
+    Ok(hashes)
 }
 
 async fn fetch_whitelist_from_remote() -> Option<Vec<String>> {
@@ -54,21 +91,53 @@ async fn fetch_whitelist_from_remote() -> Option<Vec<String>> {
         }
     };
     match client.get(WHITELIST_REMOTE_URL).send().await {
-        Ok(resp) if resp.status().is_success() => match resp.text().await {
-            Ok(text) => {
-                let hashes: Vec<String> = text
-                    .lines()
-                    .map(|l| l.trim().to_string())
-                    .filter(|l| !l.is_empty())
-                    .collect();
-                log::info!("[WHITELIST] Fetched {} entries from remote", hashes.len());
-                Some(hashes)
+        Ok(mut resp) if resp.status().is_success() => {
+            if resp
+                .content_length()
+                .is_some_and(|length| length > MAX_WHITELIST_RESPONSE_BYTES as u64)
+            {
+                log::warn!("[WHITELIST] Remote response is too large");
+                return None;
             }
-            Err(e) => {
-                log::warn!("[WHITELIST] Failed to read response body: {}", e);
-                None
+            let mut body = Vec::new();
+            loop {
+                match resp.chunk().await {
+                    Ok(Some(chunk)) => {
+                        let Some(next_len) = body.len().checked_add(chunk.len()) else {
+                            log::warn!("[WHITELIST] Remote response size overflow");
+                            return None;
+                        };
+                        if next_len > MAX_WHITELIST_RESPONSE_BYTES {
+                            log::warn!("[WHITELIST] Remote response exceeded size limit");
+                            return None;
+                        }
+                        body.extend_from_slice(&chunk);
+                    }
+                    Ok(None) => break,
+                    Err(e) => {
+                        log::warn!("[WHITELIST] Failed to read response body: {}", e);
+                        return None;
+                    }
+                }
             }
-        },
+            let text = match std::str::from_utf8(&body) {
+                Ok(text) => text,
+                Err(_) => {
+                    log::warn!("[WHITELIST] Remote response is not UTF-8");
+                    return None;
+                }
+            };
+            match normalize_whitelist_hashes(text.lines()) {
+                Ok(hashes) => {
+                    log::info!("[WHITELIST] Fetched {} entries from remote", hashes.len());
+                    Some(hashes)
+                }
+                Err(error) => {
+                    log::warn!("[WHITELIST] Rejected remote response: {error}");
+                    None
+                }
+            }
+        }
         Ok(resp) => {
             log::warn!(
                 "[WHITELIST] Remote returned unexpected status {}",
@@ -99,6 +168,7 @@ pub(crate) fn load_whitelist_hashes(app: &AppHandle<Wry>) -> Vec<String> {
     open_whitelist_store(app)
         .and_then(|s| s.get(WHITELIST_KEY_HASHES))
         .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+        .and_then(|hashes| normalize_whitelist_hashes(hashes.iter().map(String::as_str)).ok())
         .unwrap_or_default()
 }
 
@@ -122,7 +192,7 @@ fn save_whitelist_cache(app: &AppHandle<Wry>, hashes: &[String]) {
 async fn refresh_whitelist_if_stale(app: &AppHandle<Wry>) {
     let stale = match load_whitelist_timestamp(app) {
         None => true,
-        Some(ts) => now_unix_secs().saturating_sub(ts) >= WHITELIST_TTL_SECS,
+        Some(ts) => whitelist_cache_is_stale(now_unix_secs(), ts),
     };
     if !stale {
         log::debug!("[WHITELIST] Cache is fresh, skipping refresh");
@@ -133,6 +203,10 @@ async fn refresh_whitelist_if_stale(app: &AppHandle<Wry>) {
         Some(hashes) => save_whitelist_cache(app, &hashes),
         None => log::warn!("[WHITELIST] Remote fetch failed, retaining existing cache"),
     }
+}
+
+fn whitelist_cache_is_stale(now: u64, timestamp: u64) -> bool {
+    timestamp > now || now - timestamp >= WHITELIST_TTL_SECS
 }
 
 /// Call once during app setup. Refreshes the remote whitelist every 24 h
@@ -147,4 +221,42 @@ pub fn spawn_whitelist_refresh_task(app: AppHandle<Wry>) {
             .await;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hash(byte: char) -> String {
+        std::iter::repeat_n(byte, 64).collect()
+    }
+
+    #[test]
+    fn remote_hashes_are_validated_deduplicated_and_nonempty() {
+        let a = hash('a');
+        let b = hash('b');
+        let input = format!("# comment\n{a}\n{a}\n{b}\n");
+        assert_eq!(
+            normalize_whitelist_hashes(input.lines()).unwrap(),
+            vec![a, b]
+        );
+        assert!(normalize_whitelist_hashes(["", "# comment"]).is_err());
+        assert!(normalize_whitelist_hashes([hash('A').as_str()]).is_err());
+        assert!(normalize_whitelist_hashes(["xyz"]).is_err());
+    }
+
+    #[test]
+    fn remote_hash_count_is_bounded() {
+        let hashes = (0..=MAX_WHITELIST_ENTRIES)
+            .map(|index| format!("{index:064x}"))
+            .collect::<Vec<_>>();
+        assert!(normalize_whitelist_hashes(hashes.iter().map(String::as_str)).is_err());
+    }
+
+    #[test]
+    fn future_cache_timestamp_is_treated_as_stale() {
+        assert!(whitelist_cache_is_stale(100, 101));
+        assert!(!whitelist_cache_is_stale(100, 100));
+        assert!(whitelist_cache_is_stale(100 + WHITELIST_TTL_SECS, 100));
+    }
 }

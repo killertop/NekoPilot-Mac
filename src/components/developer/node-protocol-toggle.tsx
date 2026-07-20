@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Tag } from "react-bootstrap-icons";
 import { getShowNodeProtocol, setShowNodeProtocol } from "../../single/store";
 import { t } from "../../utils/helper";
@@ -8,22 +8,30 @@ import { ToggleSetting } from "../settings/common";
 export default function ToggleNodeProtocol() {
   const [toggle, setToggle] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const didInteract = useRef(false);
 
   useEffect(() => {
+    let cancelled = false;
     const loadState = async () => {
       try {
         const state: boolean = await getShowNodeProtocol();
-        setToggle(state);
-      } catch (error) {
-        console.warn("Error loading node protocol state, defaulting to false.");
+        if (!cancelled && !didInteract.current) setToggle(state);
+      } catch {
+        if (!cancelled) {
+          console.warn("Error loading node protocol state, defaulting to false.");
+        }
       }
     };
-    loadState();
+    void loadState();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleToggle = async () => {
     if (isSaving) return;
     const next = !toggle;
+    didInteract.current = true;
     setToggle(next);
     try {
       setIsSaving(true);

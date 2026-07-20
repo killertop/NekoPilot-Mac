@@ -8,15 +8,9 @@
     "autostart:allow-enable",
     "autostart:allow-is-enabled",
     "core:default",
-    "core:window:allow-close",
-    "core:window:allow-minimize",
     "core:window:allow-set-theme",
-    "core:window:allow-start-dragging",
-    "core:window:default",
-    "dialog:default",
-    "fs:default",
+    "dialog:allow-message",
     "opener:allow-default-urls",
-    "clipboard-manager:allow-write-text",
-    "deep-link:default"
+    "clipboard-manager:allow-write-text"
   ]
 }

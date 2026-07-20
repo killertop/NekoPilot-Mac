@@ -26,6 +26,7 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 const REFRESH_POLL_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(20);
 const MIN_RULE_SET_BYTES: usize = 32;
+const MAX_RULE_SET_BYTES: usize = 64 * 1024 * 1024;
 static REFRESH_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 struct RuleSetSource {
@@ -244,9 +245,12 @@ fn refresh_is_due(directory: &Path) -> bool {
     let last_refresh = fs::read_to_string(refresh_timestamp_path(directory))
         .ok()
         .and_then(|timestamp| timestamp.trim().parse::<u64>().ok());
-    last_refresh.is_none_or(|timestamp| {
-        now_unix_secs().saturating_sub(timestamp) >= REFRESH_INTERVAL.as_secs()
-    })
+    refresh_timestamp_is_due(now_unix_secs(), last_refresh)
+}
+
+fn refresh_timestamp_is_due(now: u64, last_refresh: Option<u64>) -> bool {
+    last_refresh
+        .is_none_or(|timestamp| timestamp > now || now - timestamp >= REFRESH_INTERVAL.as_secs())
 }
 
 fn proxy_port(app: &AppHandle) -> u16 {
@@ -271,7 +275,7 @@ async fn download_rule_set(source: &RuleSetSource, port: u16) -> Result<Vec<u8>,
         .user_agent("NekoPilot rule-set updater")
         .build()
         .map_err(|error| format!("create rule-set client: {error}"))?;
-    let response = client
+    let mut response = client
         .get(source.url)
         .send()
         .await
@@ -283,11 +287,27 @@ async fn download_rule_set(source: &RuleSetSource, port: u16) -> Result<Vec<u8>,
             response.status()
         ));
     }
-    let bytes = response
-        .bytes()
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_RULE_SET_BYTES as u64)
+    {
+        return Err(format!("downloaded {} is too large", source.file_name));
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
         .await
         .map_err(|error| format!("read {}: {error}", source.file_name))?
-        .to_vec();
+    {
+        let next_len = bytes
+            .len()
+            .checked_add(chunk.len())
+            .ok_or_else(|| format!("downloaded {} is too large", source.file_name))?;
+        if next_len > MAX_RULE_SET_BYTES {
+            return Err(format!("downloaded {} is too large", source.file_name));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
     if !is_valid_rule_set(&bytes) {
         return Err(format!("downloaded {} is invalid", source.file_name));
     }
@@ -411,6 +431,17 @@ mod tests {
         let mut valid = vec![0_u8; MIN_RULE_SET_BYTES];
         valid[..3].copy_from_slice(b"SRS");
         assert!(is_valid_rule_set(&valid));
+    }
+
+    #[test]
+    fn future_refresh_timestamp_is_due_immediately() {
+        assert!(refresh_timestamp_is_due(100, Some(101)));
+        assert!(!refresh_timestamp_is_due(100, Some(100)));
+        assert!(refresh_timestamp_is_due(
+            100 + REFRESH_INTERVAL.as_secs(),
+            Some(100)
+        ));
+        assert!(refresh_timestamp_is_due(100, None));
     }
 
     #[tokio::test]

@@ -1,4 +1,4 @@
-.PHONY: update dev build bump linux-check proxy-info help
+.PHONY: update dev build bump check-versions linux-check proxy-info help
 
 PROXY_HOST ?= 127.0.0.1
 PORT ?=
@@ -16,27 +16,16 @@ help:
 	@echo "               Optional: make update PORT=7890 [PROXY_HOST=127.0.0.1]"
 	@echo "  dev          Start Tauri dev server"
 	@echo "  build        Build the unsigned Tauri application"
-	@echo "  bump         Bump patch version in tauri.conf.json and commit all changes"
+	@echo "  bump         Bump the synchronized application patch version (no commit)"
+	@echo "  check-versions  Verify package, Tauri, and Cargo versions match"
 	@echo "  proxy-info   Print Makefile and inherited proxy environment"
 	@echo "  linux-check  Run cargo check on the Linux VM with local WIP patched"
 
 bump:
-	@current=$$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' src-tauri/tauri.conf.json | head -1); \
-	if [ -z "$$current" ]; then echo "Failed to read current version"; exit 1; fi; \
-	new=$$(echo $$current | awk -F. '{printf "%d.%d.%d", $$1, $$2, $$3+1}'); \
-	echo "Version: $$current -> $$new"; \
-	sed -i '' -E "s/\"version\": \"$$current\"/\"version\": \"$$new\"/" src-tauri/tauri.conf.json; \
-	echo ""; \
-	echo "Files to be committed:"; \
-	git status --short; \
-	echo ""; \
-	printf "Proceed with commit? [y/N] "; \
-	read ans; \
-	if [ "$$ans" = "y" ] || [ "$$ans" = "Y" ]; then \
-		git add -A && git commit -m "chore: bump version"; \
-	else \
-		echo "Aborted. Version bump kept in working tree."; \
-	fi
+	@deno task version:bump
+
+check-versions:
+	@deno task check:versions
 
 update:
 	@$(MAKE) --no-print-directory proxy-info
@@ -64,6 +53,6 @@ build:
 # Sync the Linux VM to local HEAD, apply any WIP as a patch, and run
 # cargo check on the VM. Does NOT commit or push. If the VM is offline
 # the script prompts to start it manually and exits. Override the
-# target host via ONEBOX_LINUX_VM=user@host.
+# target host via NEKOPILOT_LINUX_VM=user@host.
 linux-check:
 	@scripts/linux-check.sh

@@ -18,11 +18,19 @@ const BOOLEAN_KEYS: [&str; 4] = [
     "skip_system_proxy_key",
 ];
 const STRING_LIMIT: usize = 16 * 1024;
+const TEMPLATE_CACHE_LIMIT: usize = 2 * 1024 * 1024;
 const RULESET_PREFIX: &str = "custom_ruleset_";
 const RULESET_KEYS: [&str; 2] = ["custom_ruleset_direct", "custom_ruleset_proxy"];
 const TEMPLATE_CACHE_MARKER: &str = "-template-config-cache";
 const NODE_DELAY_HISTORY_KEY: &str = "node_delay_history_key";
 const MAX_NODE_DELAY_HISTORY_ENTRIES: usize = 2_000;
+const INTEGER_KEYS: [&str; 1] = ["github_release_update_last_check_ms"];
+const STRING_KEYS: [&str; 4] = [
+    "selected_subscription_identifier",
+    "selected_node_tag_key",
+    "user_agent_key",
+    "clash_api_secret_key",
+];
 
 pub(crate) fn is_valid_ip_cidr(value: &str) -> bool {
     let Some((address, prefix)) = value.trim().rsplit_once('/') else {
@@ -87,6 +95,17 @@ fn validate_setting(key: &str, value: &Value) -> Result<(), String> {
     if key.trim().is_empty() || key.len() > 256 {
         return Err("invalid_setting_key".to_owned());
     }
+    let serialized_limit = if key.contains(TEMPLATE_CACHE_MARKER) {
+        TEMPLATE_CACHE_LIMIT
+    } else {
+        STRING_LIMIT
+    };
+    let serialized_len = serde_json::to_vec(value)
+        .map_err(|_| "invalid_setting_value".to_owned())?
+        .len();
+    if serialized_len > serialized_limit {
+        return Err("setting_value_too_large".to_owned());
+    }
     if key == PROXY_PORT_KEY {
         let port = value
             .as_u64()
@@ -113,6 +132,18 @@ fn validate_setting(key: &str, value: &Value) -> Result<(), String> {
         }
         return Ok(());
     }
+    if INTEGER_KEYS.contains(&key) {
+        if value.as_u64().is_none() {
+            return Err("invalid_integer_setting".to_owned());
+        }
+        return Ok(());
+    }
+    if STRING_KEYS.contains(&key) {
+        if value.as_str().is_none() {
+            return Err("invalid_string_setting".to_owned());
+        }
+        return Ok(());
+    }
     if key == NODE_DELAY_HISTORY_KEY {
         if !validate_node_delay_history(value) {
             return Err("invalid_node_delay_history".to_owned());
@@ -132,12 +163,7 @@ fn validate_setting(key: &str, value: &Value) -> Result<(), String> {
         return Ok(());
     }
     if let Some(string) = value.as_str() {
-        let max_len = if key.contains(TEMPLATE_CACHE_MARKER) {
-            2 * 1024 * 1024
-        } else {
-            STRING_LIMIT
-        };
-        if string.len() > max_len {
+        if string.len() > serialized_limit {
             return Err("setting_value_too_large".to_owned());
         }
     }
@@ -252,5 +278,27 @@ mod tests {
             &serde_json::json!({"node-a":{"delay":-1,"measuredAt":1}}),
         )
         .is_err());
+        assert!(validate_setting(
+            "github_release_update_last_check_ms",
+            &serde_json::json!(1_784_000_000_000_u64),
+        )
+        .is_ok());
+        assert!(validate_setting(
+            "github_release_update_last_check_ms",
+            &serde_json::json!("now"),
+        )
+        .is_err());
+        assert!(validate_setting("selected_node_tag_key", &serde_json::json!(7)).is_err());
+    }
+
+    #[test]
+    fn rejects_oversized_non_string_values() {
+        let oversized = serde_json::json!({"data": vec![0_u8; super::STRING_LIMIT]});
+        assert_eq!(
+            validate_setting("unknown_legacy_key", &oversized),
+            Err("setting_value_too_large".to_owned())
+        );
+        let bounded = serde_json::json!({"enabled": true});
+        assert!(validate_setting("unknown_legacy_key", &bounded).is_ok());
     }
 }

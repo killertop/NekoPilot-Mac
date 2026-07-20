@@ -4,6 +4,7 @@ import {
     isValidIpCidr,
     kindClass,
     kindsInClass,
+    normalizeRuleSet,
     RULE_ACTIONS,
 } from '../config/merger/custom-rules';
 import {
@@ -27,6 +28,7 @@ describe('CIDR validation', () => {
     it('accepts valid IPv4 and IPv6 networks', () => {
         expect(isValidIpCidr('10.240.31.0/24')).toBe(true);
         expect(isValidIpCidr('2001:db8::/32')).toBe(true);
+        expect(isValidIpCidr('::ffff:192.168.1.1/128')).toBe(true);
     });
 
     it('rejects out-of-range prefixes and invalid addresses', () => {
@@ -34,7 +36,22 @@ describe('CIDR validation', () => {
         expect(isValidIpCidr('10.240.31.999/24')).toBe(false);
         expect(isValidIpCidr('010.240.31.0/24')).toBe(false);
         expect(isValidIpCidr('2001:db8::/129')).toBe(false);
+        expect(isValidIpCidr('192.168.1.1::/64')).toBe(false);
         expect(isValidIpCidr('10.240.31.0')).toBe(false);
+    });
+});
+
+describe('persisted rule normalization', () => {
+    it('drops malformed entries, trims values and removes duplicates', () => {
+        expect(normalizeRuleSet({
+            domain: [' example.com ', 42, '', 'example.com'],
+            domain_suffix: null,
+            ip_cidr: ['10.0.0.0/8', 'invalid', { value: '::/0' }],
+        })).toEqual({
+            domain: ['example.com'],
+            domain_suffix: [],
+            ip_cidr: ['10.0.0.0/8'],
+        });
     });
 });
 

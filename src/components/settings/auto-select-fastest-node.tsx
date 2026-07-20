@@ -17,13 +17,19 @@ export default function ToggleAutoSelectFastestNode() {
   const didInteract = useRef(false);
 
   useEffect(() => {
+    let cancelled = false;
     void getAutoSelectFastestNode()
       .then((value) => {
-        if (!didInteract.current) setIsEnabled(value);
+        if (!cancelled && !didInteract.current) setIsEnabled(value);
       })
       .catch((error) => {
-        console.warn("Failed to load automatic node selection setting", error);
+        if (!cancelled) {
+          console.warn("Failed to load automatic node selection setting", error);
+        }
       });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleToggle = async () => {

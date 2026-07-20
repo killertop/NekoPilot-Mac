@@ -46,7 +46,7 @@ pub(crate) enum PortCleanupError {
 impl PortCleanupError {
     pub(crate) fn start_error(&self) -> String {
         format!(
-            "{}:{}: port is occupied and OneBox could not stop the process",
+            "{}:{}: port is occupied and NekoPilot could not stop the process",
             PORT_OCCUPIED_CANNOT_START,
             self.port()
         )
@@ -167,9 +167,10 @@ fn find_pids_linux(port: u16) -> Vec<u32> {
     }
 }
 
-fn process_command(pid: u32) -> Option<String> {
+#[cfg(unix)]
+fn process_command(pid: u32, field: &str) -> Option<String> {
     let output = Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "command="])
+        .args(["-p", &pid.to_string(), "-o", field])
         .output()
         .ok()?;
     if !output.status.success() {
@@ -179,22 +180,68 @@ fn process_command(pid: u32) -> Option<String> {
     (!command.is_empty()).then_some(command)
 }
 
-fn is_owned_singbox_command(command: &str, config_path: &str) -> bool {
-    command.contains("sing-box") && command.contains(config_path)
+#[cfg(unix)]
+fn is_singbox_executable(executable: &str) -> bool {
+    let Some(name) = std::path::Path::new(executable.trim())
+        .file_name()
+        .and_then(|name| name.to_str())
+    else {
+        return false;
+    };
+    name == "sing-box" || name.starts_with("sing-box-")
+}
+
+#[cfg(unix)]
+fn is_owned_singbox_process(executable: &str, command: &str, config_path: &str) -> bool {
+    is_singbox_executable(executable)
+        && ["-c", "--config"].iter().any(|option| {
+            let argument = format!("{option} {config_path}");
+            let has_valid_end = |end: usize| {
+                end == command.len()
+                    || command[end..]
+                        .chars()
+                        .next()
+                        .is_some_and(char::is_whitespace)
+            };
+            (command.starts_with(&argument) && has_valid_end(argument.len())) || {
+                let pattern = format!(" {argument}");
+                command.match_indices(&pattern).any(|(start, _)| {
+                    let end = start + pattern.len();
+                    has_valid_end(end)
+                })
+            }
+        })
 }
 
 fn owned_pids(app: &AppHandle, pids: &[u32]) -> Vec<u32> {
-    let Ok(config_dir) = app.path().app_config_dir() else {
+    // The old Windows path attempted to invoke Unix `ps`, then treated every
+    // failure as "not ours". Keep that fail-closed behavior explicit until a
+    // native executable-path + argument query is implemented.
+    #[cfg(windows)]
+    {
+        let _ = (app, pids);
         return Vec::new();
-    };
-    let config_path = config_dir.join("config.json").to_string_lossy().to_string();
-    pids.iter()
-        .copied()
-        .filter(|pid| {
-            process_command(*pid)
-                .is_some_and(|command| is_owned_singbox_command(&command, &config_path))
-        })
-        .collect()
+    }
+
+    #[cfg(unix)]
+    {
+        let Ok(config_dir) = app.path().app_config_dir() else {
+            return Vec::new();
+        };
+        let config_path = config_dir.join("config.json").to_string_lossy().to_string();
+        pids.iter()
+            .copied()
+            .filter(|pid| {
+                let executable = process_command(*pid, "comm=");
+                let command = process_command(*pid, "command=");
+                executable
+                    .zip(command)
+                    .is_some_and(|(executable, command)| {
+                        is_owned_singbox_process(&executable, &command, &config_path)
+                    })
+            })
+            .collect()
+    }
 }
 
 fn terminate_owned_pid(pid: u32) -> Result<(), String> {
@@ -247,6 +294,12 @@ pub(crate) fn ensure_owned_port_available(
     let mut killed_pids = Vec::new();
     let mut kill_errors = Vec::new();
     for pid in &owned {
+        // Revalidate immediately before signaling to narrow the PID-reuse
+        // window between the listener scan and cleanup.
+        if !owned_pids(app, &[*pid]).contains(pid) {
+            kill_errors.push(format!("pid {}: ownership changed before termination", pid));
+            continue;
+        }
         match terminate_owned_pid(*pid) {
             Ok(()) => killed_pids.push(*pid),
             Err(e) => kill_errors.push(format!("pid {}: {}", pid, e)),
@@ -382,23 +435,38 @@ pub fn kill_orphans(app: tauri::AppHandle, port: Option<u16>) -> KillOrphansResu
 
 #[cfg(test)]
 mod tests {
-    use super::is_owned_singbox_command;
+    #[cfg(unix)]
+    use super::is_owned_singbox_process;
 
     /// A port nobody listens on must be reported free without killing
     /// anything — the idempotent no-op path the start guard depends on.
     #[test]
+    #[cfg(unix)]
     fn only_the_own_singbox_command_is_repairable() {
         let config = "/Users/test/Library/Application Support/dev.nekopilot.desktop/config.json";
-        assert!(is_owned_singbox_command(
+        assert!(is_owned_singbox_process(
+            "/Applications/NekoPilot.app/Contents/MacOS/sing-box",
             "/Applications/NekoPilot.app/Contents/MacOS/sing-box run -c /Users/test/Library/Application Support/dev.nekopilot.desktop/config.json",
             config,
         ));
-        assert!(!is_owned_singbox_command(
+        assert!(!is_owned_singbox_process(
+            "/Applications/OneBox.app/Contents/MacOS/sing-box",
             "/Applications/OneBox.app/Contents/MacOS/sing-box run -c /Users/test/Library/Application Support/cloud.oneoh.onebox/config.json",
             config,
         ));
-        assert!(!is_owned_singbox_command(
-            "/usr/bin/python -m http.server 6789",
+        assert!(!is_owned_singbox_process(
+            "/usr/bin/python",
+            "/usr/bin/python -m http.server 6789 --note sing-box --config /Users/test/Library/Application Support/dev.nekopilot.desktop/config.json",
+            config
+        ));
+        assert!(!is_owned_singbox_process(
+            "/Applications/NekoPilot.app/Contents/MacOS/sing-box",
+            "/Applications/NekoPilot.app/Contents/MacOS/sing-box run -c /Users/test/Library/Application Support/dev.nekopilot.desktop/config.json.bak",
+            config,
+        ));
+        assert!(!is_owned_singbox_process(
+            "/tmp/my-sing-box-wrapper",
+            "/tmp/my-sing-box-wrapper run -c /Users/test/Library/Application Support/dev.nekopilot.desktop/config.json",
             config
         ));
     }

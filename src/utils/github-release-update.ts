@@ -33,7 +33,7 @@ async function updateText(
   const translations = (await getLanguage()) === "zh" ? zh : en;
   let text = translations[id] ?? id;
   for (const [key, value] of Object.entries(params ?? {})) {
-    text = text.replace(new RegExp(`{{\\s*${key}\\s*}}`, "g"), value);
+    text = text.replace(new RegExp(`{{\\s*${key}\\s*}}`, "g"), () => value);
   }
   return text;
 }
@@ -62,20 +62,41 @@ export function isVersionNewer(published: string, current: string): boolean {
   return false;
 }
 
-function checkDue(lastCheck: unknown, now: number): boolean {
+export function isUpdateCheckDue(lastCheck: unknown, now: number): boolean {
   const last = typeof lastCheck === "number" ? lastCheck : Number(lastCheck);
-  return !Number.isFinite(last) || now - last >= UPDATE_CHECK_INTERVAL_MS;
+  return !Number.isFinite(last) || last > now ||
+    now - last >= UPDATE_CHECK_INTERVAL_MS;
+}
+
+/** Only allow the canonical project release pages returned by GitHub's API. */
+export function safeGitHubReleaseUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== "https:" ||
+      url.hostname.toLowerCase() !== "github.com" ||
+      url.username ||
+      url.password ||
+      !url.pathname.toLowerCase().startsWith(
+        "/killertop/nekopilot-mac/releases/",
+      )
+    ) return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
 }
 
 function validRelease(value: GitHubRelease): value is ValidGitHubRelease {
   return typeof value.tag_name === "string" &&
-    typeof value.html_url === "string";
+    safeGitHubReleaseUrl(value.html_url) !== undefined;
 }
 
 export async function checkForGitHubReleaseUpdate(): Promise<void> {
   const now = Date.now();
   const lastCheck = await getStoreValue(LAST_UPDATE_CHECK_KEY, 0);
-  if (!checkDue(lastCheck, now)) return;
+  if (!isUpdateCheckDue(lastCheck, now)) return;
 
   // Count unsuccessful attempts too: an offline launch must not repeatedly
   // generate GitHub requests while the user is working without a network.
@@ -95,6 +116,8 @@ export async function checkForGitHubReleaseUpdate(): Promise<void> {
 
     const release = (await response.json()) as GitHubRelease;
     if (!validRelease(release) || release.draft || release.prerelease) return;
+    const releaseUrl = safeGitHubReleaseUrl(release.html_url);
+    if (!releaseUrl) return;
 
     const currentVersion = await invoke<string>("get_app_version");
     if (!isVersionNewer(release.tag_name, currentVersion)) return;
@@ -114,7 +137,7 @@ export async function checkForGitHubReleaseUpdate(): Promise<void> {
         cancelLabel,
       },
     );
-    if (download) await openUrl(release.html_url);
+    if (download) await openUrl(releaseUrl);
   } catch (error) {
     // Update discovery is opportunistic and must never disturb startup or
     // show an error dialog when GitHub is unavailable.

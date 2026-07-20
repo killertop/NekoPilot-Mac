@@ -40,6 +40,28 @@ export function emptyRuleSet(): RuleSet {
     return { domain: [], domain_suffix: [], ip_cidr: [] };
 }
 
+function normalizedStrings(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    return Array.from(new Set(
+        value
+            .filter((entry): entry is string => typeof entry === 'string')
+            .map((entry) => entry.trim())
+            .filter(Boolean),
+    ));
+}
+
+/** Normalize untrusted persisted rule data before the UI sorts or edits it. */
+export function normalizeRuleSet(value: unknown): RuleSet {
+    const candidate = value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Partial<Record<RuleKind, unknown>>
+        : {};
+    return {
+        domain: normalizedStrings(candidate.domain),
+        domain_suffix: normalizedStrings(candidate.domain_suffix),
+        ip_cidr: normalizedStrings(candidate.ip_cidr).filter(isValidIpCidr),
+    };
+}
+
 export function isRuleSetEmpty(set: RuleSet): boolean {
     return set.domain.length === 0
         && set.domain_suffix.length === 0
@@ -58,29 +80,18 @@ function isValidIpv4Address(address: string): boolean {
 
 function isValidIpv6Address(address: string): boolean {
     if (!address || address.includes('%')) return false;
-    const halves = address.split('::');
-    if (halves.length > 2) return false;
-
-    const countGroups = (part: string): number | null => {
-        if (!part) return 0;
-        const groups = part.split(':');
-        let count = 0;
-        for (const group of groups) {
-            if (/^[0-9a-fA-F]{1,4}$/.test(group)) {
-                count += 1;
-            } else if (group.includes('.') && isValidIpv4Address(group)) {
-                count += 2;
-            } else {
-                return null;
-            }
-        }
-        return count;
-    };
-
-    const left = countGroups(halves[0]);
-    const right = countGroups(halves[1] ?? '');
-    if (left === null || right === null) return false;
-    return halves.length === 2 ? left + right < 8 : left === 8;
+    if (address.includes('.')) {
+        const ipv4Tail = address.slice(address.lastIndexOf(':') + 1);
+        if (!isValidIpv4Address(ipv4Tail)) return false;
+    }
+    try {
+        // URL's bracketed-host parser implements the complete IPv6 grammar,
+        // including compressed and IPv4-mapped forms, without accepting an
+        // IPv4 address followed by an invalid `::` suffix.
+        return new URL(`http://[${address}]/`).hostname.length > 0;
+    } catch {
+        return false;
+    }
 }
 
 /** Validate an IP network exactly as sing-box expects it. */

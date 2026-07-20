@@ -201,6 +201,7 @@ unsafe extern "system" fn service_main(argc: u32, argv: *mut PWSTR) {
         if STOP_REQUESTED.load(Ordering::SeqCst) {
             dns::log_line("stop requested; killing child");
             let _ = child.kill();
+            let _ = child.wait();
             break;
         }
         match child.try_wait() {
@@ -213,6 +214,7 @@ unsafe extern "system" fn service_main(argc: u32, argv: *mut PWSTR) {
             Err(e) => {
                 dns::log_line(&format!("try_wait error: {}", e));
                 let _ = child.kill();
+                let _ = child.wait();
                 unexpected_exit_code = Some(1);
                 break;
             }

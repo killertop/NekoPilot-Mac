@@ -4,6 +4,7 @@ set -euo pipefail
 repository=/opt/git/NekoPilot-Mac.git
 github_remote=github
 zero=0000000000000000000000000000000000000000
+refspecs=()
 
 while read -r oldrev newrev refname; do
   case "$refname" in
@@ -15,8 +16,14 @@ while read -r oldrev newrev refname; do
   esac
 
   if [ "$newrev" = "$zero" ]; then
-    git --git-dir="$repository" push "$github_remote" ":$refname"
+    refspecs+=(":$refname")
   else
-    git --git-dir="$repository" push "$github_remote" "$refname:$refname"
+    refspecs+=("$refname:$refname")
   fi
 done
+
+if [ "${#refspecs[@]}" -gt 0 ]; then
+  # A receive can update several refs. Mirror them as one transaction so a
+  # network/auth failure cannot leave GitHub with only part of the push.
+  git --git-dir="$repository" push --atomic "$github_remote" "${refspecs[@]}"
+fi

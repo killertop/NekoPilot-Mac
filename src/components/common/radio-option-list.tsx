@@ -13,6 +13,7 @@ interface RadioOptionListProps<T extends string> {
   onChange: (v: T) => void;
   options: RadioOption<T>[];
   ariaLabel: string;
+  disabled?: boolean;
 }
 
 /**
@@ -31,6 +32,7 @@ export function RadioOptionList<T extends string>({
   onChange,
   options,
   ariaLabel,
+  disabled = false,
 }: RadioOptionListProps<T>) {
   const groupName = useId();
   return (
@@ -41,12 +43,13 @@ export function RadioOptionList<T extends string>({
     >
       {options.map((opt) => {
         const checked = value === opt.key;
+        const optionDisabled = disabled || opt.disabled;
         return (
           <label
             key={opt.key}
             className={clsx(
               "flex items-center gap-3 px-4 py-3 transition-colors",
-              opt.disabled
+              optionDisabled
                 ? "opacity-50 cursor-not-allowed"
                 : "cursor-pointer active:bg-[var(--onebox-row-active)]",
             )}
@@ -73,8 +76,8 @@ export function RadioOptionList<T extends string>({
               type="radio"
               name={groupName}
               checked={checked}
-              onChange={() => !opt.disabled && onChange(opt.key)}
-              disabled={opt.disabled}
+              onChange={() => !optionDisabled && onChange(opt.key)}
+              disabled={optionDisabled}
               className="
                                 shrink-0 appearance-none
                                 size-4.5 rounded-full
@@ -89,6 +92,8 @@ export function RadioOptionList<T extends string>({
                                 before:-translate-x-1/2 before:-translate-y-1/2
                                 before:opacity-0 checked:before:opacity-100
                                 transition-colors
+                                focus-visible:outline-2 focus-visible:outline-offset-2
+                                focus-visible:outline-[var(--onebox-blue)]
                                 disabled:opacity-40
                             "
             />

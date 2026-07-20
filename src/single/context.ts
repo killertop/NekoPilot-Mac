@@ -1,5 +1,6 @@
 import { createContext } from "react";
 
+export const LanguageContext = createContext<"zh" | "en">("en");
 
 
 export type ActiveScreenType = 'home' | 'configuration' | 'settings' | 'router_settings';

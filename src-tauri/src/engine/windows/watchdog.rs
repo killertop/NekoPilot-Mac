@@ -40,7 +40,9 @@ pub(crate) fn spawn(app: AppHandle, process_mode: Arc<ProxyMode>, spawn_epoch: u
                         "[win-svc-watchdog] service transitioned to stopped — firing handle_process_termination"
                     );
                     let payload = tauri_plugin_shell::process::TerminatedPayload {
-                        code: Some(0),
+                        // A service stop without `ProcessManager::is_stopping`
+                        // is an unexpected engine failure, not a clean idle.
+                        code: Some(1),
                         signal: None,
                     };
                     handle_process_termination(&app, &process_mode, payload, spawn_epoch).await;

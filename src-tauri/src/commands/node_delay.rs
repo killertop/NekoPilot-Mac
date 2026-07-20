@@ -15,7 +15,21 @@ use super::config_write::write_atomically;
 
 const URL_TEST_TARGET: &str = "https://www.google.com/generate_204";
 const URL_TEST_TIMEOUT: Duration = Duration::from_secs(6);
+const URL_TEST_KILL_GRACE: Duration = Duration::from_secs(1);
 const DEFAULT_DIRECT_DNS: &str = "223.5.5.5";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UrlTestCompletion {
+    Success,
+    ExitedFailure,
+    ProcessMayBeRunning,
+}
+
+impl UrlTestCompletion {
+    fn requires_kill(self) -> bool {
+        matches!(self, Self::ProcessMayBeRunning)
+    }
+}
 
 struct TemporaryConfig(PathBuf);
 
@@ -138,23 +152,39 @@ pub async fn measure_offline_node_delay(
     let completion = tokio::time::timeout(URL_TEST_TIMEOUT, async {
         while let Some(event) = events.recv().await {
             match event {
-                CommandEvent::Terminated(payload) => return payload.code == Some(0),
-                CommandEvent::Error(_) => return false,
+                CommandEvent::Terminated(payload) if payload.code == Some(0) => {
+                    return UrlTestCompletion::Success;
+                }
+                CommandEvent::Terminated(_) => return UrlTestCompletion::ExitedFailure,
+                CommandEvent::Error(_) => return UrlTestCompletion::ProcessMayBeRunning,
                 _ => {}
             }
         }
-        false
+        UrlTestCompletion::ProcessMayBeRunning
     })
-    .await;
+    .await
+    .unwrap_or(UrlTestCompletion::ProcessMayBeRunning);
 
-    match completion {
-        Ok(true) => Ok(Some(started_at.elapsed().as_millis() as u64)),
-        Ok(false) => Ok(None),
-        Err(_) => {
-            let _ = child.kill();
-            Ok(None)
-        }
+    if completion.requires_kill() {
+        // `CommandEvent::Error` and an unexpectedly closed event channel do
+        // not prove that the OS process exited. CommandChild::kill consumes
+        // the handle, so use it only when termination is unconfirmed and
+        // briefly drain the termination event before removing the config.
+        let _ = child.kill();
+        let _ = tokio::time::timeout(URL_TEST_KILL_GRACE, async {
+            while let Some(event) = events.recv().await {
+                if matches!(event, CommandEvent::Terminated(_)) {
+                    break;
+                }
+            }
+        })
+        .await;
+        return Ok(None);
     }
+    if completion == UrlTestCompletion::ExitedFailure {
+        return Ok(None);
+    }
+    Ok(Some(started_at.elapsed().as_millis() as u64))
 }
 
 #[cfg(test)]
@@ -201,5 +231,12 @@ mod tests {
             prepare_url_test_config(runtime_config(), "missing").unwrap_err(),
             "url_test_node_not_found"
         );
+    }
+
+    #[test]
+    fn only_an_unconfirmed_completion_requires_process_cleanup() {
+        assert!(!UrlTestCompletion::Success.requires_kill());
+        assert!(!UrlTestCompletion::ExitedFailure.requires_kill());
+        assert!(UrlTestCompletion::ProcessMayBeRunning.requires_kill());
     }
 }

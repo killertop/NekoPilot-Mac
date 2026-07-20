@@ -25,6 +25,8 @@
 
 ```bash
 git diff --check
+deno install --frozen
+deno audit --lock=deno.lock
 deno task test
 cargo test --manifest-path src-tauri/Cargo.toml --lib
 deno task build

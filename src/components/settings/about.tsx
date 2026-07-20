@@ -68,10 +68,20 @@ function AboutSheet(
       setShowCoreInfo(false);
       return;
     }
-    getOsInfo().then(setOsInfo).catch(console.error);
-    getSingBoxUserAgent().then(setUa).catch(console.error);
-    getVersion()
+    let cancelled = false;
+    void getOsInfo().then((value) => {
+      if (!cancelled) setOsInfo(value);
+    }).catch((error) => {
+      if (!cancelled) console.error(error);
+    });
+    void getSingBoxUserAgent().then((value) => {
+      if (!cancelled) setUa(value);
+    }).catch((error) => {
+      if (!cancelled) console.error(error);
+    });
+    void getVersion()
       .then((v) => {
+        if (cancelled) return;
         try {
           const core = v.split("\n")[0].trim().split(" ")[2]?.trim() ?? "";
           setCoreVersion(core);
@@ -80,7 +90,12 @@ function AboutSheet(
         }
         setVersionDump(v);
       })
-      .catch(console.error);
+      .catch((error) => {
+        if (!cancelled) console.error(error);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [isOpen]);
 
   const copyUa = () => {
@@ -178,8 +193,10 @@ function AboutSheet(
                   label={t("kernel_version")}
                   value={coreVersion}
                   compact
-                  showChevron
-                  onPress={() => setShowCoreInfo(true)}
+                  showChevron={Boolean(versionDump)}
+                  onPress={versionDump
+                    ? () => setShowCoreInfo(true)
+                    : undefined}
                 />
                 <UaRow ua={ua} onCopy={copyUa} />
               </div>
@@ -204,7 +221,8 @@ function UaRow({ ua, onCopy }: { ua: string; onCopy: () => void }) {
     <ListRow
       compact
       title="User-Agent"
-      onPress={onCopy}
+      onPress={ua ? onCopy : undefined}
+      disabled={!ua}
       trailing={
         <div className="max-w-[160px] flex items-center gap-2">
           <span className="min-w-0 truncate text-[11px] font-mono">{ua}</span>

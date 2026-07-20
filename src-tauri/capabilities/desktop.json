@@ -7,18 +7,10 @@
   ],
   "windows": ["main"],
   "permissions": [
-    "autostart:default",
     "core:app:allow-default-window-icon",
-    "core:window:allow-destroy",
-    "core:window:allow-hide",
-    "core:window:allow-set-focus",
-    "core:window:allow-show",
     "os:allow-arch",
-    "os:allow-exe-extension",
-    "os:allow-family",
     "os:allow-locale",
     "os:allow-os-type",
-    "os:allow-platform",
     "os:allow-version",
     {
       "identifier": "http:default",

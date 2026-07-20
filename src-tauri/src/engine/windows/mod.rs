@@ -198,6 +198,7 @@ impl EngineManager for WindowsEngine {
                     mgr.mode = Some(Arc::new(mode));
                     mgr.config_path = Some(Arc::new(config_path));
                     mgr.child = Some(child);
+                    mgr.owned_pid = Some(child_pid);
                     mgr.session_epoch = Some(start_epoch);
                     mgr.is_stopping = false;
                 }
@@ -221,6 +222,7 @@ impl EngineManager for WindowsEngine {
                     mgr.mode = Some(Arc::clone(&mode_arc));
                     mgr.config_path = Some(Arc::new(config_path));
                     mgr.child = None; // managed by the SCM service
+                    mgr.owned_pid = None;
                     mgr.session_epoch = Some(start_epoch);
                     mgr.is_stopping = false;
                 }
@@ -244,22 +246,36 @@ impl EngineManager for WindowsEngine {
     }
 
     async fn stop(app: &AppHandle) -> Result<(), String> {
-        let (mode, child) = {
+        let (mode, child, owned_pid) = {
             let mut mgr = crate::core::ProcessManager::acquire();
             mgr.is_stopping = true;
-            (mgr.mode.clone(), mgr.child.take())
+            let owned_pid = mgr
+                .child
+                .as_ref()
+                .map(|child| child.pid())
+                .or(mgr.owned_pid);
+            // `CommandChild::kill` consumes the handle. Persist the PID before
+            // taking it so core can retain ownership if termination is not
+            // subsequently confirmed.
+            mgr.owned_pid = owned_pid;
+            (mgr.mode.clone(), mgr.child.take(), owned_pid)
         };
         let Some(mode) = mode else {
+            if let Some(pid) = owned_pid {
+                return Err(format!(
+                    "cannot stop owned sing-box pid {pid}: engine mode is missing"
+                ));
+            }
             return Ok(());
         };
-        let child_pid_for_log = child.as_ref().map(|c| c.pid());
         log::info!(
             "[win-stop] entry mode={:?} pm_child_pid={:?}",
             mode,
-            child_pid_for_log
+            owned_pid
         );
         match mode.as_ref() {
             crate::engine::ProxyMode::SystemProxy | crate::engine::ProxyMode::ManualProxy => {
+                let mut errors = Vec::new();
                 if matches!(mode.as_ref(), crate::engine::ProxyMode::SystemProxy) {
                     if let Err(e) = clear_system_proxy(app).await {
                         log::warn!("Failed to unset proxy: {}", e);
@@ -267,6 +283,7 @@ impl EngineManager for WindowsEngine {
                             EVENT_TAURI_LOG,
                             (2, format!("Failed to unset proxy: {}", e)),
                         );
+                        errors.push(format!("failed to clear system proxy: {e}"));
                     }
                 }
                 if let Some(child) = child {
@@ -276,18 +293,50 @@ impl EngineManager for WindowsEngine {
                         Ok(()) => log::info!("[win-stop] child_kill_result=Ok pid={}", pid),
                         Err(e) => log::info!("[win-stop] child_kill_result=Err({}) pid={}", e, pid),
                     }
-                    kill_result.map_err(|e| e.to_string())?;
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    let (alive, exit_code) = win32_pid_alive_check(pid);
-                    log::info!(
-                        "[win-stop] post_kill_alive_check pid={} alive={} exit_code={}",
-                        pid,
-                        alive,
-                        exit_code
+                    if let Err(error) = kill_result {
+                        errors.push(format!("failed to stop sing-box: {error}"));
+                    }
+                } else if let Some(pid) = owned_pid {
+                    // A prior `kill()` consumed the shell handle. Never target
+                    // the numeric PID again: it could have been recycled. The
+                    // retained PID remains a fail-closed ownership guard until
+                    // an exit is observed or the process monitor resets it.
+                    log::warn!(
+                        "[win-stop] no child handle for retained pid={pid}; checking exit only"
                     );
+                }
+
+                if let Some(pid) = owned_pid {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    let (observation, exit_code, probe_error) = win32_process_exit_observation(pid);
+                    log::info!(
+                        "[win-stop] post_kill_exit_check pid={} observation={:?} exit_code={:?} error={:?}",
+                        pid,
+                        observation,
+                        exit_code,
+                        probe_error
+                    );
+                    match observation {
+                        crate::core::ProcessExitObservation::Alive => errors.push(format!(
+                            "sing-box pid {pid} remained alive after termination"
+                        )),
+                        crate::core::ProcessExitObservation::Unknown => errors.push(format!(
+                            "could not confirm sing-box pid {pid} exited: {}",
+                            probe_error.unwrap_or_else(|| "unknown process query error".to_owned())
+                        )),
+                        crate::core::ProcessExitObservation::Exited => {
+                            let mut mgr = crate::core::ProcessManager::acquire();
+                            if mgr.owned_pid == Some(pid) {
+                                mgr.owned_pid = None;
+                            }
+                        }
+                    }
                 } else {
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                     log::info!("[win-stop] post_kill_alive_check skipped reason=no_child_pid");
+                }
+                if !errors.is_empty() {
+                    return Err(errors.join("; "));
                 }
             }
             crate::engine::ProxyMode::TunProxy => {
@@ -366,13 +415,19 @@ impl EngineManager for WindowsEngine {
     }
 }
 
-/// Probe whether a Windows PID is still alive by opening the process handle
-/// and calling GetExitCodeProcess. Returns (alive, exit_code) where
-/// alive=true means exit_code == STILL_ACTIVE (259). If the handle cannot
-/// be opened the process is assumed dead (alive=false, exit_code=0).
+/// Probe a Windows PID after a consuming `CommandChild::kill` call. Failure to
+/// open/query the process is deliberately `Unknown`, not `Exited`: losing the
+/// only ownership proof on an inconclusive query could allow a new start over
+/// a still-running sing-box.
 #[cfg(target_os = "windows")]
-fn win32_pid_alive_check(pid: u32) -> (bool, u32) {
-    use windows::Win32::Foundation::CloseHandle;
+fn win32_process_exit_observation(
+    pid: u32,
+) -> (
+    crate::core::ProcessExitObservation,
+    Option<u32>,
+    Option<String>,
+) {
+    use windows::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER};
     use windows::Win32::System::Threading::{
         GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
     };
@@ -380,15 +435,38 @@ fn win32_pid_alive_check(pid: u32) -> (bool, u32) {
     unsafe {
         let handle = match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
             Ok(h) => h,
-            Err(_) => return (false, 0),
+            Err(error) => {
+                let pid_no_longer_exists =
+                    error.code() == windows::core::HRESULT::from_win32(ERROR_INVALID_PARAMETER.0);
+                let observation = crate::core::ProcessExitObservation::from_windows_open_failure(
+                    pid_no_longer_exists,
+                );
+                return (
+                    observation,
+                    None,
+                    observation.retains_ownership().then(|| error.to_string()),
+                );
+            }
         };
         let mut exit_code: u32 = 0;
-        let ok = GetExitCodeProcess(handle, &mut exit_code).is_ok();
+        let query_result = GetExitCodeProcess(handle, &mut exit_code);
         let _ = CloseHandle(handle);
-        if ok {
-            (exit_code == STILL_ACTIVE, exit_code)
-        } else {
-            (false, 0)
+        match query_result {
+            Ok(()) if exit_code == STILL_ACTIVE => (
+                crate::core::ProcessExitObservation::Alive,
+                Some(exit_code),
+                None,
+            ),
+            Ok(()) => (
+                crate::core::ProcessExitObservation::Exited,
+                Some(exit_code),
+                None,
+            ),
+            Err(error) => (
+                crate::core::ProcessExitObservation::Unknown,
+                None,
+                Some(error.to_string()),
+            ),
         }
     }
 }
@@ -397,6 +475,12 @@ fn win32_pid_alive_check(pid: u32) -> (bool, u32) {
 /// the function is only called inside a SystemProxy arm that is itself only
 /// reachable on Windows at runtime.
 #[cfg(not(target_os = "windows"))]
-fn win32_pid_alive_check(_pid: u32) -> (bool, u32) {
-    (false, 0)
+fn win32_process_exit_observation(
+    _pid: u32,
+) -> (
+    crate::core::ProcessExitObservation,
+    Option<u32>,
+    Option<String>,
+) {
+    (crate::core::ProcessExitObservation::Unknown, None, None)
 }

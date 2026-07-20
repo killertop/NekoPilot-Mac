@@ -1,7 +1,7 @@
 mod log;
 pub(crate) mod monitor;
 
-pub use self::log::cleanup_old_onebox_logs;
+pub use self::log::cleanup_old_app_logs;
 
 use lazy_static::lazy_static;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -114,6 +114,36 @@ pub(crate) fn mixed_proxy_port(app: &AppHandle) -> u16 {
     configured_engine_ports(app).mixed_proxy
 }
 
+fn canonical_engine_config_path(
+    config_dir: &std::path::Path,
+    requested_path: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    let config_dir = std::fs::canonicalize(config_dir)
+        .map_err(|error| format!("resolve engine config directory: {error}"))?;
+    let expected = config_dir.join("config.json");
+    let requested = std::fs::canonicalize(requested_path)
+        .map_err(|error| format!("resolve engine config path: {error}"))?;
+    if requested != expected || !requested.is_file() {
+        return Err("engine_config_path_not_allowed".to_owned());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&requested, std::fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("secure engine config: {error}"))?;
+    }
+    Ok(requested)
+}
+
+fn validate_engine_config_path(app: &AppHandle, path: &str) -> Result<String, String> {
+    let config_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|error| format!("resolve engine config directory: {error}"))?;
+    canonical_engine_config_path(&config_dir, std::path::Path::new(path))
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
 pub fn get_clash_api_port(app: AppHandle) -> u16 {
     configured_engine_ports(&app).clash_api
@@ -145,6 +175,35 @@ pub(crate) fn pid_is_alive(_pid: u32) -> bool {
     true
 }
 
+/// Result of an OS-level process query after a consuming termination call.
+/// Ownership can be released only for `Exited`; both an observed live process
+/// and an inconclusive query must remain attached to `ProcessManager`.
+#[cfg(any(target_os = "windows", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProcessExitObservation {
+    Alive,
+    Exited,
+    Unknown,
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl ProcessExitObservation {
+    pub(crate) fn retains_ownership(self) -> bool {
+        !matches!(self, Self::Exited)
+    }
+
+    /// `OpenProcess` reports ERROR_INVALID_PARAMETER when the PID no longer
+    /// exists. Other failures (notably ACCESS_DENIED) are inconclusive and
+    /// must retain ownership.
+    pub(crate) fn from_windows_open_failure(pid_no_longer_exists: bool) -> Self {
+        if pid_no_longer_exists {
+            Self::Exited
+        } else {
+            Self::Unknown
+        }
+    }
+}
+
 /// True when a failed `kill(pid, SIGTERM)` failed with `ESRCH` — the process
 /// is already gone. That is the desired outcome of a stop, not a failure, so
 /// callers log it at debug rather than error.
@@ -157,7 +216,11 @@ pub(crate) fn sigterm_target_already_exited(raw_os_error: Option<i32>) -> bool {
 /// child_pid_alive, mode)`.
 fn pm_snapshot() -> (Option<u32>, Option<bool>, Option<ProxyMode>) {
     let mgr = ProcessManager::acquire();
-    let pid = mgr.child.as_ref().map(|c| c.pid());
+    let pid = mgr
+        .child
+        .as_ref()
+        .map(|child| child.pid())
+        .or(mgr.owned_pid);
     let alive = pid.map(pid_is_alive);
     let mode = mgr.mode.as_ref().map(|m| (**m).clone());
     (pid, alive, mode)
@@ -172,6 +235,11 @@ pub use crate::engine::ProxyMode;
 
 pub(crate) struct ProcessManager {
     pub(crate) child: Option<CommandChild>,
+    /// PID retained independently from `CommandChild`. On Windows the shell
+    /// plugin consumes the child handle when `kill()` is called, so this is
+    /// the ownership proof that prevents a failed stop from being reset to
+    /// Idle while the same process may still be alive.
+    pub(crate) owned_pid: Option<u32>,
     pub(crate) mode: Option<Arc<ProxyMode>>,
     pub(crate) config_path: Option<Arc<String>>,
     /// Stable identity of the currently owned engine process. Unlike the
@@ -193,6 +261,7 @@ impl ProcessManager {
     /// `on_process_terminated` before this runs.
     pub(crate) fn reset(&mut self) {
         self.child = None;
+        self.owned_pid = None;
         self.mode = None;
         self.config_path = None;
         self.session_epoch = None;
@@ -204,6 +273,7 @@ lazy_static! {
     pub(crate) static ref PROCESS_MANAGER: Arc<Mutex<ProcessManager>> =
         Arc::new(Mutex::new(ProcessManager {
             child: None,
+            owned_pid: None,
             mode: None,
             config_path: None,
             session_epoch: None,
@@ -250,6 +320,7 @@ async fn ensure_port_free_for_spawn(action: u64, port: u16) -> Result<(), String
 #[tauri::command]
 pub async fn start(app: tauri::AppHandle, path: String, mode: ProxyMode) -> Result<(), String> {
     let _lifecycle_guard = LIFECYCLE_GATE.lock().await;
+    let path = validate_engine_config_path(&app, &path)?;
     start_inner(app, path, mode).await
 }
 
@@ -638,7 +709,10 @@ pub async fn reload_config(app: tauri::AppHandle) -> Result<String, String> {
 
 #[cfg(test)]
 mod port_guard_tests {
-    use super::{engine_ports_from_config_path, ports_to_free, EnginePorts, CLASH_API_PORT};
+    use super::{
+        canonical_engine_config_path, engine_ports_from_config_path, ports_to_free, EnginePorts,
+        ProcessExitObservation, CLASH_API_PORT,
+    };
     use std::fs;
     use tempfile::NamedTempFile;
 
@@ -663,6 +737,21 @@ mod port_guard_tests {
     }
 
     #[test]
+    fn process_ownership_is_released_only_after_confirmed_exit() {
+        assert!(!ProcessExitObservation::Exited.retains_ownership());
+        assert!(ProcessExitObservation::Alive.retains_ownership());
+        assert!(ProcessExitObservation::Unknown.retains_ownership());
+        assert_eq!(
+            ProcessExitObservation::from_windows_open_failure(true),
+            ProcessExitObservation::Exited
+        );
+        assert_eq!(
+            ProcessExitObservation::from_windows_open_failure(false),
+            ProcessExitObservation::Unknown
+        );
+    }
+
+    #[test]
     fn parsed_ports_follow_the_config_file() {
         let file = NamedTempFile::new().unwrap();
         fs::write(
@@ -676,6 +765,24 @@ mod port_guard_tests {
                 mixed_proxy: 6790,
                 clash_api: 9291
             },
+        );
+    }
+
+    #[test]
+    fn engine_config_must_be_the_real_config_file_in_its_private_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let expected = directory.path().join("config.json");
+        let other = directory.path().join("other.json");
+        fs::write(&expected, "{}").unwrap();
+        fs::write(&other, "{}").unwrap();
+        let expected_canonical = fs::canonicalize(&expected).unwrap();
+        assert_eq!(
+            canonical_engine_config_path(directory.path(), &expected).unwrap(),
+            expected_canonical
+        );
+        assert_eq!(
+            canonical_engine_config_path(directory.path(), &other),
+            Err("engine_config_path_not_allowed".to_owned())
         );
     }
 }
@@ -763,13 +870,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let log_path = tmp.path().join("test.log");
 
-        let mut writer = Some(std::io::BufWriter::new(
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_path)
-                .unwrap(),
-        ));
+        let mut writer = Some(open_singbox_log_writer(&log_path).unwrap());
 
         write_singbox_log(&mut writer, "hello line 1");
         write_singbox_log(&mut writer, "hello line 2");
@@ -784,7 +885,25 @@ mod tests {
 
     #[test]
     fn test_write_singbox_log_none_writer() {
-        let mut writer: Option<std::io::BufWriter<std::fs::File>> = None;
+        let mut writer: Option<SingboxLogWriter> = None;
         write_singbox_log(&mut writer, "should not panic");
+    }
+
+    #[test]
+    fn test_write_singbox_log_stops_at_daily_cap() {
+        let tmp = TempDir::new().unwrap();
+        let log_path = tmp.path().join("capped.log");
+        let file = std::fs::File::create(&log_path).unwrap();
+        file.set_len(MAX_ACTIVE_SINGBOX_LOG_BYTES - 2).unwrap();
+        drop(file);
+
+        let mut writer = Some(open_singbox_log_writer(&log_path).unwrap());
+        write_singbox_log(&mut writer, "first line");
+        write_singbox_log(&mut writer, "must not grow");
+        flush_singbox_log(&mut writer);
+        assert_eq!(
+            std::fs::metadata(log_path).unwrap().len(),
+            MAX_ACTIVE_SINGBOX_LOG_BYTES
+        );
     }
 }

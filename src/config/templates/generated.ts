@@ -18,7 +18,7 @@ export const BUILD_TIME_TEMPLATE_SOURCE = {
     generatedAt: '2026-07-18T08:51:03.811Z',
 } as const;
 
-export const MIXED_TEMPLATE = {
+const MIXED_TEMPLATE = {
     "log": {
         "disabled": false,
         "level": "debug",

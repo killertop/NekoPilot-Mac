@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import { mutate } from "swr";
 import { deleteSubscription } from "../../action/db";
 import { refreshSubscription } from "../../action/subscription-hooks";
+import { LanguageContext } from "../../single/context";
 import {
   GET_SUBSCRIPTIONS_LIST_SWR_KEY,
   Subscription,
@@ -33,6 +34,9 @@ export const SubscriptionItem = React.memo(function SubscriptionItem({
   expanded,
   setExpanded,
 }: SubscriptionItemProps) {
+  // Context changes bypass React.memo so visible copy follows a macOS
+  // language change without requiring the config list data to refresh.
+  React.useContext(LanguageContext);
   const isExpanded = expanded === item.identifier;
   const isLocalLink = item.source_type === "local_link";
   const isLocalConfig = isLocalConfiguration(item);

@@ -58,14 +58,20 @@ export function preferredNodeForSubscription(
 }
 
 /** Selects the first node belonging to a configuration without reloading sing-box. */
-export async function switchToSubscriptionNode(identifier: string): Promise<boolean> {
+export async function switchToSubscriptionNode(
+  identifier: string,
+  options: { isCancelled?: () => boolean } = {},
+): Promise<boolean> {
   const selector = await getExitGatewaySelector();
+  if (options.isCancelled?.()) return false;
   const currentIdentifier = subscriptionIdentifierForNode(selector.now);
   if (currentIdentifier) {
     lastSelectedNodeBySubscription.set(currentIdentifier, selector.now);
   }
   const target = preferredNodeForSubscription(identifier, selector.all);
   if (!target) return false;
+  if (options.isCancelled?.()) return false;
   if (selector.now !== target) await selectExitGatewayNode(target);
+  if (options.isCancelled?.()) return false;
   return true;
 }

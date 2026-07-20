@@ -6,7 +6,7 @@
 
 NekoPilot for Mac is a macOS-first desktop proxy client built with Tauri, React, TypeScript, Rust, and sing-box. It focuses on a clear everyday workflow: import a subscription or a standalone node link, select a node, connect to that node, and inspect the connection result.
 
-> This repository is under active development. The local Release build is suitable for development and QA; the distributable package must be produced by the signed release workflow described in [docs/RELEASE.md](docs/RELEASE.md).
+> This repository is under active development. The local Release build is suitable for development and QA; the distributable package must be produced by the ad-hoc-signed GitHub release workflow described in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## Current scope
 
@@ -18,7 +18,7 @@ NekoPilot for Mac is a macOS-first desktop proxy client built with Tauri, React,
 - Persistent connection feedback such as connecting, connected, testing, and failed with a reason.
 - macOS deep-link scheme: `nekopilot://`.
 
-The current product target is macOS. Windows and Linux configuration files remain in the codebase as part of the Tauri baseline, but they are not the primary acceptance target for this repository.
+The current product and acceptance target is macOS. Linux configuration remains in the Tauri baseline and may produce best-effort packages. Windows source remains for compatibility work only; GitHub Releases do not build or publish Windows installers.
 
 ## Technology
 
@@ -39,7 +39,7 @@ The current product target is macOS. Windows and Linux configuration files remai
 Install frontend dependencies and prepare the local hooks:
 
 ```bash
-deno install
+deno install --frozen
 deno task prepare
 ```
 

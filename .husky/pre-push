@@ -9,8 +9,6 @@ if [ "$current_branch" = "local" ]; then
     exit 1
 fi
 
-. "$(dirname "$0")/_/husky.sh"
-
 echo "运行构建检查..."
 deno task build || {
     echo "❌ 构建失败! Push 已终止"

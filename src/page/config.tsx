@@ -80,7 +80,7 @@ function ConfigurationBody({
             className="min-w-0 flex-1 text-[13px]"
             style={{ color: "var(--onebox-label-secondary)" }}
           >
-            {t("subscription_load_failed", "Subscription list unavailable")}
+            {t("subscription_load_failed", "Config list unavailable")}
           </p>
           <button
             type="button"

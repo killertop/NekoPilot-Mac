@@ -10,13 +10,15 @@ export type ValidationErrors = {
 
 const acceptedConfigLink = /^(https?|vless|trojan|vmess|ss|anytls):\/\//i;
 
-const subscriptionSchema = z.object({
-  name: z.string().optional(),
-  url: z.string().trim().min(1, t("url_cannot_empty")).refine(
-    (value) => acceptedConfigLink.test(value),
-    t("please_input_valid_url"),
-  ),
-});
+function subscriptionSchema() {
+  return z.object({
+    name: z.string().optional(),
+    url: z.string().trim().min(1, t("url_cannot_empty")).refine(
+      (value) => acceptedConfigLink.test(value),
+      t("please_input_valid_url"),
+    ),
+  });
+}
 
 /**
  * Form-only state hook for the add-subscription modal.
@@ -63,7 +65,7 @@ export function useModalState() {
 
   function validate(nextName = name, nextUrl = url): boolean {
     try {
-      subscriptionSchema.parse({ name: nextName, url: nextUrl });
+      subscriptionSchema().parse({ name: nextName, url: nextUrl });
       setErrors({});
       return true;
     } catch (err) {
@@ -80,7 +82,7 @@ export function useModalState() {
 
   function submit() {
     if (!validate()) return;
-    const target = url;
+    const target = url.trim();
     setOpen(false);
     // Manual add: same modal UI as apply=1, but stays on the current
     // page (no setActiveScreen). The apply pipeline selects the imported

@@ -13,7 +13,7 @@ Required tools:
 Install dependencies from the repository root:
 
 ```bash
-deno install
+deno install --frozen
 deno task prepare
 ```
 
@@ -57,6 +57,8 @@ Formatting and production build checks:
 
 ```bash
 git diff --check
+deno audit --lock=deno.lock
+deno task check:versions
 deno task build
 ```
 

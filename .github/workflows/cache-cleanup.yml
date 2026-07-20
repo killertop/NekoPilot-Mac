@@ -20,25 +20,31 @@ permissions:
 
 jobs:
   cleanup:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - uses: actions/checkout@v4
-
       - name: Delete old or oversized caches
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          KEEP: ${{ inputs.keep || '10' }}
+          KEEP: ${{ inputs.keep || '5' }}
           MAX_BYTES: ${{ inputs.max_bytes || '943718400' }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          if ! [[ "$KEEP" =~ ^[0-9]+$ ]]; then
+            echo "::error::keep must be a non-negative integer"
+            exit 1
+          fi
+          if ! [[ "$MAX_BYTES" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::max_bytes must be a positive integer"
+            exit 1
+          fi
           echo "Listing caches in $REPO"
           echo "  keep (most recent): $KEEP"
           echo "  max bytes: $MAX_BYTES ($(numfmt --to=iec --suffix=B "$MAX_BYTES" 2>/dev/null || echo "$MAX_BYTES B"))"
 
-          gh cache list --repo "$REPO" --limit 100 \
+          gh cache list --repo "$REPO" --limit 10000 \
             --sort created_at --order desc \
             --json id,key,sizeInBytes,createdAt > caches.json
 

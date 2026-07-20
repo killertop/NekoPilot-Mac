@@ -90,8 +90,8 @@ pub fn stop_tun_and_restore_dns(dns_override: Option<&(String, String)>) -> Resu
         .output()
         .map_err(|e| format!("pkexec stop failed: {}", e))?;
     if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        log::warn!("[stop] pkexec non-zero exit: {}", stderr);
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+        return Err(format!("pkexec stop exited with {}: {stderr}", out.status));
     }
     Ok(())
 }
@@ -210,8 +210,11 @@ pub fn apply_system_dns_override(config_path: &str) -> Result<(String, String), 
         .output()
         .map_err(|e| format!("pkexec dns-override failed: {}", e))?;
     if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        log::warn!("[dns] dns-override non-zero exit: {}", stderr);
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+        return Err(format!(
+            "pkexec dns-override exited with {}: {stderr}",
+            out.status
+        ));
     }
     Ok((iface, original_dns))
 }
@@ -338,22 +341,27 @@ impl EngineManager for LinuxEngine {
     }
 
     async fn stop(app: &AppHandle) -> Result<(), String> {
-        let (mode, child) = {
+        let (mode, child_pid) = {
             let mut mgr = crate::core::ProcessManager::acquire();
             mgr.is_stopping = true;
-            (mgr.mode.clone(), mgr.child.take())
+            (
+                mgr.mode.clone(),
+                mgr.child.as_ref().map(|child| child.pid()),
+            )
         };
         let Some(mode) = mode else {
             return Ok(());
         };
         match mode.as_ref() {
             crate::engine::ProxyMode::SystemProxy | crate::engine::ProxyMode::ManualProxy => {
+                let mut errors = Vec::new();
                 if matches!(mode.as_ref(), crate::engine::ProxyMode::SystemProxy) {
-                    let _ = clear_system_proxy(app).await;
+                    if let Err(error) = clear_system_proxy(app).await {
+                        errors.push(format!("failed to clear system proxy: {error}"));
+                    }
                 }
-                if let Some(child) = child {
+                if let Some(pid) = child_pid {
                     use libc::{kill, SIGTERM};
-                    let pid = child.pid();
                     if unsafe { kill(pid as i32, SIGTERM) } != 0 {
                         let err = std::io::Error::last_os_error();
                         if crate::core::sigterm_target_already_exited(err.raw_os_error()) {
@@ -362,10 +370,26 @@ impl EngineManager for LinuxEngine {
                             log::debug!("[stop] PID {} already exited before SIGTERM", pid);
                         } else {
                             log::error!("[stop] Failed to send SIGTERM to PID {}: {}", pid, err);
+                            errors.push(format!("failed to stop sing-box: {err}"));
                         }
                     }
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                if let Some(pid) = child_pid.filter(|pid| crate::core::pid_is_alive(*pid)) {
+                    if unsafe { libc::kill(pid as i32, libc::SIGKILL) } != 0
+                        && !crate::core::sigterm_target_already_exited(
+                            std::io::Error::last_os_error().raw_os_error(),
+                        )
+                    {
+                        errors.push(format!(
+                            "failed to force-stop sing-box: {}",
+                            std::io::Error::last_os_error()
+                        ));
+                    }
+                }
+                if !errors.is_empty() {
+                    return Err(errors.join("; "));
+                }
             }
             crate::engine::ProxyMode::TunProxy => {
                 // take_dns_override drains the stash so on_process_terminated

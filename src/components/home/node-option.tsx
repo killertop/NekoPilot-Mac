@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import { t } from "../../utils/helper";
 import type { DelayStatus } from "../../utils/node-delay";
 import { nodeDisplayName, nodeProtocolLabel } from "./node-protocol";
@@ -82,12 +81,10 @@ export default function NodeOption({
   contextLabel,
 }: NodeOptionProps) {
   // 计算显示的节点名称
-  const displayName = useMemo(() => {
-    const label = nodeName === "auto"
-      ? t("auto")
-      : nodeDisplayName(nodeName, protocol);
-    return contextLabel ? `${contextLabel} · ${label}` : label;
-  }, [nodeName, protocol, contextLabel]);
+  const label = nodeName === "auto"
+    ? t("auto")
+    : nodeDisplayName(nodeName, protocol);
+  const displayName = contextLabel ? `${contextLabel} · ${label}` : label;
   const protocolLabel = nodeProtocolLabel(protocol);
 
   // 处理节点名称为空的情况

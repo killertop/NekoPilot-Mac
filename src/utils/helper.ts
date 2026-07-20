@@ -35,6 +35,7 @@ export async function initLanguage() {
     console.error("Failed to initialize language:", error);
     currentLanguage = "en";
   }
+  document.documentElement.lang = currentLanguage === "zh" ? "zh-CN" : "en";
   return currentLanguage;
 }
 
@@ -106,7 +107,7 @@ export async function getSingBoxUserAgent() {
   return `${prefix}/${osInfo.appVersion} (${osInfo.osType} ${osInfo.osArch} ${osInfo.osVersion}; sing-box ${version}; language ${osInfo.osLocale})`;
 }
 
-export async function getSingBoxConfigPath() {
+async function getSingBoxConfigPath() {
   const appConfigPath = await path.appConfigDir();
   const filePath = await path.join(appConfigPath, "config.json");
   return filePath;
@@ -115,7 +116,7 @@ export async function getSingBoxConfigPath() {
 type vpnServiceManagerMode = "SystemProxy" | "ManualProxy";
 
 type SyncConfigProps = {
-  onError?: (error: any) => void | Promise<void>;
+  onError?: (error: unknown) => void | Promise<void>;
   onSuccess?: () => void | Promise<void>;
   onRequirePrivileged?: () => void;
 };
@@ -143,7 +144,7 @@ async function isRunning() {
 }
 
 async function compileConfig(reloadIfRunning = false) {
-  const identifier = await getStoreValue(SSI_STORE_KEY);
+  const identifier = await getStoreValue<string>(SSI_STORE_KEY);
   await setMixedConfig(identifier, reloadIfRunning);
 }
 
@@ -229,9 +230,9 @@ export const vpnServiceManager = {
       console.log("配置文件路径:", configPath);
 
       await invoke("start", { app: appWindow, path: configPath, mode: mode });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Failed to start VPN service:", error);
-      const errorText = String(error?.message ?? error ?? "");
+      const errorText = error instanceof Error ? error.message : String(error ?? "");
       const occupiedPort = errorText.match(/PORT_OCCUPIED_CANNOT_START:(\d+)/)
         ?.[1];
       if (occupiedPort) {
@@ -275,13 +276,13 @@ export const vpnServiceManager = {
 // 同步版本的翻译函数
 export function t(
   id: string,
-  params?: Record<string, any> | string,
+  params?: Record<string, unknown> | string,
   defaultMessage?: string,
 ): string {
   let translation = languageOptions[currentLanguage][id];
 
   // 兼容 t('id', 'defaultMessage') 写法
-  let realParams: Record<string, any> | undefined;
+  let realParams: Record<string, unknown> | undefined;
   let realDefaultMessage: string | undefined;
 
   if (typeof params === "string") {
@@ -299,7 +300,7 @@ export function t(
     Object.keys(realParams).forEach((key) => {
       translation = translation.replace(
         new RegExp(`{{\\s*${key}\\s*}}`, "g"),
-        realParams[key],
+        () => String(realParams[key]),
       );
     });
   }

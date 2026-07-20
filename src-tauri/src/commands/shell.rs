@@ -106,5 +106,41 @@ pub async fn version(app: tauri::AppHandle) -> Result<String, String> {
         .output()
         .await
         .map_err(|e| e.to_string())?;
-    String::from_utf8(output.stdout).map_err(|e| e.to_string())
+    parse_version_output(output.status.success(), &output.stdout, &output.stderr)
+}
+
+fn parse_version_output(success: bool, stdout: &[u8], stderr: &[u8]) -> Result<String, String> {
+    if !success {
+        let error = String::from_utf8_lossy(stderr).trim().to_owned();
+        return Err(if error.is_empty() {
+            "sing-box version command failed".to_owned()
+        } else {
+            format!("sing-box version command failed: {error}")
+        });
+    }
+    let version = std::str::from_utf8(stdout)
+        .map_err(|_| "sing-box version output is not UTF-8".to_owned())?
+        .trim();
+    if version.is_empty() {
+        return Err("sing-box version output is empty".to_owned());
+    }
+    Ok(version.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_version_output;
+
+    #[test]
+    fn version_output_requires_success_and_nonempty_stdout() {
+        assert_eq!(
+            parse_version_output(true, b"sing-box 1.12.0\n", b"").unwrap(),
+            "sing-box 1.12.0"
+        );
+        assert!(parse_version_output(true, b" \n", b"").is_err());
+        assert_eq!(
+            parse_version_output(false, b"ignored", b"bad config\n").unwrap_err(),
+            "sing-box version command failed: bad config"
+        );
+    }
 }

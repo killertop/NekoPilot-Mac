@@ -9,7 +9,7 @@ import { getBuiltInTemplate } from "../templates";
 // cache in the background. If the cache is empty (first launch, offline),
 // fall back to the build-time template snapshot (see src/config/templates)
 // and seed the cache so subsequent reads stay fast. No network I/O here.
-async function getConfigTemplate(mode: configType): Promise<any> {
+async function getConfigTemplate(mode: configType): Promise<unknown> {
   const cacheKey = await getConfigTemplateCacheKey(mode);
   let config = await getStoreValue(cacheKey, "");
   if (!config) {
@@ -23,7 +23,7 @@ async function getConfigTemplate(mode: configType): Promise<any> {
 }
 
 async function buildAndWriteConfig(
-  newConfig: any,
+  newConfig: unknown,
   selectedIdentifier: string,
   mode: configType,
   reloadIfRunning = false,

@@ -387,12 +387,15 @@ pub fn self_elevate(args: &str) -> Result<(), String> {
         .to_string_lossy()
         .into_owned();
     let exit = shell_execute_runas(&exe, args)?;
-    if let Some(code) = exit {
-        if code != 0 {
-            log_line(&format!("self_elevate: helper exit code = {}", code));
+    match exit {
+        Some(0) => Ok(()),
+        Some(code) => {
+            let error = format!("elevated helper exited with code {code}");
+            log_line(&format!("self_elevate: {error}"));
+            Err(error)
         }
+        None => Err("elevated helper returned no process handle".to_owned()),
     }
-    Ok(())
 }
 
 /// 以管理员身份启动当前 exe 进入 helper 子命令模式。

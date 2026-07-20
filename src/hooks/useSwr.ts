@@ -79,7 +79,7 @@ function inferModeFromPathKey(key: string): configType | null {
   return m[1] as configType;
 }
 
-export async function primeConfigTemplateCache(
+async function primeConfigTemplateCache(
   mode: configType,
 ): Promise<void> {
   const cacheKey = await getConfigTemplateCacheKey(mode);

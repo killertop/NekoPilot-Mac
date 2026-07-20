@@ -1,7 +1,7 @@
 import { ToggleSetting } from "./common";
 
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Power } from "react-bootstrap-icons";
 import { toast } from "sonner";
 import { t } from "../../utils/helper";
@@ -9,24 +9,35 @@ import { t } from "../../utils/helper";
 export default function ToggleAutoStart() {
   const [isOn, setIsOn] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(false);
+  const didInteract = useRef(false);
 
   useEffect(() => {
+    let cancelled = false;
     const checkAutoStart = async () => {
       try {
         const isAutoStartEnabled = await isEnabled();
-        setIsOn(isAutoStartEnabled);
+        if (!cancelled && !didInteract.current) setIsOn(isAutoStartEnabled);
       } catch (error) {
-        console.error("检查自动启动状态失败:", error);
-        toast.error(t("auto_start_failed"));
+        if (!cancelled) {
+          console.error("检查自动启动状态失败:", error);
+          toast.error(t("auto_start_failed"));
+        }
+      } finally {
+        if (!cancelled) setIsLoaded(true);
       }
     };
-    checkAutoStart();
+    void checkAutoStart();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleToggle = async () => {
-    if (isSaving) return;
+    if (isSaving || !isLoaded) return;
     // 保存当前状态用于可能的回滚
     const previousState = isOn;
+    didInteract.current = true;
 
     // 乐观更新 UI
     setIsOn(!isOn);
@@ -55,7 +66,7 @@ export default function ToggleAutoStart() {
         title={t("auto_start")}
         isEnabled={isOn}
         onToggle={handleToggle}
-        disabled={isSaving}
+        disabled={isSaving || !isLoaded}
       />
     </div>
   );

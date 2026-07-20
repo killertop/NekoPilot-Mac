@@ -33,28 +33,52 @@ export default function ProxyPortSetting() {
   const [isLoading, setIsLoading] = useState(false);
   const [skipSystemProxy, setSkipSystemProxyState] = useState(false);
   const [isSavingProxyMode, setIsSavingProxyMode] = useState(false);
+  const [isStateLoading, setIsStateLoading] = useState(false);
   const operationInFlightRef = useRef(false);
+  const stateLoadEpochRef = useRef(0);
 
   const loadState = async () => {
-    const [savedPort, skipProxy] = await Promise.all([
-      getProxyPort(),
-      getSkipSystemProxy(),
-    ]);
-    setCurrentPort(savedPort);
-    setPort(savedPort.toString());
-    setSkipSystemProxyState(skipProxy);
+    const epoch = ++stateLoadEpochRef.current;
+    setIsStateLoading(true);
+    try {
+      const [savedPort, skipProxy] = await Promise.all([
+        getProxyPort(),
+        getSkipSystemProxy(),
+      ]);
+      if (epoch !== stateLoadEpochRef.current) return;
+      setCurrentPort(savedPort);
+      setPort(savedPort.toString());
+      setSkipSystemProxyState(skipProxy);
+    } catch (error) {
+      if (epoch === stateLoadEpochRef.current) {
+        console.error("Failed to load proxy settings", error);
+        toast.error(t("proxy_settings_load_failed", "Failed to load proxy settings"));
+      }
+    } finally {
+      if (epoch === stateLoadEpochRef.current) setIsStateLoading(false);
+    }
   };
 
   useEffect(() => {
-    loadState();
+    void loadState();
+    return () => {
+      stateLoadEpochRef.current += 1;
+    };
   }, []);
 
   useEffect(() => {
-    if (isOpen) loadState();
+    if (!isOpen) return;
+    void loadState();
+    return () => {
+      stateLoadEpochRef.current += 1;
+    };
   }, [isOpen]);
 
   const handleToggleSkipProxy = async () => {
-    if (operationInFlightRef.current || isLoading || isSavingProxyMode) return;
+    if (
+      operationInFlightRef.current || isLoading || isSavingProxyMode ||
+      isStateLoading
+    ) return;
     operationInFlightRef.current = true;
     const next = !skipSystemProxy;
     setSkipSystemProxyState(next);
@@ -105,7 +129,10 @@ export default function ProxyPortSetting() {
     : undefined;
 
   const handleSave = async () => {
-    if (operationInFlightRef.current || isLoading || isSavingProxyMode) return;
+    if (
+      operationInFlightRef.current || isLoading || isSavingProxyMode ||
+      isStateLoading
+    ) return;
     if (parsedPort === null) {
       toast.error(t("proxy_port_invalid", "Port must be between 1 and 65535"));
       return;
@@ -169,8 +196,9 @@ export default function ProxyPortSetting() {
         subtitle={t("proxy_port_desc", "HTTP/SOCKS mixed inbound")}
         confirmLabel={t("save")}
         onConfirm={handleSave}
-        confirmDisabled={parsedPort === null || isSavingProxyMode}
-        confirmLoading={isLoading || isSavingProxyMode}
+        confirmDisabled={parsedPort === null || isSavingProxyMode ||
+          isStateLoading}
+        confirmLoading={isLoading || isSavingProxyMode || isStateLoading}
       >
         <IOSTextField
           label={t("proxy_port", "Proxy port")}
@@ -178,7 +206,7 @@ export default function ProxyPortSetting() {
           onChange={(value) => setPort(value.replace(/[^\d]/g, ""))}
           placeholder={DEFAULT_PROXY_PORT.toString()}
           error={error}
-          disabled={isLoading || isSavingProxyMode}
+          disabled={isLoading || isSavingProxyMode || isStateLoading}
           monospace
           autoFocus
           onSubmit={handleSave}
@@ -207,7 +235,7 @@ export default function ProxyPortSetting() {
               className="onebox-toggle"
               checked={!skipSystemProxy}
               onChange={handleToggleSkipProxy}
-              disabled={isSavingProxyMode || isLoading}
+              disabled={isSavingProxyMode || isLoading || isStateLoading}
             />
           </label>
         }

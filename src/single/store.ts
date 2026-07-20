@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { locale } from "@tauri-apps/plugin-os";
 import {
   emptyRuleSet,
-  isValidIpCidr,
+  normalizeRuleSet,
   type RuleAction,
   type RuleSet,
 } from "../config/merger/custom-rules";
@@ -16,8 +16,6 @@ import {
   SKIP_SYSTEM_PROXY_STORE_KEY,
   USER_AGENT_STORE_KEY,
 } from "../types/definition";
-
-export const CLASH_API_SECRET = "clash_api_secret_key";
 
 const REMOVED_PREFERENCE_KEYS = [
   "developer_toggle_key",
@@ -45,16 +43,16 @@ export async function cleanupRemovedDeveloperSettings(): Promise<void> {
  * (and focus refresh).  The previous per-app setting is deliberately ignored
  * so an old saved preference cannot override the macOS language.
  */
-export const getLanguage = async () => {
+export const getLanguage = async (): Promise<"zh" | "en"> => {
   const osLocale = await locale();
   return osLocale?.toLowerCase().startsWith("zh") ? "zh" : "en";
 };
 
-export async function getStoreValue(
+export async function getStoreValue<T = unknown>(
   key: string,
-  defaultValue?: any,
-): Promise<any> {
-  const value = await invoke<any | null>("get_setting", { key });
+  defaultValue?: T,
+): Promise<T> {
+  const value = await invoke<T | null>("get_setting", { key });
 
   // zh: 如果 defaultValue 存在且 value 为 undefined、null 或空字符串，则返回 val
   // en: If defaultValue exists and value is undefined, null, or an empty string, return val
@@ -66,9 +64,9 @@ export async function getStoreValue(
     return defaultValue;
   }
   console.debug(`Store key "${key}" found, returning stored value.`);
-  return value;
+  return value as T;
 }
-export async function setStoreValue(key: string, value: any) {
+export async function setStoreValue(key: string, value: unknown): Promise<void> {
   await invoke("set_setting", { key, value });
 }
 
@@ -130,32 +128,24 @@ export async function setCustomRuleSet(key: RuleAction, config: RuleSet) {
 
 // Missing rule sets from prior builds are read as empty sets.
 export async function getCustomRuleSet(key: RuleAction): Promise<RuleSet> {
-  const s = await getStoreValue(`custom_ruleset_${key}`) as string | undefined;
+  const s = await getStoreValue<string | undefined>(`custom_ruleset_${key}`);
   if (s) {
     try {
-      const config = JSON.parse(s);
-      if (config && typeof config === "object") {
-        if (!Array.isArray(config.domain)) {
-          config.domain = [];
-        }
-        if (!Array.isArray(config.domain_suffix)) {
-          config.domain_suffix = [];
-        }
-        if (!Array.isArray(config.ip_cidr)) {
-          config.ip_cidr = [];
-        }
-        const validCidrs = config.ip_cidr.filter(
-          (value: unknown): value is string =>
-            typeof value === "string" && isValidIpCidr(value),
-        );
-        if (validCidrs.length !== config.ip_cidr.length) {
-          config.ip_cidr = validCidrs;
-          await setCustomRuleSet(key, config);
-        }
-        return config;
+      const parsed: unknown = JSON.parse(s);
+      const config = normalizeRuleSet(parsed);
+      if (JSON.stringify(parsed) !== JSON.stringify(config)) {
+        await setCustomRuleSet(key, config);
       }
+      return config;
     } catch (e) {
       console.error("解析自定义规则集失败:", e);
+      const config = emptyRuleSet();
+      try {
+        await setCustomRuleSet(key, config);
+      } catch (repairError) {
+        console.warn("Failed to repair invalid custom rule data:", repairError);
+      }
+      return config;
     }
   }
   return emptyRuleSet();
@@ -167,18 +157,18 @@ export async function setDirectDNS(dnsServers: string) {
 }
 
 export async function getDirectDNS(): Promise<string> {
-  const s = await getStoreValue("direct_dns") as string | undefined;
+  const s = await getStoreValue<string | undefined>("direct_dns");
   if (s) {
     return s;
   }
-  let defaultValue = await invoke("get_optimal_local_dns_server") as string;
+  const defaultValue = await invoke<string>("get_optimal_local_dns_server");
   console.debug("最佳DNS服务器为:", defaultValue);
   return defaultValue || "223.5.5.5";
 }
 
 // 获取用户设置的 User Agent
 export async function getUserAgent(): Promise<string> {
-  const ua = await getStoreValue(USER_AGENT_STORE_KEY) as string | undefined;
+  const ua = await getStoreValue<string | undefined>(USER_AGENT_STORE_KEY);
   if (ua) {
     return ua;
   }

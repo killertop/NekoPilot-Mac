@@ -11,16 +11,31 @@ export default function DNSSettingsItem() {
   const [isOpen, setIsOpen] = useState(false);
   const [dnsServers, setDnsServers] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isStateLoading, setIsStateLoading] = useState(false);
   useEffect(() => {
-    if (isOpen) void loadDNS();
+    if (!isOpen) return;
+    let cancelled = false;
+    setIsStateLoading(true);
+    void getDirectDNS()
+      .then((dns) => {
+        if (!cancelled) setDnsServers(dns);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.error("Failed to load direct DNS setting", error);
+          toast.error(t("dns_load_failed", "Failed to load DNS settings"));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsStateLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [isOpen]);
 
-  const loadDNS = async () => {
-    const dns = await getDirectDNS();
-    setDnsServers(dns);
-  };
-
   const handleSave = async () => {
+    if (isLoading || isStateLoading) return;
     if (!dnsServers.trim()) {
       toast.error(t("dns_cannot_empty", "DNS cannot be empty"));
       return;
@@ -59,14 +74,15 @@ export default function DNSSettingsItem() {
         title={t("direct_dns_settings", "Direct DNS Settings")}
         confirmLabel={t("save")}
         onConfirm={handleSave}
-        confirmDisabled={!dnsServers.trim()}
-        confirmLoading={isLoading}
+        confirmDisabled={isStateLoading || !dnsServers.trim()}
+        confirmLoading={isLoading || isStateLoading}
       >
         <IOSTextField
           label={t("direct_dns_settings", "Direct DNS Settings")}
           value={dnsServers}
           onChange={setDnsServers}
           placeholder="119.29.29.29"
+          disabled={isLoading || isStateLoading}
           monospace
           autoFocus
         />

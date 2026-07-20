@@ -25,7 +25,7 @@ export interface DialogMotion {
   transition: Transition;
 }
 
-export const ALERT_DIALOG_MOTION: DialogMotion = {
+const ALERT_DIALOG_MOTION: DialogMotion = {
   initial: { scale: 0.94, y: 8 },
   animate: { scale: 1, y: 0 },
   exit: { scale: 0.96, y: 4 },

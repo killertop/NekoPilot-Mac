@@ -5,7 +5,7 @@ export type SubscriptionMetadataSource = {
     total_traffic: number;
 };
 
-export const LOCAL_FILE_SENTINEL = 32_503_680_000_000;
+const LOCAL_FILE_SENTINEL = 32_503_680_000_000;
 
 export function isLocalConfiguration(item: SubscriptionMetadataSource): boolean {
     return item.source_type === "local_link" || item.expire_time === LOCAL_FILE_SENTINEL;
@@ -23,4 +23,10 @@ export function hasTrafficQuota(item: SubscriptionMetadataSource): boolean {
         && !isLegacyMissingMetadata(item)
         && Number.isFinite(item.total_traffic)
         && item.total_traffic > 0;
+}
+
+/** Older database defaults stored Unix seconds; current imports store millis. */
+export function normalizeTimestampMs(value: number): number {
+    if (!Number.isFinite(value)) return 0;
+    return Math.abs(value) < 1_000_000_000_000 ? value * 1_000 : value;
 }

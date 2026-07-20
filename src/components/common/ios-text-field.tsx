@@ -77,7 +77,7 @@ export function IOSTextField({
         aria-invalid={Boolean(error) || undefined}
         aria-describedby={error ? errorId : undefined}
         className={clsx(
-          "w-full rounded-xl outline-none disabled:opacity-50",
+          "w-full rounded-xl outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--onebox-blue)] disabled:opacity-50",
           compact
             ? "h-9 px-3 text-[13px] tracking-[-0.005em]"
             : "h-10 px-3.5 text-[14px]",

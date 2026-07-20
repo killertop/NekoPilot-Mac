@@ -10,15 +10,23 @@ pub fn app_setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
     app.manage(crate::app::state::AppData::new());
     app.manage(crate::engine::state_machine::EngineStateCell::new());
     secure_app_config_directory(app.handle())?;
+    #[cfg(target_os = "macos")]
+    if let Err(error) = crate::engine::sysproxy::recover_stale_system_proxy(app.handle()) {
+        // Keep startup available when macOS has not restored its network
+        // services yet. The durable marker remains in place, and a later
+        // SystemProxy start retries recovery before applying a new owner.
+        log::warn!("[proxy-recovery] startup recovery deferred: {error}");
+    }
     stop_orphan_tun_service_on_startup();
 
     // Remove cache files from pre-v2 releases. The v2 cache is created lazily by
     // sing-box, so no bundled cache database is needed.
     crate::utils::purge_legacy_cache_files(app.handle());
 
-    // One-shot sweep of rotated OneBox.log archives older than 7 days.
+    // One-shot sweep of rotated NekoPilot.log (and legacy OneBox.log)
+    // archives older than 7 days.
     // Paired with tauri-plugin-log's KeepAll rotation in `plugins.rs`.
-    crate::core::cleanup_old_onebox_logs(app.handle());
+    crate::core::cleanup_old_app_logs(app.handle());
 
     crate::commands::whitelist::spawn_whitelist_refresh_task(app.handle().clone());
     if let Err(error) = crate::commands::rule_sets::ensure_cn_rule_set_baseline(app.handle()) {
@@ -159,6 +167,8 @@ fn report_main_window_geometry(app: &tauri::App) {
 
 // ── Deep Link ──────────────────────────────────────────────────────
 
+const MAX_DEEP_LINK_DATA_BYTES: usize = 64 * 1024;
+
 /// 从 `nekopilot://config?data=...&apply=1` 中提取参数
 fn extract_deep_link_data(url: &Url) -> Option<crate::app::state::DeepLinkPayload> {
     if url.scheme() != "nekopilot" || url.host_str() != Some("config") {
@@ -166,6 +176,14 @@ fn extract_deep_link_data(url: &Url) -> Option<crate::app::state::DeepLinkPayloa
     }
     let params: std::collections::HashMap<_, _> = url.query_pairs().collect();
     let data = params.get("data")?.to_string();
+    if data.is_empty() || data.len() > MAX_DEEP_LINK_DATA_BYTES {
+        log::warn!(
+            "[deep-link] rejected config payload bytes={} (allowed 1..={})",
+            data.len(),
+            MAX_DEEP_LINK_DATA_BYTES
+        );
+        return None;
+    }
     let apply = params.get("apply").map(|v| v == "1").unwrap_or(false);
     Some(crate::app::state::DeepLinkPayload { data, apply })
 }
@@ -529,5 +547,28 @@ mod tests {
     fn rejects_the_removed_onebox_scheme() {
         let url = Url::parse("oneoh-networktools://config?data=example").unwrap();
         assert!(extract_deep_link_data(&url).is_none());
+    }
+
+    #[test]
+    fn deep_link_payload_is_nonempty_and_bounded() {
+        let empty = Url::parse("nekopilot://config?data=").unwrap();
+        assert!(extract_deep_link_data(&empty).is_none());
+
+        let exact = Url::parse(&format!(
+            "nekopilot://config?data={}",
+            "a".repeat(super::MAX_DEEP_LINK_DATA_BYTES)
+        ))
+        .unwrap();
+        assert_eq!(
+            extract_deep_link_data(&exact).unwrap().data.len(),
+            super::MAX_DEEP_LINK_DATA_BYTES
+        );
+
+        let oversized = Url::parse(&format!(
+            "nekopilot://config?data={}",
+            "a".repeat(super::MAX_DEEP_LINK_DATA_BYTES + 1)
+        ))
+        .unwrap();
+        assert!(extract_deep_link_data(&oversized).is_none());
     }
 }

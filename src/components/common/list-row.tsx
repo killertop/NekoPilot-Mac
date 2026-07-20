@@ -22,7 +22,7 @@ function toneColor(tone: ListRowTone): string {
   return "var(--onebox-label)";
 }
 
-export function ListRowContent({
+function ListRowContent({
   leading,
   title,
   subtitle,

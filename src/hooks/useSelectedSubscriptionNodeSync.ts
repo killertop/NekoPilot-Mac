@@ -23,15 +23,19 @@ export function useSelectedSubscriptionNodeSync(isRunning: boolean): void {
         let switched = false;
         if (nodeTag) {
           const selector = await getExitGatewaySelector();
+          if (cancelled) return;
           if (selector.all.includes(nodeTag)) {
             if (selector.now !== nodeTag) await selectExitGatewayNode(nodeTag);
+            if (cancelled) return;
             switched = true;
           }
         }
         if (!switched && identifier) {
-          switched = await switchToSubscriptionNode(identifier);
+          switched = await switchToSubscriptionNode(identifier, {
+            isCancelled: () => cancelled,
+          });
         }
-        if (switched) {
+        if (!cancelled && switched) {
           window.dispatchEvent(new Event(NODE_SELECTOR_REFRESH_EVENT));
         }
       } catch (error) {

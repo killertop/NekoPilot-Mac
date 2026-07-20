@@ -175,7 +175,11 @@ pub(crate) async fn handle_process_termination(
     // lives there.
     let (pm_pid, manager_mode, matches, is_stopping) = {
         let manager = ProcessManager::acquire();
-        let pm_pid = manager.child.as_ref().map(|c| c.pid());
+        let pm_pid = manager
+            .child
+            .as_ref()
+            .map(|child| child.pid())
+            .or(manager.owned_pid);
         let manager_mode = manager.mode.as_ref().map(|m| (**m).clone());
         let matches = manager
             .mode

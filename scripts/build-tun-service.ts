@@ -5,7 +5,7 @@
  *
  * Dev flow (`deno task tauri dev` → `beforeDevCommand`):
  *   `cargo build -p tun-service` produces `src-tauri/target/debug/tun-service.exe`
- *   right next to the dev-mode `one-box.exe`. That's exactly where
+ *   right next to the dev-mode `nekopilot.exe`. That's exactly where
  *   `vpn::windows::bundled_service_exe_path()` looks, so no further copying is
  *   needed for dev.
  *
@@ -28,8 +28,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 if (process.platform !== "win32") {
-    console.log("[build-tun-service] non-Windows host, skip");
-    process.exit(0);
+  console.log("[build-tun-service] non-Windows host, skip");
+  process.exit(0);
 }
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -41,26 +41,38 @@ const profileArgs = releaseFlag ? ["--release"] : [];
 const profileDir = releaseFlag ? "release" : "debug";
 
 console.log(
-    `[build-tun-service] cargo build -p tun-service (${releaseFlag ? "release" : "dev"})`,
+  `[build-tun-service] cargo build -p tun-service (${
+    releaseFlag ? "release" : "dev"
+  })`,
 );
 
-const build = spawnSync("cargo", ["build", "-p", "tun-service", ...profileArgs], {
+const build = spawnSync(
+  "cargo",
+  ["build", "-p", "tun-service", ...profileArgs],
+  {
     cwd: srcTauri,
     stdio: "inherit",
-    shell: true,
-});
+  },
+);
+
+if (build.error) {
+  console.error(
+    `[build-tun-service] failed to start cargo: ${build.error.message}`,
+  );
+  process.exit(1);
+}
 
 if (build.status !== 0) {
-    console.error(
-        `[build-tun-service] cargo build failed with exit code ${build.status}`,
-    );
-    process.exit(build.status ?? 1);
+  console.error(
+    `[build-tun-service] cargo build failed with exit code ${build.status}`,
+  );
+  process.exit(build.status ?? 1);
 }
 
 const outPath = join(srcTauri, "target", profileDir, "tun-service.exe");
 if (!existsSync(outPath)) {
-    console.error(`[build-tun-service] expected binary not found: ${outPath}`);
-    process.exit(1);
+  console.error(`[build-tun-service] expected binary not found: ${outPath}`);
+  process.exit(1);
 }
 
 console.log(`[build-tun-service] built ${outPath}`);
@@ -69,21 +81,23 @@ console.log(`[build-tun-service] built ${outPath}`);
 // live in `target/debug/` and are located directly by the runtime, so there's
 // nothing extra to do.
 if (!releaseFlag) {
-    process.exit(0);
+  process.exit(0);
 }
 
 // Detect the rustc host triple — required by Tauri externalBin naming.
-const rustc = spawnSync("rustc", ["-vV"], { encoding: "utf8", shell: true });
+const rustc = spawnSync("rustc", ["-vV"], { encoding: "utf8" });
 if (rustc.status !== 0 || !rustc.stdout) {
-    console.error("[build-tun-service] failed to run `rustc -vV` to detect host triple");
-    process.exit(1);
+  console.error(
+    "[build-tun-service] failed to run `rustc -vV` to detect host triple",
+  );
+  process.exit(1);
 }
 const hostMatch = rustc.stdout.match(/^host:\s*(\S+)$/m);
 if (!hostMatch) {
-    console.error(
-        `[build-tun-service] could not parse host triple from rustc -vV output:\n${rustc.stdout}`,
-    );
-    process.exit(1);
+  console.error(
+    `[build-tun-service] could not parse host triple from rustc -vV output:\n${rustc.stdout}`,
+  );
+  process.exit(1);
 }
 const triple = hostMatch[1];
 

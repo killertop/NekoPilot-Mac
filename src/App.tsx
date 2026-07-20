@@ -26,7 +26,11 @@ import { useApplyPipelineRoot } from "./components/home/hooks";
 import { DeepLinkApplyProgressModal } from "./components/home/deep-link-apply-progress-modal";
 import { Portal } from "./components/common/portal";
 import HomePage from "./page/home";
-import { ActiveScreenType, NavContext } from "./single/context";
+import {
+  ActiveScreenType,
+  LanguageContext,
+  NavContext,
+} from "./single/context";
 import { cleanupRemovedDeveloperSettings } from "./single/store";
 import { initLanguage, t } from "./utils/helper";
 
@@ -76,7 +80,7 @@ function App() {
   // boots with the persisted theme and reacts to toggle events. Do not re-mount here.
   const [activeScreen, setActiveScreen] = useState<ActiveScreenType>("home");
   const [isSettingsHovered, setIsSettingsHovered] = useState(false);
-  const [language, setLanguage] = useState("en");
+  const [language, setLanguage] = useState<"zh" | "en">("en");
   const dockLang = useMemo(() => ({
     home: t("home"),
     nodes: t("nodes"),
@@ -111,16 +115,23 @@ function App() {
   );
 
   useEffect(() => {
+    let cancelled = false;
     // 统一入口：从 Rust 拉取并消费 pending deep link（take() 保证幂等）
     const processPending = () => {
-      invoke<{ data: string; apply: boolean } | null>("get_pending_deep_link")
+      void invoke<{ data: string; apply: boolean } | null>(
+        "get_pending_deep_link",
+      )
         .then(async (payload) => {
-          if (!payload) return;
+          if (cancelled || !payload) return;
           let decoded: string;
           try {
-            decoded = atob(payload.data);
+            decoded = atob(payload.data).trim();
           } catch (e) {
             console.error("Failed to decode pending deep link:", e);
+            return;
+          }
+          if (!decoded) {
+            console.warn("Ignored an empty pending deep link");
             return;
           }
           // apply=1 只允许经过验证的域名生效；未验证域名回退到 apply=0
@@ -132,6 +143,7 @@ function App() {
               const verified = await invoke<boolean>("verify_deep_link_url", {
                 url: decoded,
               });
+              if (cancelled) return;
               if (!verified) apply = false;
             } catch (e) {
               console.warn(
@@ -141,12 +153,18 @@ function App() {
               apply = false;
             }
           }
+          if (cancelled) return;
           if (apply) {
             setActiveScreen("home");
             setDeepLinkApplyUrl(decoded);
           } else {
             setDeepLinkUrl(decoded);
             setActiveScreen("configuration");
+          }
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            console.warn("Failed to consume pending deep link:", error);
           }
         });
     };
@@ -155,35 +173,52 @@ function App() {
     processPending();
 
     // 热启动信号：on_open_url 存入 pending 后发出，WebView 就绪时收到
-    const unlistenSignal = listen("deep_link_pending", () => processPending());
+    const unlistenSignal = listen(
+      "deep_link_pending",
+      () => processPending(),
+    ).catch((error) => {
+      if (!cancelled) console.warn("Failed to listen for deep links:", error);
+      return undefined;
+    });
 
     // 兜底：窗口获焦时再拉一次（信号在 WebView 从隐藏恢复过程中可能丢失）
     const unlistenFocus = getCurrentWindow().listen(
       "tauri://focus",
       () => processPending(),
-    );
+    ).catch((error) => {
+      if (!cancelled) console.warn("Failed to listen for window focus:", error);
+      return undefined;
+    });
 
     return () => {
-      unlistenSignal.then((fn) => fn());
-      unlistenFocus.then((fn) => fn());
+      cancelled = true;
+      void unlistenSignal.then((fn) => fn?.());
+      void unlistenFocus.then((fn) => fn?.());
     };
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     void cleanupRemovedDeveloperSettings();
     const refreshSystemLanguage = () => {
       void initLanguage().then((nextLanguage) => {
-        setLanguage(nextLanguage);
+        if (!cancelled) setLanguage(nextLanguage);
       });
     };
     refreshSystemLanguage();
     const unlistenFocus = getCurrentWindow().listen(
       "tauri://focus",
       refreshSystemLanguage,
-    );
+    ).catch((error) => {
+      if (!cancelled) {
+        console.warn("Failed to watch system language changes:", error);
+      }
+      return undefined;
+    });
 
     return () => {
-      unlistenFocus.then((unlisten) => unlisten());
+      cancelled = true;
+      void unlistenFocus.then((unlisten) => unlisten?.());
     };
   }, []);
 
@@ -208,20 +243,22 @@ function App() {
 
   return (
     <MotionConfig reducedMotion="user">
-      <NavContext.Provider value={navContextValue}>
-        <EngineStateContext.Provider value={engineState}>
-          <Portal>
-            <Toaster position="top-center" toastOptions={{ duration: 2000 }} />
-          </Portal>
-          <AppShell
-            activeScreen={activeScreen}
-            setActiveScreen={setActiveScreen}
-            dockLang={dockLang}
-            isSettingsHovered={isSettingsHovered}
-            setIsSettingsHovered={setIsSettingsHovered}
-          />
-        </EngineStateContext.Provider>
-      </NavContext.Provider>
+      <LanguageContext.Provider value={language}>
+        <NavContext.Provider value={navContextValue}>
+          <EngineStateContext.Provider value={engineState}>
+            <Portal>
+              <Toaster position="top-center" toastOptions={{ duration: 2000 }} />
+            </Portal>
+            <AppShell
+              activeScreen={activeScreen}
+              setActiveScreen={setActiveScreen}
+              dockLang={dockLang}
+              isSettingsHovered={isSettingsHovered}
+              setIsSettingsHovered={setIsSettingsHovered}
+            />
+          </EngineStateContext.Provider>
+        </NavContext.Provider>
+      </LanguageContext.Provider>
     </MotionConfig>
   );
 }
@@ -259,34 +296,42 @@ function AppShell({
       >
         <Body activeScreen={activeScreen} />
 
-        <div className="onebox-dock">
+        <nav className="onebox-dock" aria-label={t("navigation")}>
           <button
+            type="button"
             onClick={() => setActiveScreen("home")}
             data-active={activeScreen === "home"}
+            aria-current={activeScreen === "home" ? "page" : undefined}
           >
-            <House size={18} />
+            <House size={18} aria-hidden="true" />
             <span className="text-[11px] capitalize">{dockLang.home}</span>
           </button>
 
           <button
+            type="button"
             onClick={() => setActiveScreen("configuration")}
             data-active={activeScreen === "configuration"}
+            aria-current={activeScreen === "configuration" ? "page" : undefined}
           >
-            <Layers size={18} />
+            <Layers size={18} aria-hidden="true" />
             <span className="text-[11px] capitalize">{dockLang.nodes}</span>
           </button>
 
           <button
+            type="button"
             onClick={() => setActiveScreen("router_settings")}
             data-active={activeScreen === "router_settings"}
+            aria-current={activeScreen === "router_settings" ? "page" : undefined}
           >
-            <SignIntersectionY size={18} />
+            <SignIntersectionY size={18} aria-hidden="true" />
             <span className="text-[11px] capitalize">{dockLang.rules}</span>
           </button>
 
           <button
+            type="button"
             onClick={() => setActiveScreen("settings")}
             data-active={activeScreen === "settings"}
+            aria-current={activeScreen === "settings" ? "page" : undefined}
             onMouseEnter={() => setIsSettingsHovered(true)}
             onMouseLeave={() => setIsSettingsHovered(false)}
           >
@@ -294,11 +339,11 @@ function AppShell({
               animate={{ rotate: isSettingsHovered ? 180 : 0 }}
               transition={{ duration: 0.3 }}
             >
-              <GearWideConnected size={18} />
+              <GearWideConnected size={18} aria-hidden="true" />
             </motion.div>
             <span className="text-[11px] capitalize">{dockLang.settings}</span>
           </button>
-        </div>
+        </nav>
       </main>
 
       <DeepLinkApplyProgressModal

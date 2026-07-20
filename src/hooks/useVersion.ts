@@ -7,16 +7,20 @@ export function useVersion() {
     const [version, setVersion] = useState<string>('');
 
     useEffect(() => {
+        let cancelled = false;
         const fetchVersion = async () => {
             try {
                 const appVersion = await invoke('get_app_version') as string;
-                setVersion(appVersion);
+                if (!cancelled) setVersion(appVersion);
             } catch (error) {
-                console.error('Error fetching version:', error);
+                if (!cancelled) console.error('Error fetching version:', error);
             }
         };
 
-        fetchVersion();
+        void fetchVersion();
+        return () => {
+            cancelled = true;
+        };
     }, []);
 
     return version;

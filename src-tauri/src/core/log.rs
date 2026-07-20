@@ -4,19 +4,28 @@ use std::io::{BufWriter, Read, Write};
 use std::path::Path;
 use tauri::{AppHandle, Manager};
 
+const MAX_COMPRESSIBLE_LOG_SIZE: u64 = 10 * 1024 * 1024;
+pub(super) const MAX_ACTIVE_SINGBOX_LOG_BYTES: u64 = 50 * 1024 * 1024;
+const MAX_SINGBOX_LOG_LINE_BYTES: usize = 256 * 1024;
+
 /// Local civil date used for daily sing-box log filenames.
 pub(super) fn today_date_string() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
 fn compress_singbox_log(log_path: &Path) -> std::io::Result<()> {
-    const MAX_LOG_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
-
     if let Ok(meta) = std::fs::metadata(log_path) {
-        if meta.len() > MAX_LOG_SIZE {
+        if meta.len() > MAX_COMPRESSIBLE_LOG_SIZE {
             let compressed_path = log_path.with_extension("log.gz");
             let mut input_file = std::fs::File::open(log_path)?;
-            let compressed_file = std::fs::File::create(&compressed_path)?;
+            let mut compressed_options = std::fs::OpenOptions::new();
+            compressed_options.write(true).create(true).truncate(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                compressed_options.mode(0o600);
+            }
+            let compressed_file = compressed_options.open(&compressed_path)?;
             let mut encoder = GzEncoder::new(compressed_file, Compression::default());
 
             let mut buffer = vec![0; 8192];
@@ -75,6 +84,11 @@ pub(super) fn cleanup_old_singbox_logs(log_dir: &Path, keep_days: u64) {
 /// step.
 pub(crate) fn prepare_singbox_log_dir(log_dir: &Path) -> std::io::Result<std::path::PathBuf> {
     std::fs::create_dir_all(log_dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(log_dir, std::fs::Permissions::from_mode(0o700))?;
+    }
 
     let date = today_date_string();
     let log_path = log_dir.join(format!("sing-box-{}.log", date));
@@ -92,6 +106,13 @@ pub(crate) fn prepare_singbox_log_dir(log_dir: &Path) -> std::io::Result<std::pa
             let is_gz = name_str.ends_with(".log.gz");
             if !is_log && !is_gz {
                 continue;
+            }
+
+            #[cfg(unix)]
+            if entry.file_type().is_ok_and(|file_type| file_type.is_file()) {
+                use std::os::unix::fs::PermissionsExt;
+                let _ =
+                    std::fs::set_permissions(entry.path(), std::fs::Permissions::from_mode(0o600));
             }
 
             // Prune old logs (both .log and .log.gz)
@@ -126,32 +147,85 @@ pub(crate) fn resolve_singbox_log_path(app: &AppHandle) -> Option<std::path::Pat
 /// Create a daily-rotated log file writer for sing-box output. Used by
 /// `spawn_process_monitor` — every supported NekoPilot mode is owned by
 /// the user process and writes through this path.
-pub(super) fn create_singbox_log_writer(app: &AppHandle) -> Option<BufWriter<std::fs::File>> {
+pub(super) struct SingboxLogWriter {
+    writer: BufWriter<std::fs::File>,
+    bytes_written: u64,
+    write_failed: bool,
+}
+
+pub(super) fn open_singbox_log_writer(log_path: &Path) -> std::io::Result<SingboxLogWriter> {
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(log_path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    let bytes_written = file.metadata()?.len();
+    Ok(SingboxLogWriter {
+        writer: BufWriter::new(file),
+        bytes_written,
+        write_failed: false,
+    })
+}
+
+pub(super) fn create_singbox_log_writer(app: &AppHandle) -> Option<SingboxLogWriter> {
     let log_path = resolve_singbox_log_path(app)?;
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
+    open_singbox_log_writer(&log_path)
         .map_err(|e| log::error!("Failed to open {}: {}", log_path.display(), e))
         .ok()
-        .map(BufWriter::new)
 }
 
 /// Append a line to the buffered sing-box log file. The buffer avoids a disk
 /// syscall for every stdout/stderr chunk; it is flushed on errors and exit.
-pub(super) fn write_singbox_log(writer: &mut Option<BufWriter<std::fs::File>>, line: &str) {
-    if let Some(ref mut file) = writer {
-        let _ = writeln!(file, "{}", line);
+pub(super) fn write_singbox_log(writer: &mut Option<SingboxLogWriter>, line: &str) {
+    let Some(writer) = writer.as_mut() else {
+        return;
+    };
+    if writer.write_failed || writer.bytes_written >= MAX_ACTIVE_SINGBOX_LOG_BYTES {
+        return;
+    }
+    let remaining = (MAX_ACTIVE_SINGBOX_LOG_BYTES - writer.bytes_written) as usize;
+    if remaining <= 1 {
+        writer.bytes_written = MAX_ACTIVE_SINGBOX_LOG_BYTES;
+        return;
+    }
+    let mut line_len = line
+        .len()
+        .min(MAX_SINGBOX_LOG_LINE_BYTES)
+        .min(remaining - 1);
+    while line_len > 0 && !line.is_char_boundary(line_len) {
+        line_len -= 1;
+    }
+    let result = writer
+        .writer
+        .write_all(&line.as_bytes()[..line_len])
+        .and_then(|_| writer.writer.write_all(b"\n"));
+    if let Err(error) = result {
+        writer.write_failed = true;
+        log::warn!("[sing-box] disabling file log after write failure: {error}");
+    } else {
+        writer.bytes_written += line_len as u64 + 1;
     }
 }
 
-pub(super) fn flush_singbox_log(writer: &mut Option<BufWriter<std::fs::File>>) {
-    if let Some(ref mut file) = writer {
-        let _ = file.flush();
+pub(super) fn flush_singbox_log(writer: &mut Option<SingboxLogWriter>) {
+    if let Some(writer) = writer {
+        if let Err(error) = writer.writer.flush() {
+            writer.write_failed = true;
+            log::warn!("[sing-box] failed to flush file log: {error}");
+        }
     }
 }
 
-/// Delete rotated OneBox app logs older than 7 days.
+/// Delete rotated NekoPilot app logs older than 7 days, plus legacy OneBox
+/// archives left by older builds.
 ///
 /// Companion to the `tauri-plugin-log` configuration in `app::plugins`
 /// (`RotationStrategy::KeepAll`). The plugin rotates by size only, so
@@ -159,25 +233,34 @@ pub(super) fn flush_singbox_log(writer: &mut Option<BufWriter<std::fs::File>>) {
 /// uncompressed intentionally — `OneBox.log` is grep-driven triage
 /// material and the triage script must be able to read it directly.
 ///
-/// Only rotated archives (`OneBox_<timestamp>.log`) are subject to
-/// deletion; the live `OneBox.log` is always preserved regardless of
-/// mtime — the plugin holds it open and deleting it would corrupt the
-/// writer. Oneshot: call once at `app_setup`; not re-entered per log
-/// write.
-pub fn cleanup_old_onebox_logs(app: &AppHandle) {
+/// Only rotated archives (`NekoPilot_<timestamp>.log` and legacy
+/// `OneBox_<timestamp>.log`) are subject to deletion; live `.log` files are
+/// always preserved regardless of mtime — the plugin holds the current file
+/// open and deleting it would corrupt the writer. Oneshot: call once at
+/// `app_setup`; not re-entered per log write.
+pub fn cleanup_old_app_logs(app: &AppHandle) {
     let Ok(log_dir) = app.path().app_log_dir() else {
         return;
     };
     if !log_dir.exists() {
         return;
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(error) =
+            std::fs::set_permissions(&log_dir, std::fs::Permissions::from_mode(0o700))
+        {
+            log::warn!("Failed to secure app log directory: {error}");
+        }
+    }
     let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(7 * 86400);
-    sweep_onebox_logs(&log_dir, cutoff);
+    sweep_app_logs(&log_dir, cutoff);
 }
 
-/// Pure filesystem sweep — split from `cleanup_old_onebox_logs` so unit
+/// Pure filesystem sweep — split from `cleanup_old_app_logs` so unit
 /// tests can exercise it without a real `AppHandle`.
-fn sweep_onebox_logs(log_dir: &Path, cutoff: std::time::SystemTime) {
+fn sweep_app_logs(log_dir: &Path, cutoff: std::time::SystemTime) {
     let entries = match std::fs::read_dir(log_dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -187,9 +270,16 @@ fn sweep_onebox_logs(log_dir: &Path, cutoff: std::time::SystemTime) {
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
 
-        // Rotated archive only: "OneBox_<timestamp>.log". Active file
-        // "OneBox.log" is never touched — see fn doc.
-        if !(name_str.starts_with("OneBox_") && name_str.ends_with(".log")) {
+        #[cfg(unix)]
+        if entry.file_type().is_ok_and(|file_type| file_type.is_file()) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(entry.path(), std::fs::Permissions::from_mode(0o600));
+        }
+
+        // Rotated archives only. Active NekoPilot.log / OneBox.log do not
+        // contain the underscore and are never touched.
+        let rotated = name_str.starts_with("NekoPilot_") || name_str.starts_with("OneBox_");
+        if !(rotated && name_str.ends_with(".log")) {
             continue;
         }
 
@@ -265,8 +355,8 @@ mod singbox_log_dir_tests {
 }
 
 #[cfg(test)]
-mod onebox_log_sweep_tests {
-    use super::sweep_onebox_logs;
+mod app_log_sweep_tests {
+    use super::sweep_app_logs;
     use std::fs::File;
     use std::time::{Duration, SystemTime};
 
@@ -282,24 +372,36 @@ mod onebox_log_sweep_tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let dir = tmp.path();
 
-        let active = dir.join("OneBox.log");
-        let recent = dir.join("OneBox_2026-04-20_00-00-00.log");
-        let stale = dir.join("OneBox_2026-04-01_00-00-00.log");
+        let active = dir.join("NekoPilot.log");
+        let legacy_active = dir.join("OneBox.log");
+        let recent = dir.join("NekoPilot_2026-04-20_00-00-00.log");
+        let stale = dir.join("NekoPilot_2026-04-01_00-00-00.log");
+        let legacy_stale = dir.join("OneBox_2026-04-01_00-00-00.log");
         let singbox = dir.join("sing-box-2026-04-01.log");
         let unrelated = dir.join("other.log");
 
         touch(&active, 30);
+        touch(&legacy_active, 30);
         touch(&recent, 1);
         touch(&stale, 30);
+        touch(&legacy_stale, 30);
         touch(&singbox, 30);
         touch(&unrelated, 30);
 
         let cutoff = SystemTime::now() - Duration::from_secs(7 * 86400);
-        sweep_onebox_logs(dir, cutoff);
+        sweep_app_logs(dir, cutoff);
 
-        assert!(active.exists(), "active OneBox.log must never be deleted");
+        assert!(
+            active.exists(),
+            "active NekoPilot.log must never be deleted"
+        );
+        assert!(
+            legacy_active.exists(),
+            "legacy active log must be preserved"
+        );
         assert!(recent.exists(), "recent rotated log must survive");
         assert!(!stale.exists(), "stale rotated log must be removed");
+        assert!(!legacy_stale.exists(), "legacy stale log must be removed");
         assert!(
             singbox.exists(),
             "sing-box logs are owned by a different sweep"

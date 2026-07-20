@@ -7,6 +7,7 @@ import { TrayIcon, TrayIconEvent } from "@tauri-apps/api/tray";
 import { message } from "@tauri-apps/plugin-dialog";
 import { type } from "@tauri-apps/plugin-os";
 import { getProxyPort } from "./single/store";
+import type { StatusChangedPayload } from "./types/definition";
 import { ENGINE_STATE_EVENT, type EngineState } from "./types/engine-state";
 import {
   copyEnvToClipboard,
@@ -63,9 +64,26 @@ async function toggleProxyStatus(status: boolean) {
     if (status) {
       await vpnServiceManager.stop();
     } else {
-      const configReady = await vpnServiceManager.syncConfig({});
+      const configReady = await vpnServiceManager.syncConfig({
+        onError: async () => {
+          await message(t("connect_failed"), {
+            title: t("error"),
+            kind: "error",
+          });
+        },
+      });
       if (!configReady) return;
       await vpnServiceManager.start();
+    }
+  } catch (error) {
+    console.error("Failed to toggle proxy from the tray:", error);
+    // start() already presents its actionable error. stop() has no other UI
+    // caller here, so surface that failure from the tray action itself.
+    if (status) {
+      await message(t("connect_failed"), {
+        title: t("error"),
+        kind: "error",
+      });
     }
   } finally {
     toggleInFlight = false;
@@ -247,7 +265,11 @@ export async function setupTrayIcon() {
       const existing = await TrayIcon.getById(TRAY_ICON_ID);
       if (existing) {
         trayInstance = existing;
-        await updateTrayIcon(await getEngineState());
+        const state = await getEngineState();
+        await updateTrayIcon(state);
+        // Rebind menu callbacks to this WebView context after a renderer
+        // reload; the native tray item can outlive its previous JS handlers.
+        await trayInstance.setMenu(await createTrayMenu(state));
         startStatusPolling();
         return trayInstance;
       }
@@ -308,10 +330,6 @@ async function handleConnectionError() {
     invoke<string>("read_logs", { isError: true }),
   ]);
 
-  console.debug({
-    info,
-    error,
-  });
   let msg = t("connect_failed_retry");
 
   if (info && info.trim().length > 0) {
@@ -337,13 +355,8 @@ export async function setupStatusListener() {
     await updateTrayMenu();
   });
 
-  await listen("status-changed", async (event) => {
-    if (!event?.payload) return;
-
-    console.log(event);
-
-    // @ts-ignore
-    if (event.payload.code === 1) {
+  await listen<StatusChangedPayload>("status-changed", async ({ payload }) => {
+    if (payload?.code === 1) {
       await handleConnectionError();
     }
 
@@ -353,12 +366,12 @@ export async function setupStatusListener() {
 
 // 监听错误日志事件
 export async function setupTauriLogListener() {
-  await listen("tauri-log", async (event) => {
-    if (!event?.payload) return;
+  await listen<[code: number, message: string]>("tauri-log", ({ payload }) => {
+    if (!Array.isArray(payload) || typeof payload[0] !== "number" ||
+      typeof payload[1] !== "string") return;
 
-    // @ts-ignore
-    const isError = event.payload.code === 1;
-    // @ts-ignore
-    console[isError ? "error" : "log"](event);
+    const [code, logMessage] = payload;
+    if (code === 1) console.error(logMessage);
+    else if (code >= 2) console.warn(logMessage);
   });
 }

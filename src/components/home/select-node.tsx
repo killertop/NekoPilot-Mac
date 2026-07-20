@@ -108,7 +108,12 @@ export default function SelectNode({
       const [selectorResponse, allProxiesResponse] = await Promise.all([
         clashApiFetch("/proxies/ExitGateway"),
         clashApiFetch("/proxies")
-          .then((response) => response.json())
+          .then((response) => {
+            if (!response.ok) {
+              throw new Error(`proxies_http_${response.status}`);
+            }
+            return response.json();
+          })
           .catch((fetchError) => {
             console.warn(
               "Failed to fetch proxy protocol metadata:",
@@ -117,6 +122,9 @@ export default function SelectNode({
             return undefined;
           }),
       ]);
+      if (!selectorResponse.ok) {
+        throw new Error(`selector_http_${selectorResponse.status}`);
+      }
       const selector = (await selectorResponse.json()) as SelectorResponse;
       const nodeList = Array.isArray(selector.all) ? selector.all : [];
       return {
@@ -141,7 +149,6 @@ export default function SelectNode({
   }, [mutate]);
 
   if (error) {
-    console.error(error);
     return (
       <div className="onebox-plain-card flex items-center gap-3 px-3.5 py-2.5">
         <span
@@ -210,7 +217,7 @@ type NodeListProps = {
   onUpdate: (node?: string) => unknown;
 };
 
-function NodeList({
+export function NodeList({
   currentNode,
   nodeList,
   nodeProtocols,
@@ -224,6 +231,9 @@ function NodeList({
   const [delays, setDelays] = useState<Record<string, DelayStatus>>({});
   const [pendingNodes, setPendingNodes] = useState<Set<string>>(new Set());
   const selectedNodeRef = useRef(currentNode);
+  const lastConfirmedNodeRef = useRef(currentNode);
+  const pendingSelectionRef = useRef<string | null>(null);
+  const mountedRef = useRef(true);
   const selectionEpoch = useRef(0);
   const selectionQueue = useRef<Promise<void>>(Promise.resolve());
   const lastUrlTestRequest = useRef(0);
@@ -250,7 +260,17 @@ function NodeList({
 
   useEffect(() => {
     selectedNodeRef.current = currentNode;
+    // SWR reflects an optimistic selection back through this prop. Only
+    // accept external state as confirmed when no local switch is pending.
+    if (pendingSelectionRef.current === null) {
+      lastConfirmedNodeRef.current = currentNode;
+    }
   }, [currentNode]);
+
+  useEffect(() => () => {
+    mountedRef.current = false;
+    selectionEpoch.current += 1;
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -393,30 +413,62 @@ function NodeList({
   );
 
   const handleNodeChange = (node: string) => {
-    const previous = selectedNodeRef.current;
-    if (node === previous) return;
+    if (node === selectedNodeRef.current) return;
     const epoch = ++selectionEpoch.current;
     selectedNodeRef.current = node;
+    pendingSelectionRef.current = node;
     onUpdate(node);
     window.dispatchEvent(new Event(MANUAL_NODE_SELECTION_EVENT));
 
+    let rollbackNode = lastConfirmedNodeRef.current;
+    let persistenceStarted = false;
     selectionQueue.current = selectionQueue.current
       .catch(() => undefined)
       .then(async () => {
         if (epoch !== selectionEpoch.current) return;
+        rollbackNode = lastConfirmedNodeRef.current;
         if (isRunning) await selectExitGatewayNode(node);
         const identifier = subscriptionIdentifierForNode(node);
-        const writes = [setStoreValue(SELECTED_NODE_STORE_KEY, node)];
-        if (identifier) writes.push(setStoreValue(SSI_STORE_KEY, identifier));
-        await Promise.all(writes).catch((persistError) => {
-          console.warn("Failed to persist selected node:", persistError);
-        });
+        // Keep the two related store keys ordered. If the source write fails,
+        // SELECTED_NODE can be restored before the next queued selection runs.
+        persistenceStarted = true;
+        await setStoreValue(SELECTED_NODE_STORE_KEY, node);
+        if (identifier) await setStoreValue(SSI_STORE_KEY, identifier);
+        lastConfirmedNodeRef.current = node;
+        if (mountedRef.current && epoch === selectionEpoch.current) {
+          pendingSelectionRef.current = null;
+        }
       })
-      .catch((switchError) => {
-        if (epoch !== selectionEpoch.current) return;
+      .catch(async (switchError) => {
         console.error("Error changing node:", switchError);
-        selectedNodeRef.current = previous;
-        onUpdate(previous);
+        if (persistenceStarted) {
+          try {
+            await setStoreValue(SELECTED_NODE_STORE_KEY, rollbackNode);
+            const rollbackIdentifier = subscriptionIdentifierForNode(rollbackNode);
+            if (rollbackIdentifier) {
+              await setStoreValue(SSI_STORE_KEY, rollbackIdentifier);
+            }
+          } catch (persistRollbackError) {
+            console.error(
+              "Error restoring confirmed node setting:",
+              persistRollbackError,
+            );
+          }
+        }
+        if (!mountedRef.current || epoch !== selectionEpoch.current) return;
+
+        const confirmedNode = rollbackNode;
+        if (isRunning && confirmedNode && confirmedNode !== node) {
+          try {
+            await selectExitGatewayNode(confirmedNode);
+          } catch (rollbackError) {
+            console.error("Error restoring confirmed node:", rollbackError);
+          }
+        }
+        if (!mountedRef.current || epoch !== selectionEpoch.current) return;
+        pendingSelectionRef.current = null;
+        selectedNodeRef.current = confirmedNode;
+        onUpdate(confirmedNode);
         onUpdate();
       });
   };

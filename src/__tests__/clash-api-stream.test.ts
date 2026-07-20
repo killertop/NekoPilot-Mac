@@ -31,4 +31,11 @@ describe("consumeJsonFrames", () => {
     expect(result.values).toEqual([{ up: 12, down: 34 }]);
     expect(result.remainder).toBe("");
   });
+
+  it("drops an oversized malformed frame instead of buffering forever", () => {
+    const result = consumeJsonFrames("x".repeat(256 * 1024 + 1));
+
+    expect(result.values).toEqual([]);
+    expect(result.remainder).toBe("");
+  });
 });

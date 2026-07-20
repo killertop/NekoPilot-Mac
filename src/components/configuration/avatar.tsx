@@ -29,10 +29,14 @@ export default function Avatar({ url, danger }: AvatarProps) {
   // Seed local state from the module cache so a known-failed URL skips
   // the <img> entirely on re-mount (no flash), and a known-good URL
   // renders <img> from first paint.
-  const initialFailed = faviconUrl
-    ? faviconStatus.get(faviconUrl) === "fail"
-    : false;
-  const [faviconFailed, setFaviconFailed] = useState(initialFailed);
+  const initialFailedUrl = faviconUrl && faviconStatus.get(faviconUrl) === "fail"
+    ? faviconUrl
+    : null;
+  const [failedUrl, setFailedUrl] = useState<string | null>(initialFailedUrl);
+  const faviconFailed = Boolean(
+    faviconUrl &&
+      (failedUrl === faviconUrl || faviconStatus.get(faviconUrl) === "fail"),
+  );
 
   if (danger) {
     return (
@@ -67,7 +71,7 @@ export default function Avatar({ url, danger }: AvatarProps) {
             onLoad={() => faviconStatus.set(faviconUrl, "ok")}
             onError={() => {
               faviconStatus.set(faviconUrl, "fail");
-              setFaviconFailed(true);
+              setFailedUrl(faviconUrl);
             }}
           />
         )
