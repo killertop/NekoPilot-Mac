@@ -1,16 +1,21 @@
 import { useEffect, useState } from "react";
 import {
+  ACTIVE_SUBSCRIPTION_CHANGED_EVENT,
   MANUAL_NODE_SELECTION_EVENT,
   NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT,
   NODE_SELECTOR_REFRESH_EVENT,
 } from "../components/home/events";
-import { getAutoSelectFastestNode } from "../single/store";
-import { AUTO_SELECT_FASTEST_NODE_CHANGED_EVENT } from "../types/definition";
+import { getAutoSelectFastestNode, setStoreValue } from "../single/store";
+import {
+  AUTO_SELECT_FASTEST_NODE_CHANGED_EVENT,
+  SSI_STORE_KEY,
+} from "../types/definition";
 import { clashApiFetch } from "../utils/clash-api";
 import { measureNodeDelays, type DelayStatus } from "../utils/node-delay";
 import {
   getExitGatewaySelector,
   selectExitGatewayNode,
+  subscriptionIdentifierForNode,
 } from "../utils/node-pool";
 
 const INITIAL_TEST_DELAY_MS = 5_000;
@@ -160,6 +165,22 @@ export function useAutoNodeSelection(isRunning: boolean): void {
         return;
       }
       await selectExitGatewayNode(candidate);
+      const identifier = subscriptionIdentifierForNode(candidate);
+      if (identifier) {
+        // The runtime selector spans every imported configuration. If the
+        // fastest node belongs to another one, keep the Home configuration
+        // and its filtered node list aligned with the actual active node.
+        window.dispatchEvent(
+          new CustomEvent<string>(ACTIVE_SUBSCRIPTION_CHANGED_EVENT, {
+            detail: identifier,
+          }),
+        );
+        try {
+          await setStoreValue(SSI_STORE_KEY, identifier);
+        } catch (error) {
+          console.warn("Failed to persist automatically selected configuration", error);
+        }
+      }
       window.dispatchEvent(new Event(NODE_SELECTOR_REFRESH_EVENT));
       console.info(`[auto-node] switched to ${candidate}`);
     };

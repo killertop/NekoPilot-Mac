@@ -1,10 +1,14 @@
+import { useEffect, useState } from "react";
 import { useSubscriptions } from "../../hooks/useDB";
 import { t, vpnServiceManager } from "../../utils/helper";
 import { AppleNetworkStatus, GoogleNetworkStatus } from "./network-check";
 import NetworkSpeed from "./network-speed";
 import SelectSub from "./select-config";
 import SelectNode from "./select-node";
-import { NODE_SELECTOR_REFRESH_EVENT } from "./events";
+import {
+    ACTIVE_SUBSCRIPTION_CHANGED_EVENT,
+    NODE_SELECTOR_REFRESH_EVENT,
+} from "./events";
 import { switchToSubscriptionNode } from "../../utils/node-pool";
 
 function SectionLabel({
@@ -35,6 +39,24 @@ export default function Body({
     isRunning: boolean;
 }) {
     const { data, error, isLoading, mutate } = useSubscriptions();
+    const [selectedIdentifier, setSelectedIdentifier] = useState("");
+
+    useEffect(() => {
+        const syncActiveSubscription = (event: Event) => {
+            const identifier = (event as CustomEvent<string>).detail;
+            if (identifier) setSelectedIdentifier(identifier);
+        };
+        window.addEventListener(
+            ACTIVE_SUBSCRIPTION_CHANGED_EVENT,
+            syncActiveSubscription,
+        );
+        return () => {
+            window.removeEventListener(
+                ACTIVE_SUBSCRIPTION_CHANGED_EVENT,
+                syncActiveSubscription,
+            );
+        };
+    }, []);
 
     const handleUpdate = async (identifier: string, changed: boolean) => {
         try {
@@ -112,6 +134,8 @@ export default function Body({
                 </SectionLabel>
                 <SelectSub
                     onUpdate={handleUpdate}
+                    selectedIdentifier={selectedIdentifier}
+                    onSelectionChange={setSelectedIdentifier}
                     data={data}
                     isLoading={isLoading}
                 />
@@ -119,7 +143,11 @@ export default function Body({
 
             <section className="w-full">
                 <SectionLabel>{t("node_selection")}</SectionLabel>
-                <SelectNode isRunning={isRunning} subscriptions={data} />
+                <SelectNode
+                    isRunning={isRunning}
+                    subscriptions={data}
+                    selectedIdentifier={selectedIdentifier}
+                />
             </section>
 
             <NetworkSpeed isRunning={isRunning} />

@@ -5,6 +5,10 @@ export const NODE_SELECTOR_REFRESH_EVENT = "nekopilot:node-selector-refresh";
 export const NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT =
   "nekopilot:node-selector-optimistic-config";
 
+/** Emitted whenever the active node implies a different configuration. */
+export const ACTIVE_SUBSCRIPTION_CHANGED_EVENT =
+  "nekopilot:active-subscription-changed";
+
 /** Emitted when the user manually chooses a node. */
 export const MANUAL_NODE_SELECTION_EVENT =
   "nekopilot:manual-node-selection";

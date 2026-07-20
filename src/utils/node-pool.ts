@@ -8,6 +8,11 @@ export type ExitGatewaySelector = {
   now: string;
 };
 
+export type ScopedNodeSelection = {
+  all: string[];
+  now: string;
+};
+
 export function subscriptionNodePrefix(identifier: string): string {
   return `${RUNTIME_NODE_TAG_PREFIX}${identifier}:`;
 }
@@ -55,6 +60,36 @@ export function preferredNodeForSubscription(
   if (remembered && nodes.includes(remembered)) return remembered;
   const prefix = subscriptionNodePrefix(identifier);
   return nodes.find((node) => node.startsWith(prefix));
+}
+
+/**
+ * Restricts the Home node selector to the configuration shown above it.
+ * Untagged nodes are retained only for one-time compatibility with configs
+ * produced before the combined runtime pool was introduced.
+ */
+export function nodesForSubscription(
+  identifier: string,
+  nodes: string[],
+): string[] {
+  if (!identifier) return [];
+  const scoped = nodes.filter(
+    (node) => subscriptionIdentifierForNode(node) === identifier,
+  );
+  if (scoped.length > 0) return scoped;
+  return nodes.some((node) => subscriptionIdentifierForNode(node)) ? [] : nodes;
+}
+
+/** Keeps the visible node and node list inside the active configuration. */
+export function scopedNodeSelection(
+  identifier: string,
+  nodes: string[],
+  currentNode: string,
+): ScopedNodeSelection {
+  const all = nodesForSubscription(identifier, nodes);
+  const now = all.includes(currentNode)
+    ? currentNode
+    : preferredNodeForSubscription(identifier, all) ?? all[0] ?? "";
+  return { all, now };
 }
 
 /** Selects the first node belonging to a configuration without reloading sing-box. */

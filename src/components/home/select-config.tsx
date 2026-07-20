@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { getStoreValue, setStoreValue } from "../../single/store";
 import { SSI_STORE_KEY, Subscription } from "../../types/definition";
 import { t } from "../../utils/helper";
@@ -7,19 +7,35 @@ import {
     AppleSelectOption,
     AppleSelectPlaceholder,
 } from "./apple-select-menu";
-import { NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT } from "./events";
+import {
+    ACTIVE_SUBSCRIPTION_CHANGED_EVENT,
+    NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT,
+} from "./events";
 
 type SubscriptionProps = {
     data: Subscription[] | undefined;
     isLoading: boolean;
+    selectedIdentifier: string;
+    onSelectionChange: (identifier: string) => void;
     onUpdate: (identifier: string, changed: boolean) => Promise<void>;
 };
 
-export default function SelectSub({ data, isLoading, onUpdate }: SubscriptionProps) {
-    const [selected, setSelected] = useState<string>("");
+export default function SelectSub({
+    data,
+    isLoading,
+    selectedIdentifier,
+    onSelectionChange,
+    onUpdate,
+}: SubscriptionProps) {
     const selectedRef = useRef("");
     const selectionEpoch = useRef(0);
     const selectionQueue = useRef<Promise<void>>(Promise.resolve());
+
+    useEffect(() => {
+        if (!selectedIdentifier || selectedRef.current === selectedIdentifier) return;
+        selectionEpoch.current += 1;
+        selectedRef.current = selectedIdentifier;
+    }, [selectedIdentifier]);
 
     useEffect(() => {
         let cancelled = false;
@@ -32,19 +48,24 @@ export default function SelectSub({ data, isLoading, onUpdate }: SubscriptionPro
             const item = data.find((i) => i.identifier === savedId);
             if (item) {
                 selectedRef.current = item.identifier;
-                setSelected(item.identifier);
+                onSelectionChange(item.identifier);
             } else {
                 selectedRef.current = data[0].identifier;
-                setSelected(data[0].identifier);
+                onSelectionChange(data[0].identifier);
                 await setStoreValue(SSI_STORE_KEY, data[0].identifier);
             }
+            window.dispatchEvent(
+                new CustomEvent<string>(ACTIVE_SUBSCRIPTION_CHANGED_EVENT, {
+                    detail: selectedRef.current,
+                }),
+            );
         };
-        syncDisplay();
+        void syncDisplay();
 
         return () => {
             cancelled = true;
         };
-    }, [data]);
+    }, [data, onSelectionChange]);
 
     const options = useMemo<AppleSelectOption<string>[]>(() => {
         return (
@@ -73,7 +94,7 @@ export default function SelectSub({ data, isLoading, onUpdate }: SubscriptionPro
         );
     }
 
-    const selectedItem = data.find((i) => i.identifier === selected);
+    const selectedItem = data.find((i) => i.identifier === selectedIdentifier);
 
     const updateSubscription = (identifier: string) => {
         const item = data.find((i) => i.identifier === identifier);
@@ -85,7 +106,12 @@ export default function SelectSub({ data, isLoading, onUpdate }: SubscriptionPro
         // Update both selectors in the same frame as the click. Persistence
         // and the local Clash API switch continue asynchronously.
         selectedRef.current = item.identifier;
-        setSelected(item.identifier);
+        onSelectionChange(item.identifier);
+        window.dispatchEvent(
+            new CustomEvent<string>(ACTIVE_SUBSCRIPTION_CHANGED_EVENT, {
+                detail: item.identifier,
+            }),
+        );
         window.dispatchEvent(
             new CustomEvent<string>(NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT, {
                 detail: item.identifier,
@@ -106,7 +132,12 @@ export default function SelectSub({ data, isLoading, onUpdate }: SubscriptionPro
                 if (epoch !== selectionEpoch.current) return;
                 console.error("Failed to select configuration:", error);
                 selectedRef.current = prevId;
-                setSelected(prevId);
+                onSelectionChange(prevId);
+                window.dispatchEvent(
+                    new CustomEvent<string>(ACTIVE_SUBSCRIPTION_CHANGED_EVENT, {
+                        detail: prevId,
+                    }),
+                );
                 window.dispatchEvent(
                     new CustomEvent<string>(NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT, {
                         detail: prevId,
@@ -123,7 +154,7 @@ export default function SelectSub({ data, isLoading, onUpdate }: SubscriptionPro
 
     return (
         <AppleSelectMenu<string>
-            value={selected}
+            value={selectedIdentifier}
             options={options}
             onChange={updateSubscription}
             menuMaxHeight={256}

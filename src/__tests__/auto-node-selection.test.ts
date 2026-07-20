@@ -11,6 +11,7 @@ import {
   DEFAULT_AUTO_SELECT_FASTEST_NODE,
 } from "../types/definition";
 import {
+  ACTIVE_SUBSCRIPTION_CHANGED_EVENT,
   MANUAL_NODE_SELECTION_EVENT,
   NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT,
 } from "../components/home/events";
@@ -30,6 +31,9 @@ describe("automatic node selection", () => {
     expect(MANUAL_NODE_SELECTION_EVENT).toBe("nekopilot:manual-node-selection");
     expect(NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT).toBe(
       "nekopilot:node-selector-optimistic-config",
+    );
+    expect(ACTIVE_SUBSCRIPTION_CHANGED_EVENT).toBe(
+      "nekopilot:active-subscription-changed",
     );
   });
 

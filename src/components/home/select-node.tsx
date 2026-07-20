@@ -8,6 +8,7 @@ import { t } from "../../utils/helper";
 import { measureNodeDelays } from "../../utils/node-delay";
 import {
     preferredNodeForSubscription,
+    scopedNodeSelection,
     selectExitGatewayNode,
     subscriptionIdentifierForNode,
 } from "../../utils/node-pool";
@@ -63,6 +64,7 @@ type NodeSelectorData = {
 type SelectNodeProps = {
     isRunning: boolean;
     subscriptions?: Subscription[];
+    selectedIdentifier: string;
 };
 
 export default function SelectNode(props: SelectNodeProps) {
@@ -155,11 +157,17 @@ export default function SelectNode(props: SelectNodeProps) {
         );
     }
 
+    const scopedSelection = scopedNodeSelection(
+        props.selectedIdentifier,
+        data.all,
+        data.now,
+    );
+
     return (
         <NodeMenu
             isRunning={isRunning}
-            nodeList={data.all}
-            currentNode={data.now}
+            nodeList={scopedSelection.all}
+            currentNode={scopedSelection.now}
             nodeProtocols={data.nodeProtocols}
             showProtocol={data.showProtocol}
             subscriptionNames={Object.fromEntries(
