@@ -6,10 +6,9 @@ import useSWR, { mutate as swrMutate } from "swr";
 import { formatSubscriptionImportError, insertSubscription } from "../../action/db";
 import { clearEngineError, useEngineState } from "../../hooks/useEngineState";
 import { NavContext } from "../../single/context";
-import { getProxyPort, getStoreValue, setStoreValue } from "../../single/store";
+import { getProxyPort, setStoreValue } from "../../single/store";
 import {
   GET_SUBSCRIPTIONS_LIST_SWR_KEY,
-  RULE_MODE_STORE_KEY,
   SSI_STORE_KEY,
 } from "../../types/definition";
 import { t, vpnServiceManager } from "../../utils/helper";
@@ -94,42 +93,7 @@ export function useGoogleNetworkCheck(isRunning: boolean) {
 }
 
 // 类型定义
-export type ProxyMode = "rules" | "global";
 export type OperationStatus = "starting" | "stopping" | "idle";
-
-/**
- * 自定义Hook: 管理代理模式状态
- */
-export const useProxyMode = () => {
-  const [selectedMode, setSelectedMode] = useState<ProxyMode>("rules");
-
-  const initializeMode = async () => {
-    try {
-      const storedMode = await getStoreValue(RULE_MODE_STORE_KEY) as ProxyMode;
-      if (storedMode) {
-        setSelectedMode(storedMode);
-      } else {
-        await setStoreValue(RULE_MODE_STORE_KEY, "rules");
-        setSelectedMode("rules");
-      }
-    } catch (error) {
-      console.error("获取规则模式发生错误:", error);
-      await setStoreValue(RULE_MODE_STORE_KEY, "rules");
-      setSelectedMode("rules");
-    }
-  };
-
-  const changeMode = async (mode: ProxyMode) => {
-    await setStoreValue(RULE_MODE_STORE_KEY, mode);
-    setSelectedMode(mode);
-  };
-
-  return {
-    selectedMode,
-    initializeMode,
-    changeMode,
-  };
-};
 
 /**
  * Root-level hook. Owns the apply-pipeline state (applyPhase /
@@ -544,35 +508,5 @@ export const useVPNOperations = () => {
     toggleService,
     repairState,
     onRepairSuccess,
-  };
-};
-
-/**
- * 自定义Hook: 管理模式切换指示器位置
- */
-export const useModeIndicator = (selectedMode: ProxyMode) => {
-  const [indicatorStyle, setIndicatorStyle] = useState({ left: 0, width: 0 });
-  const modeButtonsRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const container = modeButtonsRef.current;
-    const activeButton = container?.querySelector(
-      `button[data-mode="${selectedMode}"]`,
-    );
-
-    if (container && activeButton) {
-      const containerRect = container.getBoundingClientRect();
-      const buttonRect = activeButton.getBoundingClientRect();
-
-      setIndicatorStyle({
-        left: buttonRect.left - containerRect.left,
-        width: buttonRect.width,
-      });
-    }
-  }, [selectedMode]);
-
-  return {
-    indicatorStyle,
-    modeButtonsRef,
   };
 };

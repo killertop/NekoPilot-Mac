@@ -15,11 +15,9 @@ import {
 } from "../config/merger/custom-rules";
 import {
     getCustomRuleSet,
-    getStoreValue,
     setCustomRuleSet,
 } from "../single/store";
 import { useEngineState } from "../hooks/useEngineState";
-import { RULE_MODE_STORE_KEY } from "../types/definition";
 import { t, vpnServiceManager } from "../utils/helper";
 import {
     ACTION_COLOR,
@@ -86,12 +84,9 @@ export default function RouterSettings() {
     // Persist the next sets and write every affected action's store key. Edit
     // can move a rule between two actions, so callers pass all touched actions.
     const applyRulesLive = async () => {
-        // Global mode does not consult custom route rules. For the normal
-        // rules mode, the native write-and-reload command coalesces quick
-        // successive edits and reloads sing-box without disconnecting it.
+        // The native write-and-reload command coalesces quick successive edits
+        // and reloads sing-box without disconnecting it.
         if (engineState.kind !== "running") return;
-        const mode = await getStoreValue(RULE_MODE_STORE_KEY);
-        if (mode === "global") return;
         await vpnServiceManager.syncAndReload(0);
     };
 

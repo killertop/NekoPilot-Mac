@@ -630,8 +630,8 @@ main.onebox-surface {
  *
  * Aesthetic commitment: Console.app / Xcode debug-console hybrid.
  * Unified translucent toolbar, dense SF Mono log rows, minimal chrome.
- * This language is distinct from the iOS-flavoured `.onebox-tabs` /
- * `.onebox-segmented` pills used on the main 371×600 window.
+ * This language is distinct from the iOS-flavoured `.onebox-tabs`
+ * used on the main 371×600 window.
  * ========================================================================== */
 
 .onebox-mac-window {

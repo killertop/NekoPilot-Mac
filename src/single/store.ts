@@ -24,6 +24,7 @@ const REMOVED_PREFERENCE_KEYS = [
   "support_local_file_key",
   "theme_pref_key",
   "custom_ruleset_reject",
+  "rule_mode_key",
 ] as const;
 
 /** Delete obsolete preferences left by earlier builds. */

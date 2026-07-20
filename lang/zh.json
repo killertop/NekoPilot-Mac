@@ -105,8 +105,6 @@
     "fetch_subscription_failed": "从远程获取配置失败，错误代码：{{code}}",
     "filter_placeholder": "过滤关键词...",
     "get_subscription_config_failed": "获取配置失败",
-    "global_tip": "代理所有公共互联网流量",
-    "global": "全局",
     "gvisor_stack": "gVisor",
     "helper_install_failed": "安装失败",
     "helper_install_title": "安装特权组件",

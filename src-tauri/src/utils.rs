@@ -2,8 +2,7 @@ use std::fs;
 use std::io::ErrorKind;
 use tauri::{AppHandle, Manager};
 
-/// Delete legacy v1 cache files (including the historical `gloabl` typo) left over from
-/// pre-v2 clients. Never fails app startup.
+/// Delete obsolete cache files left by older routing modes. Never fails app startup.
 pub fn purge_legacy_cache_files(app: &AppHandle) {
     let config_dir = match app.path().app_config_dir() {
         Ok(dir) => dir,
@@ -27,6 +26,9 @@ pub fn purge_legacy_cache_files(app: &AppHandle) {
         "mixed-cache-gloabl-v1.db",
         "mixed-cache-gloabl-v1.db-wal",
         "mixed-cache-gloabl-v1.db-shm",
+        "mixed-cache-global-v2.db",
+        "mixed-cache-global-v2.db-wal",
+        "mixed-cache-global-v2.db-shm",
     ];
 
     for name in legacy_names {

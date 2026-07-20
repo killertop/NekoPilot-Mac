@@ -22,9 +22,6 @@ export const DHCP_CHANGED_EVENT = "nekopilot-dhcp-changed";
 // 'system' follows prefers-color-scheme; explicit values override it.
 // 允许局域网连接
 export const ALLOWLAN_STORE_KEY = "allow_lan_key";
-// 当前规则模式
-export const RULE_MODE_STORE_KEY = "rule_mode_key";
-
 export type OsInfo = {
   appVersion: string;
   osArch: Arch;

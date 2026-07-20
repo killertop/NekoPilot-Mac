@@ -97,7 +97,6 @@ fn build_options_from_settings(app: &AppHandle, mode: &str) -> Result<ConfigBuil
         .unwrap_or(u64::from(DEFAULT_MIXED_PROXY_PORT)) as u16;
     let cache_name = match mode {
         "mixed" => "mixed-cache-rule-v2.db",
-        "mixed-global" => "mixed-cache-global-v2.db",
         _ => return Err("invalid_config_mode".to_owned()),
     };
     let cache_path = app

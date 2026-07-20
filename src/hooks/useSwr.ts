@@ -74,7 +74,7 @@ export async function purgeLegacyTemplateCache(): Promise<void> {
 // key. Returns null if the mode is not one of the known configType values
 // (e.g. orphan shapes from earlier versions with different mode naming).
 function inferModeFromPathKey(key: string): configType | null {
-  const m = key.match(/-(mixed|mixed-global)-template-path$/);
+  const m = key.match(/-(mixed)-template-path$/);
   if (!m) return null;
   return m[1] as configType;
 }

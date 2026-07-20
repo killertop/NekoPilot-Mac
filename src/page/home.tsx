@@ -1,12 +1,8 @@
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import Body from "../components/home/body";
 import {
-    ProxyMode,
-    useModeIndicator,
-    useProxyMode,
     useVPNOperations,
 } from "../components/home/hooks";
-import { ModeSwitcher } from "../components/home/mode-switcher";
 import { PowerToggle } from "../components/home/power-toggle";
 import { PrestartRepairModal } from "../components/home/prestart-repair-modal";
 import { StatusDisplay } from "../components/home/status-display";
@@ -25,7 +21,6 @@ export default function HomePage() {
         isLoading: subscriptionsLoading,
         mutate: retrySubscriptions,
     } = useSubscriptions();
-    const { selectedMode, initializeMode, changeMode } = useProxyMode();
     const {
         isLoading,
         isRunning,
@@ -35,26 +30,10 @@ export default function HomePage() {
         repairState,
         onRepairSuccess,
     } = useVPNOperations();
-    const { indicatorStyle, modeButtonsRef } = useModeIndicator(selectedMode);
 
     const isEmpty = !subscriptionsError
         && subscriptions !== undefined
         && subscriptions.length === 0;
-
-    useEffect(() => {
-        initializeMode();
-    }, []);
-
-    const handleModeChange = async (mode: ProxyMode) => {
-        await changeMode(mode);
-        if (subscriptionsLoading || subscriptions === undefined || subscriptionsError) {
-            void retrySubscriptions();
-            return;
-        }
-        if (isLoading || isRunning) {
-            await restartService(isEmpty);
-        }
-    };
 
     const handleUpdate = async () => {
         if (subscriptionsLoading || subscriptions === undefined || subscriptionsError) {
@@ -119,15 +98,6 @@ export default function HomePage() {
 
                 <div className="mt-4">
                     <StatusDisplay statusText={statusText} phase={phase} />
-                </div>
-
-                <div className="mt-5">
-                    <ModeSwitcher
-                        selectedMode={selectedMode}
-                        onModeChange={handleModeChange}
-                        indicatorStyle={indicatorStyle}
-                        containerRef={modeButtonsRef}
-                    />
                 </div>
 
                 <div className="mt-5 w-full flex-1 min-h-0">

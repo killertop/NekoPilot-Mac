@@ -105,8 +105,6 @@
     "fetch_subscription_failed": "Failed to fetch config from remote, error code: {{code}}",
     "filter_placeholder": "Filter keyword...",
     "get_subscription_config_failed": "Get config failed",
-    "global_tip": "Proxy all public internet traffic",
-    "global": "Global",
     "gvisor_stack": "GVisor",
     "helper_install_failed": "Install failed",
     "helper_install_title": "Install privileged companion",

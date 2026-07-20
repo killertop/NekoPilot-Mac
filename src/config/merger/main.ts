@@ -51,11 +51,3 @@ export async function setMixedConfig(identifier: string, reloadIfRunning = false
     reloadIfRunning,
   );
 }
-
-export async function setGlobalMixedConfig(identifier: string, reloadIfRunning = false) {
-  const newConfig = await getConfigTemplate("mixed-global");
-
-  console.log("写入[全局]系统代理配置文件");
-  let dbConfigData = await getSubscriptionConfig(identifier);
-  await buildAndWriteConfig(newConfig, dbConfigData, "mixed-global", reloadIfRunning);
-}

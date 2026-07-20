@@ -4,7 +4,6 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { arch, locale, type, version } from "@tauri-apps/plugin-os";
 import {
   OsInfo,
-  RULE_MODE_STORE_KEY,
   SING_BOX_VERSION,
   SSI_STORE_KEY,
 } from "../types/definition";
@@ -13,7 +12,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { message } from "@tauri-apps/plugin-dialog";
 import en from "../../lang/en.json";
 import zh from "../../lang/zh.json";
-import { setGlobalMixedConfig, setMixedConfig } from "../config/merger/main";
+import { setMixedConfig } from "../config/merger/main";
 import {
   getClashApiSecret,
   getLanguage,
@@ -148,11 +147,7 @@ async function isRunning() {
 
 async function compileConfig(reloadIfRunning = false) {
   const identifier = await getStoreValue(SSI_STORE_KEY);
-  //zh: 直接使用 getStoreValue(RULE_MODE_STORE_KEY) 代替 setStoreValue 来获取当前模式，这样不会读到旧的值
-  //en: Directly use getStoreValue(RULE_MODE_STORE_KEY) instead of setStoreValue to get the current mode, so that the old value will not be read
-  const currentMode = await getStoreValue(RULE_MODE_STORE_KEY);
-  const fn = currentMode === "global" ? setGlobalMixedConfig : setMixedConfig;
-  await fn(identifier, reloadIfRunning);
+  await setMixedConfig(identifier, reloadIfRunning);
 }
 
 async function syncConfig(props: SyncConfigProps) {
