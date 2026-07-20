@@ -159,6 +159,7 @@
     "node_load_failed": "Could not load nodes",
     "node_sources": "Node management",
     "node_sources_desc": "Add, update, or remove subscriptions and single nodes",
+    "nodes": "Nodes",
     "url_test": "URL Test",
     "url_testing": "Testing",
     "not_connected": "Not connected",

@@ -72,7 +72,7 @@ function App() {
   const [language, setLanguage] = useState('en');
   const dockLang = useMemo(() => ({
     home: t("home"),
-    configuration: t("configuration"),
+    nodes: t("nodes"),
     rules: t("router_settings"),
     settings: t("settings"),
   }), [language]);
@@ -239,7 +239,7 @@ function AppShell({
 }: {
   activeScreen: ActiveScreenType;
   setActiveScreen: (s: ActiveScreenType) => void;
-  dockLang: { home: string; configuration: string; rules: string; settings: string };
+  dockLang: { home: string; nodes: string; rules: string; settings: string };
   isSettingsHovered: boolean;
   setIsSettingsHovered: (v: boolean) => void;
 }) {
@@ -270,7 +270,7 @@ function AppShell({
             data-active={activeScreen === 'configuration'}
           >
             <Layers size={18} />
-            <span className='text-[11px] capitalize'>{dockLang.configuration}</span>
+            <span className='text-[11px] capitalize'>{dockLang.nodes}</span>
           </button>
 
           <button

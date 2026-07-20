@@ -71,7 +71,7 @@ function ConfigurationBody({
 
     if (error) {
         return (
-            <div className="px-4 pt-5">
+            <div className="px-4 pt-4">
                 <div className="onebox-plain-card flex items-center gap-3 px-4 py-3">
                     <p
                         className="min-w-0 flex-1 text-[13px]"
@@ -97,7 +97,7 @@ function ConfigurationBody({
     }
 
     return (
-        <div className="onebox-scrollbar-hidden h-full overflow-auto px-4 pb-5">
+        <div className="onebox-scrollbar-hidden h-full overflow-auto px-4 pt-4 pb-5">
             <ul className="onebox-grouped-card list-none p-0">
                 {data.map((item) => (
                     <SubscriptionItem

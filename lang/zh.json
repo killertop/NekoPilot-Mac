@@ -159,6 +159,7 @@
     "node_load_failed": "节点列表加载失败",
     "node_sources": "节点管理",
     "node_sources_desc": "添加、更新或删除订阅与单节点",
+    "nodes": "节点",
     "url_test": "URL Test",
     "url_testing": "测速中",
     "not_connected": "未连接",
