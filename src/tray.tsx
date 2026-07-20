@@ -32,7 +32,7 @@ let statusPollInFlight = false;
 let toggleInFlight = false;
 let windowControlsSetup = false;
 let trayMenuUpdateChain: Promise<void> = Promise.resolve();
-let idleTrayIcon: Image | null = null;
+let idleTrayIcon: Image | Uint8Array | null = null;
 let runningTrayIcon: Image | null = null;
 
 const RUNNING_ICON_COLOR = [52, 199, 89] as const;
@@ -68,7 +68,7 @@ function setupWindowControls() {
     ?.addEventListener("click", () => appWindow.toggleMaximize());
   document
     .getElementById("titlebar-close")
-    ?.addEventListener("click", () => appWindow.hide());
+    ?.addEventListener("click", () => appWindow.close());
 }
 
 // 切换代理状态
@@ -172,39 +172,45 @@ async function handleTrayIconAction(event: TrayIconEvent) {
   }
 }
 
-async function getTrayIconImage(running: boolean): Promise<Image | undefined> {
+async function getTrayIconImage(
+  running: boolean,
+): Promise<Image | Uint8Array | undefined> {
   const macos = type() === "macos";
   if (macos && running && runningTrayIcon) return runningTrayIcon;
   if ((!macos || !running) && idleTrayIcon) return idleTrayIcon;
 
-  // Decode the PNG before passing it to the tray API. A Rust Vec<u8> crosses
-  // the IPC boundary as a number array, and supplying it directly can leave
-  // macOS with an empty status item instead of an icon.
-  const defaultIcon = await defaultWindowIcon();
-  let icon = defaultIcon;
+  let trayIconData: Uint8Array | undefined;
   try {
-    const trayIconData = await invoke<number[]>("get_tray_icon", {
-      app: appWindow,
-    });
-    if (trayIconData.length > 0) {
-      icon = await Image.fromBytes(new Uint8Array(trayIconData));
+    const rawTrayIconData = await invoke<number[]>("get_tray_icon");
+    if (rawTrayIconData.length > 0) {
+      trayIconData = new Uint8Array(rawTrayIconData);
     }
   } catch (error) {
-    console.warn(
-      "Failed to decode the menu-bar icon; using the app icon.",
-      error,
-    );
+    console.warn("Failed to decode the menu-bar icon.", error);
   }
 
-  if (!icon) return undefined;
-  if (!macos || !running) {
-    idleTrayIcon = icon;
+  if (!macos) {
+    const icon =
+      trayIconData !== undefined
+        ? await Image.fromBytes(trayIconData)
+        : (await defaultWindowIcon()) ?? undefined;
+    if (icon) idleTrayIcon = icon;
     return icon;
+  }
+
+  // Hand the untouched PNG directly to the native tray API while idle. This
+  // avoids WebView image decoding on macOS, which could fall back to the
+  // colourful application icon instead of the intended template mask.
+  if (!trayIconData) return undefined;
+  if (!running) {
+    idleTrayIcon = trayIconData;
+    return trayIconData;
   }
 
   // Keep the idle image as a macOS template so it adapts to light and dark
   // menu bars. Once sing-box is actually Running, recolor that same alpha
   // mask with the macOS system-green accent for an at-a-glance state cue.
+  const icon = await Image.fromBytes(trayIconData);
   const rgba = await icon.rgba();
   for (let offset = 0; offset < rgba.length; offset += 4) {
     if (rgba[offset + 3] === 0) continue;
@@ -226,8 +232,10 @@ async function updateTrayIcon(state: EngineState) {
 
   // A running icon must not be a template; macOS would otherwise turn its
   // green pixels back into the same monochrome idle icon.
-  await trayInstance.setIconAsTemplate(type() === "macos" && !running);
-  await trayInstance.setIcon(icon);
+  await trayInstance.setIconWithAsTemplate(
+    icon,
+    type() === "macos" && !running,
+  );
 }
 
 // 创建托盘图标配置

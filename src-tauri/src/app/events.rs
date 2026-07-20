@@ -24,20 +24,34 @@ pub fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
 pub fn on_window_event(window: &Window, event: &WindowEvent) {
     match event {
         WindowEvent::CloseRequested { api, .. } => {
-            // 主窗口关闭请求重定向为隐藏到托盘
             if window.label() == "main" {
-                api.prevent_close();
-                log::info!("窗口关闭请求被重定向为最小化到托盘");
-                if let Some(w) = window.app_handle().get_webview_window("main") {
-                    // On Linux Wayland, hide()+show() permanently breaks tao's
-                    // CSD HeaderBar button handlers. minimize() preserves them.
-                    #[cfg(target_os = "linux")]
-                    if let Err(error) = w.minimize() {
-                        log::warn!("failed to minimize main window: {error}");
-                    }
-                    #[cfg(not(target_os = "linux"))]
-                    if let Err(error) = w.hide() {
-                        log::warn!("failed to hide main window: {error}");
+                // macOS 用户点红色关闭按钮时应真正退出应用。此前这里把
+                // CloseRequested 改为隐藏窗口，进程与菜单栏状态项就会继续
+                // 存活，看起来像"已经退出却仍占着菜单栏"。
+                #[cfg(target_os = "macos")]
+                {
+                    api.prevent_close();
+                    log::info!("macOS main window close requested; exiting application");
+                    crate::commands::shell::sync_quit(window.app_handle().clone());
+                    return;
+                }
+
+                // 其他桌面平台仍沿用关闭窗口后隐藏到托盘的行为。
+                #[cfg(not(target_os = "macos"))]
+                {
+                    api.prevent_close();
+                    log::info!("窗口关闭请求被重定向为最小化到托盘");
+                    if let Some(w) = window.app_handle().get_webview_window("main") {
+                        // On Linux Wayland, hide()+show() permanently breaks tao's
+                        // CSD HeaderBar button handlers. minimize() preserves them.
+                        #[cfg(target_os = "linux")]
+                        if let Err(error) = w.minimize() {
+                            log::warn!("failed to minimize main window: {error}");
+                        }
+                        #[cfg(not(target_os = "linux"))]
+                        if let Err(error) = w.hide() {
+                            log::warn!("failed to hide main window: {error}");
+                        }
                     }
                 }
             }
