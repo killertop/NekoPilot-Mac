@@ -175,20 +175,20 @@ export const useApplyPipelineRoot = () => {
     return () => clearTimeout(timer);
   }, [applyPhase]);
 
-  // apply=1 auto-dismiss: the engine is already running and the user
-  // landed on Home via the deep-link handler, so once they've registered
-  // the success state (~1 s) take them to the connected Home view.
-  // Manual-add intentionally skips this — the modal carries the
-  // "请手动启动服务" hint and should stay open for the user to act on.
+  // Auto-dismiss every successful apply after briefly showing confirmation.
+  // This covers both apply=1 and manual imports: manual imports already make
+  // the new subscription current, so keeping a second Close action adds no
+  // value and leaves the underlying configuration page unnecessarily blocked.
   useEffect(() => {
     if (applyPhase !== "done") return;
-    if (manualMode) return;
     const timer = setTimeout(() => {
+      applyRunRef.current += 1;
       setApplyPhase(null);
       setApplyErrorMessage("");
+      setApplyErrorTitle("");
     }, 1000);
     return () => clearTimeout(timer);
-  }, [applyPhase, manualMode]);
+  }, [applyPhase]);
 
   // Apply pipeline. Shared between two callers:
   //   1. Deep-link apply=1 (App.tsx on_open_url handler): autoStart=true
