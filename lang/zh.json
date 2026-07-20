@@ -80,6 +80,7 @@
     "dl_phase_title": "正在导入节点",
     "disconnected": "未连接",
     "dns_cannot_empty": "DNS不能为空",
+    "dns_invalid": "请输入有效的 DNS IP 地址",
     "dns_hint": "此DNS用于解析非代理流量的域名",
     "dns_save_failed": "保存DNS设置失败",
     "dns_saved": "DNS设置保存成功",

@@ -2,7 +2,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import bytes from "bytes";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { ArrowClockwise, ChevronDown, InfoCircle, Trash3 } from "react-bootstrap-icons";
 import { toast } from "sonner";
 import { mutate } from "swr";
@@ -40,17 +40,43 @@ export const SubscriptionItem = React.memo(function SubscriptionItem({
     const [isDeleting, setIsDeleting] = useState(false);
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [detailOpen, setDetailOpen] = useState(false);
+    const [confirmingDelete, setConfirmingDelete] = useState(false);
+    const deleteConfirmationTimer = useRef<number | undefined>(undefined);
+
+    useEffect(() => () => {
+        if (deleteConfirmationTimer.current !== undefined) {
+            window.clearTimeout(deleteConfirmationTimer.current);
+        }
+    }, []);
 
     const handleDelete = async () => {
         if (isDeleting) return;
+        if (!confirmingDelete) {
+            setConfirmingDelete(true);
+            deleteConfirmationTimer.current = window.setTimeout(() => {
+                setConfirmingDelete(false);
+                deleteConfirmationTimer.current = undefined;
+            }, 3_000);
+            return;
+        }
         setIsDeleting(true);
-        await deleteSubscription(item.identifier);
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        setIsDeleting(false);
-        await mutate(GET_SUBSCRIPTIONS_LIST_SWR_KEY);
+        try {
+            const deleted = await deleteSubscription(item.identifier);
+            if (!deleted) return;
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            await mutate(GET_SUBSCRIPTIONS_LIST_SWR_KEY);
+        } finally {
+            setIsDeleting(false);
+            setConfirmingDelete(false);
+            if (deleteConfirmationTimer.current !== undefined) {
+                window.clearTimeout(deleteConfirmationTimer.current);
+                deleteConfirmationTimer.current = undefined;
+            }
+        }
     };
 
     const handleToggleExpand = () => {
+        setConfirmingDelete(false);
         setExpanded(isExpanded ? "" : item.identifier);
     };
 
@@ -209,6 +235,7 @@ export const SubscriptionItem = React.memo(function SubscriptionItem({
                             </button>
                             <button
                                 type="button"
+                                disabled={isDeleting}
                                 onClick={handleDelete}
                                 className="py-2.5 flex items-center justify-center gap-1.5 text-[13px] font-medium transition-colors active:bg-[rgba(255,59,48,0.06)]"
                                 style={{
@@ -217,7 +244,13 @@ export const SubscriptionItem = React.memo(function SubscriptionItem({
                                 }}
                             >
                                 <Trash3 size={13} />
-                                <span>{t("delete")}</span>
+                                <span>
+                                    {isDeleting
+                                        ? t("deleting_subscription")
+                                        : confirmingDelete
+                                            ? `${t("confirm")} ${t("delete")}?`
+                                            : t("delete")}
+                                </span>
                             </button>
                         </div>
                     </motion.div>

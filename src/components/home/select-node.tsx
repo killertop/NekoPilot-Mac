@@ -321,6 +321,7 @@ function NodeList({
         // keep row reordering low-priority, so a large airport cannot block a
         // click while results arrive and the list converges toward fastest-first.
         let cancelled = false;
+        let hasNewDelayHistory = false;
         setPendingNodes(new Set(stableNodeList));
         onUrlTestStateChange(true);
 
@@ -340,16 +341,7 @@ function NodeList({
                             ),
                             stableNodeList,
                         );
-                        delayHistoryWriteQueue.current = delayHistoryWriteQueue.current
-                            .catch(() => undefined)
-                            .then(() => delayHistoryLoad.current)
-                            .then(() => setStoreValue(
-                                NODE_DELAY_HISTORY_STORE_KEY,
-                                delayHistory.current,
-                            ))
-                            .catch((historyError) => {
-                                console.warn("Failed to save URL Test history:", historyError);
-                            });
+                        hasNewDelayHistory = true;
                         startTransition(() => {
                             setDelays((previous) => ({
                                 ...previous,
@@ -365,6 +357,24 @@ function NodeList({
                     },
                 });
             } finally {
+                // A large subscription can have hundreds of nodes. Persisting
+                // every individual result serially makes URL Test compete with
+                // rendering and produces needless native-store I/O. The UI
+                // still updates result-by-result; the latest complete history
+                // is written once at the end of this manual run.
+                if (!cancelled && hasNewDelayHistory) {
+                    delayHistoryWriteQueue.current = delayHistoryWriteQueue.current
+                        .catch(() => undefined)
+                        .then(() => delayHistoryLoad.current)
+                        .then(() => setStoreValue(
+                            NODE_DELAY_HISTORY_STORE_KEY,
+                            delayHistory.current,
+                        ))
+                        .catch((historyError) => {
+                            console.warn("Failed to save URL Test history:", historyError);
+                        });
+                    await delayHistoryWriteQueue.current;
+                }
                 if (!cancelled) onUrlTestStateChange(false);
             }
         }, 0);
@@ -419,8 +429,9 @@ function NodeList({
     return (
         <div
             className="onebox-grouped-card"
-            role="listbox"
+            role="group"
             aria-label={t("all_nodes")}
+            aria-busy={pendingNodes.size > 0}
         >
             {sortedNodes.map((node) => {
                 const isSelected = node === currentNode;
@@ -428,8 +439,7 @@ function NodeList({
                     <button
                         key={node}
                         type="button"
-                        role="option"
-                        aria-selected={isSelected}
+                        aria-pressed={isSelected}
                         onClick={() => handleNodeChange(node)}
                         className="w-full min-h-11 px-3.5 py-2.5 flex items-center gap-2 text-left transition-colors active:bg-[rgba(0,122,255,0.12)]"
                         style={{

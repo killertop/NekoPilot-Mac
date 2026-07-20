@@ -47,12 +47,6 @@ export default function Body({
                         >
                             {t("subscription_load_failed")}
                         </p>
-                        <p
-                            className="mt-0.5 truncate text-[11px]"
-                            style={{ color: "var(--onebox-label-secondary)" }}
-                        >
-                            {String(error)}
-                        </p>
                     </div>
                     <button
                         type="button"
@@ -101,6 +95,9 @@ export default function Body({
                     urlTestRequest={urlTestRequest}
                     onUrlTestStateChange={setIsUrlTesting}
                 />
+                <span className="sr-only" aria-live="polite">
+                    {isUrlTesting ? t("url_testing") : ""}
+                </span>
             </section>
 
             <NetworkSpeed isRunning={isRunning} />

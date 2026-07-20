@@ -80,6 +80,7 @@
     "dl_phase_title": "Importing nodes",
     "disconnected": "Disconnected",
     "dns_cannot_empty": "DNS cannot be empty",
+    "dns_invalid": "Enter a valid DNS IP address",
     "dns_hint": "This DNS is used to resolve non-proxy traffic domains",
     "dns_save_failed": "Failed to save DNS settings",
     "dns_saved": "DNS settings saved successfully",

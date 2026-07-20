@@ -566,6 +566,7 @@ function BottomSheet({
                     className="fixed inset-0 z-[80] flex items-end justify-center"
                     role="dialog"
                     aria-modal="true"
+                    aria-label={title}
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}

@@ -263,6 +263,20 @@ main.onebox-surface {
   color: var(--onebox-label);
 }
 
+/* Respect the macOS Reduce Motion preference throughout the WebView. Framer
+   Motion reads the same preference at the app root; this covers CSS-only
+   spinners, route fades, and hover transitions as well. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 /* ==========================================================================
  * Apple iOS 26 grouped-list primitives.
  *

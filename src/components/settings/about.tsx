@@ -93,6 +93,9 @@ function AboutSheet({ onClose }: { onClose: () => void }) {
                 <motion.div
                     key="about-sheet"
                     className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-3 pb-3"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label={t("about")}
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
@@ -330,6 +333,9 @@ function CoreInfoSheet({
             <motion.div
                 key="core-info"
                 className="fixed inset-0 z-[60] flex items-center justify-center px-4"
+                role="dialog"
+                aria-modal="true"
+                aria-label={t("core_info")}
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}

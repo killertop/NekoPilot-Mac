@@ -33,8 +33,13 @@ export default function DNSSettingsItem() {
             }
             toast.success(t("dns_saved", "DNS settings saved successfully"));
             setIsOpen(false);
-        } catch {
-            toast.error(t("dns_save_failed", "Failed to save DNS settings"));
+        } catch (error) {
+            const code = error instanceof Error ? error.message : String(error);
+            toast.error(
+                code.includes("invalid_direct_dns")
+                    ? t("dns_invalid", "Enter a valid DNS IP address")
+                    : t("dns_save_failed", "Failed to save DNS settings"),
+            );
         } finally {
             setIsLoading(false);
         }

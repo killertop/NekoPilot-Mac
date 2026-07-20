@@ -74,6 +74,7 @@ export function SubscriptionDetailModal({
     const [copiedConfig, setCopiedConfig] = useState(false);
     const [copyingConfig, setCopyingConfig] = useState(false);
     const [confirmingDelete, setConfirmingDelete] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
     const [localNodeInfo, setLocalNodeInfo] = useState<LocalNodeInfo>();
     const nameInputRef = useRef<HTMLInputElement>(null);
 
@@ -89,6 +90,7 @@ export function SubscriptionDetailModal({
         setCopiedUrl(false);
         setCopiedConfig(false);
         setConfirmingDelete(false);
+        setIsDeleting(false);
     }, [isOpen, item?.identifier]);
 
     useEffect(() => {
@@ -192,6 +194,7 @@ export function SubscriptionDetailModal({
     };
 
     const handleDelete = async () => {
+        if (isDeleting) return;
         if (!confirmingDelete) {
             setConfirmingDelete(true);
             // Auto-cancel the confirmation state after 3 s so a stale
@@ -199,9 +202,18 @@ export function SubscriptionDetailModal({
             setTimeout(() => setConfirmingDelete(false), 3000);
             return;
         }
-        await deleteSubscription(item.identifier);
-        await mutate(GET_SUBSCRIPTIONS_LIST_SWR_KEY);
-        onClose();
+        setIsDeleting(true);
+        try {
+            const deleted = await deleteSubscription(item.identifier);
+            if (!deleted) {
+                setConfirmingDelete(false);
+                return;
+            }
+            await mutate(GET_SUBSCRIPTIONS_LIST_SWR_KEY);
+            onClose();
+        } finally {
+            setIsDeleting(false);
+        }
     };
 
     return (
@@ -211,6 +223,9 @@ export function SubscriptionDetailModal({
                     <motion.div
                         key="detail-modal"
                         className="fixed inset-0 z-50 flex items-center justify-center px-3"
+                        role="dialog"
+                        aria-modal="true"
+                        aria-label={t('details')}
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
@@ -513,12 +528,15 @@ export function SubscriptionDetailModal({
                                             <button
                                                 type="button"
                                                 onClick={handleDelete}
+                                                disabled={isDeleting}
                                                 className="w-full flex items-center justify-center gap-2 px-4 py-3 text-[14px] font-medium transition-colors active:bg-[rgba(255,59,48,0.08)]"
                                                 style={{ color: '#FF3B30' }}
                                             >
                                                 <Trash3 size={15} />
                                                 <span>
-                                                    {confirmingDelete
+                                                    {isDeleting
+                                                        ? t('deleting_subscription')
+                                                        : confirmingDelete
                                                         ? t('confirm') +
                                                           ' ' +
                                                           t('delete') +

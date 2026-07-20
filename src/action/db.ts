@@ -102,12 +102,14 @@ export async function renameSubscription(identifier: string, name: string): Prom
     await invoke('rename_subscription', { identifier, name: trimmed });
 }
 
-export async function deleteSubscription(identifier: string) {
+export async function deleteSubscription(identifier: string): Promise<boolean> {
     try {
         await invoke('delete_subscription', { identifier });
+        return true;
     } catch (error) {
         console.error('Error deleting subscription:', error)
         toast.error(t('delete_subscription_failed'))
+        return false;
     }
 }
 

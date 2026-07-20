@@ -13,7 +13,10 @@ import { SettingItem } from "../settings/common";
 
 type UAKey = "default" | "sfm_1_12" | "sfa_1_12" | "sfi_1_12" | "custom";
 
-const UA_OPTIONS: { key: UAKey; label: string; value: string }[] = [
+function userAgentOptions(): { key: UAKey; label: string; value: string }[] {
+    // Keep labels render-time derived: the app follows the macOS language and
+    // a module-level translation would stay in the launch language forever.
+    return [
     {
         key: "default",
         label: t("ua_option_default", "default"),
@@ -39,13 +42,15 @@ const UA_OPTIONS: { key: UAKey; label: string; value: string }[] = [
         label: t("ua_option_custom", "custom"),
         value: "",
     },
-];
+    ];
+}
 
 export default function UASettingsItem() {
     const [isOpen, setIsOpen] = useState(false);
     const [selectedUA, setSelectedUA] = useState<UAKey>("default");
     const [customUA, setCustomUA] = useState("");
     const [isLoading, setIsLoading] = useState(false);
+    const uaOptions = userAgentOptions();
 
     useEffect(() => {
         if (isOpen) loadUA();
@@ -53,7 +58,7 @@ export default function UASettingsItem() {
 
     const loadUA = async () => {
         const ua = await getUserAgent();
-        const option = UA_OPTIONS.find((opt) => opt.value === ua);
+        const option = uaOptions.find((opt) => opt.value === ua);
         if (option) {
             setSelectedUA(option.key);
         } else {
@@ -72,7 +77,7 @@ export default function UASettingsItem() {
             const uaValue =
                 selectedUA === "custom"
                     ? customUA
-                    : UA_OPTIONS.find((opt) => opt.key === selectedUA)?.value ??
+                    : uaOptions.find((opt) => opt.key === selectedUA)?.value ??
                       "default";
             await setUserAgent(uaValue);
             toast.success(t("ua_saved", "User Agent settings saved successfully"));
@@ -84,7 +89,7 @@ export default function UASettingsItem() {
         }
     };
 
-    const radioOptions: RadioOption<UAKey>[] = UA_OPTIONS.map((o) => ({
+    const radioOptions: RadioOption<UAKey>[] = uaOptions.map((o) => ({
         key: o.key,
         label: o.label,
         sublabel: o.key !== "default" && o.key !== "custom" ? o.value : undefined,
