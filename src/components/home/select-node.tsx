@@ -10,8 +10,30 @@ import {
     AppleSelectPlaceholder,
 } from "./apple-select-menu";
 import { buildNodeProtocolMap, type NodeProtocolMap } from "./node-protocol";
-import NodeOption from "./node-option";
+import NodeOption, { type DelayStatus } from "./node-option";
 import { NODE_SELECTOR_REFRESH_EVENT } from "./events";
+
+const DELAY_TEST_URL = "https://www.google.com/generate_204";
+const DELAY_TEST_TIMEOUT_MS = 5_000;
+const DELAY_TEST_CONCURRENCY = 3;
+
+async function measureNodeDelay(nodeName: string): Promise<DelayStatus> {
+    try {
+        const response = await clashApiFetch(
+            `/proxies/${encodeURIComponent(nodeName)}/delay?url=${encodeURIComponent(DELAY_TEST_URL)}&timeout=${DELAY_TEST_TIMEOUT_MS}`,
+        );
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        const payload = await response.json() as { delay?: unknown };
+        return typeof payload.delay === "number" && Number.isFinite(payload.delay)
+            ? payload.delay
+            : "-";
+    } catch (error) {
+        console.warn(`Failed to fetch proxy delay for ${nodeName}:`, error);
+        return "-";
+    }
+}
 
 type SelectorResponse = {
     all?: string[];
@@ -122,22 +144,67 @@ type NodeMenuProps = {
 function NodeMenu(props: NodeMenuProps) {
     const { currentNode, nodeList, nodeProtocols, showProtocol, onUpdate, isRunning } = props;
     const [showDelay, setShowDelay] = useState(false);
+    const [delays, setDelays] = useState<Record<string, DelayStatus>>({});
+    const [pendingNodes, setPendingNodes] = useState<Set<string>>(new Set());
+    const nodeListKey = useMemo(() => nodeList.join("\u001f"), [nodeList]);
+    const stableNodeList = useMemo(
+        () => Array.from(new Set(nodeList.filter(Boolean))),
+        [nodeListKey],
+    );
 
     useEffect(() => {
-        if (!isRunning) {
+        if (!isRunning || stableNodeList.length === 0) {
             setShowDelay(false);
+            setDelays({});
+            setPendingNodes(new Set());
             return;
         }
 
-        // The Clash delay endpoint is itself the node probe.  Waiting for a
-        // separate Google request delayed or cancelled the first measurement,
-        // so trigger it shortly after sing-box reaches the running state.
+        // A connection starts one bounded test pass for every node in the
+        // active selector. Results are shared by both the trigger and popup,
+        // rather than relying on each visible option to start its own request.
+        // This avoids a request storm for large subscriptions while still
+        // filling all rows automatically after Connect succeeds.
+        let cancelled = false;
         setShowDelay(false);
-        const timer = window.setTimeout(() => setShowDelay(true), 500);
+        setDelays({});
+        setPendingNodes(new Set(stableNodeList));
+
+        const timer = window.setTimeout(() => {
+            if (cancelled) return;
+            setShowDelay(true);
+
+            let nextIndex = 0;
+            const worker = async () => {
+                while (!cancelled) {
+                    const nodeName = stableNodeList[nextIndex++];
+                    if (!nodeName) return;
+
+                    const delay = await measureNodeDelay(nodeName);
+                    if (cancelled) return;
+                    setDelays((previous) => ({ ...previous, [nodeName]: delay }));
+                    setPendingNodes((previous) => {
+                        if (!previous.has(nodeName)) return previous;
+                        const next = new Set(previous);
+                        next.delete(nodeName);
+                        return next;
+                    });
+                }
+            };
+
+            void Promise.all(
+                Array.from(
+                    { length: Math.min(DELAY_TEST_CONCURRENCY, stableNodeList.length) },
+                    () => worker(),
+                ),
+            );
+        }, 500);
+
         return () => {
+            cancelled = true;
             window.clearTimeout(timer);
         };
-    }, [isRunning, currentNode]);
+    }, [isRunning, stableNodeList]);
 
     const options = useMemo<AppleSelectOption<string>[]>(
         () =>
@@ -179,7 +246,8 @@ function NodeMenu(props: NodeMenuProps) {
                     protocol={nodeProtocols[currentNode]}
                     showProtocol={showProtocol}
                     showDelay={showDelay}
-                    measureDelay={showDelay}
+                    delay={delays[currentNode] ?? "-"}
+                    isTesting={pendingNodes.has(currentNode)}
                 />
             )}
             renderOption={({ option, isSelected }) => (
@@ -197,8 +265,9 @@ function NodeMenu(props: NodeMenuProps) {
                                 : undefined
                         }
                         showProtocol={showProtocol}
-                        showDelay={showDelay && isSelected}
-                        measureDelay={showDelay && isSelected}
+                        showDelay={showDelay}
+                        delay={delays[option.value] ?? "-"}
+                        isTesting={pendingNodes.has(option.value)}
                     />
                 </div>
             )}

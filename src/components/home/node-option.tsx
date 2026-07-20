@@ -1,36 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import useSWR from "swr";
-import { clashApiFetch } from '../../utils/clash-api';
+import { useMemo } from 'react';
 import { t } from '../../utils/helper';
 import { nodeDisplayName, nodeProtocolLabel } from "./node-protocol";
 
-// 常量定义
-const API_CONFIG = {
-    TIMEOUT: 3000,
-    // Probe a node once when it becomes visible. Repeating a delay request for
-    // every option consumes bandwidth and wakes the proxy while the picker is
-    // merely open.
-    REFRESH_INTERVAL: 0,
-    TIMEOUT_DELAY: 2000
-} as const;
-
-const DelayTestUrl = "https://www.google.com/generate_204"
-
-// 类型定义
-type DelayStatus = '-' | number;
-
-interface ProxyResponse {
-    delay: DelayStatus;
-}
+export type DelayStatus = '-' | number;
 
 interface NodeOptionProps {
     nodeName: string;
     protocol?: string;
     showProtocol: boolean;
     showDelay: boolean;
-    // Only the active node is measured. Mounting all rows in a large picker
-    // must not start one delay probe per node.
-    measureDelay?: boolean;
+    delay: DelayStatus;
+    isTesting: boolean;
 }
 
 // 样式常量
@@ -43,63 +23,19 @@ const STYLES = {
     startingContainer: 'onebox-select'
 } as const;
 
-// 自定义 Hook：管理代理延迟数据
-const useProxyDelay = (nodeName: string, enabled: boolean) => {
-    const fetcher = useCallback(async (path: string): Promise<ProxyResponse> => {
-        if (!nodeName) {
-            return { delay: '-' };
-        }
-
-        try {
-            const response = await clashApiFetch(path);
-
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
-            }
-
-            return await response.json();
-        } catch (error) {
-            console.warn(`Failed to fetch proxy delay for ${nodeName}:`, error);
-            return { delay: '-' };
-        }
-    }, [nodeName]);
-
-    const swrKey = enabled && nodeName
-        ? `/proxies/${encodeURIComponent(nodeName)}/delay?url=${encodeURIComponent(DelayTestUrl)}&timeout=5000`
-        : null;
-
-    const { data, error, isLoading } = useSWR<ProxyResponse>(
-        swrKey,
-        fetcher,
-        {
-            refreshInterval: API_CONFIG.REFRESH_INTERVAL,
-            revalidateOnFocus: false,
-            dedupingInterval: 1000
-        }
-    );
-
-    const delay: DelayStatus = data?.delay ?? '-';
-
-    return {
-        delay,
-        isError: !!error,
-        isLoading
-    };
-};
-
 // 延迟指示器组件
 interface DelayIndicatorProps {
     delay: DelayStatus;
     showDelay: boolean;
-    delayText: string;
+    isTesting: boolean;
 }
 
-const DelayIndicator = ({ delay, showDelay, delayText }: DelayIndicatorProps) => {
-    const displayText = delay === '-' ? delayText : `${delay}ms`;
+const DelayIndicator = ({ delay, showDelay, isTesting }: DelayIndicatorProps) => {
+    const displayText = delay === '-' ? t("timeout") : `${delay}ms`;
 
     return (
         <div className="h-5 flex items-center justify-end min-w-[3.5rem]">
-            {showDelay ? (
+            {showDelay && !isTesting ? (
                 <div className="text-sm font-medium transition-all duration-300 ease">
                     {displayText}
                 </div>
@@ -119,31 +55,9 @@ export default function NodeOption({
     protocol,
     showProtocol,
     showDelay,
-    measureDelay = true,
+    delay,
+    isTesting,
 }: NodeOptionProps) {
-    const [delayText, setDelayText] = useState<string>('-');
-    const { delay } = useProxyDelay(nodeName, measureDelay);
-
-    // 处理超时显示
-    useEffect(() => {
-        if (!showDelay || delay !== '-') {
-            return;
-        }
-
-        const timer = setTimeout(() => {
-            setDelayText(t("timeout"));
-        }, API_CONFIG.TIMEOUT_DELAY);
-
-        return () => clearTimeout(timer);
-    }, [showDelay, delay]);
-
-    // 重置延迟文本
-    useEffect(() => {
-        if (delay !== '-') {
-            setDelayText('-');
-        }
-    }, [delay]);
-
     // 计算显示的节点名称
     const displayName = useMemo(() => {
         return nodeName === 'auto' ? t("auto") : nodeDisplayName(nodeName, protocol);
@@ -180,15 +94,11 @@ export default function NodeOption({
                     {protocolLabel ?? "proxy"}
                 </span>
             )}
-            {measureDelay ? (
-                <DelayIndicator
-                    delay={delay}
-                    showDelay={showDelay}
-                    delayText={delayText}
-                />
-            ) : (
-                <span className="block h-5 min-w-[3.5rem]" aria-hidden />
-            )}
+            <DelayIndicator
+                delay={delay}
+                showDelay={showDelay}
+                isTesting={isTesting}
+            />
         </div>
     );
 }
