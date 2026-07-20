@@ -1,86 +1,86 @@
-import { AnimatePresence, motion } from "framer-motion";
-import { useState } from "react";
-import { Plus } from "react-bootstrap-icons";
-import {
-    ValidationErrors,
-    useModalState,
-} from "../../action/modal-state-hook";
+import { useModalState, ValidationErrors } from "../../action/modal-state-hook";
 import { t } from "../../utils/helper";
+import { AppDialog } from "../common/app-dialog";
 import { IOSTextField } from "../common/ios-text-field";
-import { Portal, useBodyScrollLock } from "../common/portal";
 
 // ---- Form step ---------------------------------------------------------
 
 interface FormStepProps {
-    name: string;
-    url: string;
-    errors: ValidationErrors;
-    onNameChange: (value: string) => void;
-    onUrlChange: (value: string) => void;
-    onClose: () => void;
-    onAdd: () => void;
+  name: string;
+  url: string;
+  errors: ValidationErrors;
+  onNameChange: (value: string) => void;
+  onUrlChange: (value: string) => void;
+  onClose: () => void;
+  onAdd: () => void;
 }
 
 const FormStep: React.FC<FormStepProps> = ({
-    name,
-    url,
-    errors,
-    onNameChange,
-    onUrlChange,
-    onClose,
-    onAdd,
+  name,
+  url,
+  errors,
+  onNameChange,
+  onUrlChange,
+  onClose,
+  onAdd,
 }) => (
-    <>
-        <h3
-            id="add-subscription-title"
-            className="text-[16px] font-semibold text-center pt-5 pb-3.5 px-5 tracking-[-0.01em]"
-            style={{ color: "var(--onebox-label)" }}
-        >
-            {t("add_subscription")}
-        </h3>
-        <div className="px-4 pb-4 space-y-2.5">
-            <IOSTextField
-                placeholder={t("name_placeholder_1")}
-                value={name}
-                onChange={onNameChange}
-                error={errors.name}
-            />
-            <IOSTextField
-                placeholder={t("name_placeholder_2")}
-                value={url}
-                onChange={onUrlChange}
-                error={errors.url}
-            />
-            <p
-                className="px-1 text-[11px] leading-snug"
-                style={{ color: "var(--onebox-label-tertiary)" }}
-            >
-                {t("local_proxy_protocols")}
-            </p>
-        </div>
-        <div
-            className="grid grid-cols-2"
-            style={{ borderTop: "0.5px solid var(--onebox-separator)" }}
-        >
-            <button
-                className="h-11 text-[14px] transition-colors active:bg-[rgba(60,60,67,0.05)]"
-                style={{ color: "var(--onebox-blue)" }}
-                onClick={onClose}
-            >
-                {t("close")}
-            </button>
-            <button
-                className="h-11 text-[14px] font-semibold transition-colors active:bg-[rgba(0,122,255,0.08)]"
-                style={{
-                    color: "var(--onebox-blue)",
-                    borderLeft: "0.5px solid var(--onebox-separator)",
-                }}
-                onClick={onAdd}
-            >
-                {t("add")}
-            </button>
-        </div>
-    </>
+  <>
+    <h3
+      id="add-subscription-title"
+      className="text-[16px] font-semibold text-center pt-5 pb-3.5 px-5 tracking-[-0.01em]"
+      style={{ color: "var(--onebox-label)" }}
+    >
+      {t("add_subscription")}
+    </h3>
+    <div className="px-4 pb-4 space-y-2.5">
+      <IOSTextField
+        label={t("name_placeholder_1")}
+        placeholder={t("name_placeholder_1")}
+        value={name}
+        onChange={onNameChange}
+        error={errors.name}
+      />
+      <IOSTextField
+        label={t("subscription_url")}
+        placeholder={t("name_placeholder_2")}
+        value={url}
+        onChange={onUrlChange}
+        error={errors.url}
+        autoFocus
+        onSubmit={onAdd}
+      />
+      <p
+        className="px-1 text-[11px] leading-snug"
+        style={{ color: "var(--onebox-label-tertiary)" }}
+      >
+        {t("local_proxy_protocols")}
+      </p>
+    </div>
+    <div
+      className="grid grid-cols-2"
+      style={{ borderTop: "0.5px solid var(--onebox-separator)" }}
+    >
+      <button
+        type="button"
+        className="h-11 text-[14px] transition-colors active:bg-[var(--onebox-row-active)]"
+        style={{ color: "var(--onebox-blue)" }}
+        onClick={onClose}
+      >
+        {t("close")}
+      </button>
+      <button
+        type="button"
+        className="h-11 text-[14px] font-semibold transition-colors active:bg-[var(--onebox-blue-fill-subtle)]"
+        style={{
+          color: "var(--onebox-blue)",
+          borderLeft: "0.5px solid var(--onebox-separator)",
+        }}
+        onClick={onAdd}
+      >
+        {t("add")}
+      </button>
+    </div>
+  </>
 );
 
 // ---- Trigger + dialog --------------------------------------------------
@@ -94,104 +94,41 @@ const FormStep: React.FC<FormStepProps> = ({
  * same modal UI *and* behaviour.
  */
 export function useSubscriptionModalController() {
-    const {
-        open,
-        name,
-        url,
-        errors,
-        openModal,
-        closeModal,
-        onNameChange,
-        onUrlChange,
-        submit,
-    } = useModalState();
-    useBodyScrollLock(open);
+  const {
+    open,
+    name,
+    url,
+    errors,
+    openModal,
+    closeModal,
+    onNameChange,
+    onUrlChange,
+    submit,
+  } = useModalState();
+  const ModalElement = (
+    <AppDialog
+      open={open}
+      onClose={closeModal}
+      labelledBy="add-subscription-title"
+      surface="compact"
+      panelMotion={{
+        initial: { scale: 0.92, y: 8 },
+        animate: { scale: 1, y: 0 },
+        exit: { scale: 0.94, y: 4 },
+        transition: { duration: 0.22, ease: [0.32, 0.72, 0, 1] },
+      }}
+    >
+      <FormStep
+        name={name}
+        url={url}
+        errors={errors}
+        onNameChange={onNameChange}
+        onUrlChange={onUrlChange}
+        onClose={closeModal}
+        onAdd={submit}
+      />
+    </AppDialog>
+  );
 
-    const ModalElement = (
-        <Portal>
-            <AnimatePresence>
-                {open && (
-                    <motion.div
-                        className="fixed inset-0 z-[80] flex items-center justify-center px-4"
-                        role="dialog"
-                        aria-modal="true"
-                        aria-labelledby="add-subscription-title"
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        transition={{ duration: 0.18 }}
-                    >
-                        <div
-                            className="absolute inset-0"
-                            style={{
-                                background: "rgba(15, 23, 42, 0.38)",
-                                backdropFilter: "blur(6px)",
-                                WebkitBackdropFilter: "blur(6px)",
-                            }}
-                            onClick={closeModal}
-                        />
-                        <motion.div
-                            className="relative w-full max-w-[290px] rounded-[14px] overflow-hidden"
-                            style={{
-                                background: 'var(--onebox-card)',
-                                boxShadow:
-                                    "0 22px 48px -12px rgba(15, 23, 42, 0.3), 0 4px 14px rgba(15, 23, 42, 0.08)",
-                            }}
-                            initial={{ scale: 0.92, y: 8 }}
-                            animate={{ scale: 1, y: 0 }}
-                            exit={{ scale: 0.94, y: 4 }}
-                            transition={{
-                                duration: 0.22,
-                                ease: [0.32, 0.72, 0, 1],
-                            }}
-                        >
-                            <FormStep
-                                name={name}
-                                url={url}
-                                errors={errors}
-                                onNameChange={onNameChange}
-                                onUrlChange={onUrlChange}
-                                onClose={closeModal}
-                                onAdd={submit}
-                            />
-                        </motion.div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
-        </Portal>
-    );
-
-    return { openModal: () => openModal(), ModalElement };
-}
-
-/**
- * Plus-icon trigger button — used as the Configuration header action.
- * Stateless; the parent owns the modal controller and passes `onOpen`.
- */
-export function AddSubscriptionTriggerButton({
-    onOpen,
-}: {
-    onOpen: () => void;
-}) {
-    const [isHovering, setIsHovering] = useState(false);
-    return (
-        <button
-            type="button"
-            className="p-1.5 rounded-full transition-colors active:bg-[rgba(0,122,255,0.08)]"
-            onMouseEnter={() => setIsHovering(true)}
-            onMouseLeave={() => setIsHovering(false)}
-            onClick={onOpen}
-            aria-label={t("add_subscription")}
-        >
-            <motion.div
-                animate={{ rotate: isHovering ? 90 : 0 }}
-                transition={{ duration: 0.25, ease: "easeOut" }}
-            >
-                <Plus
-                    className="size-5"
-                    style={{ color: "var(--onebox-blue)" }}
-                />
-            </motion.div>
-        </button>
-    );
+  return { openModal: () => openModal(), ModalElement };
 }

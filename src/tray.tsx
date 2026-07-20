@@ -4,7 +4,6 @@ import { listen } from "@tauri-apps/api/event";
 import { Image } from "@tauri-apps/api/image";
 import { Menu, MenuOptions } from "@tauri-apps/api/menu";
 import { TrayIcon, TrayIconEvent } from "@tauri-apps/api/tray";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { message } from "@tauri-apps/plugin-dialog";
 import { type } from "@tauri-apps/plugin-os";
 import { getProxyPort } from "./single/store";
@@ -23,14 +22,12 @@ const TRAY_ICON_ID = "nekopilot-menu-bar";
 // low-frequency fallback for an unexpected child-process exit.
 const STATUS_POLL_INTERVAL = 10_000;
 
-const appWindow = getCurrentWindow();
 let trayInstance: TrayIcon | null = null;
 let traySetupPromise: Promise<TrayIcon | null> | null = null;
 let lastEngineState: EngineState["kind"] | null = null;
 let statusPollerId: number | null = null;
 let statusPollInFlight = false;
 let toggleInFlight = false;
-let windowControlsSetup = false;
 let trayMenuUpdatePromise: Promise<void> | null = null;
 let trayMenuUpdateRequested = false;
 let idleTrayIcon: Image | Uint8Array | null = null;
@@ -55,21 +52,6 @@ function isStateTransitioning(state: EngineState): boolean {
 
 function isRunning(state: EngineState): boolean {
   return state.kind === "running";
-}
-
-// 设置窗口控制按钮事件
-function setupWindowControls() {
-  if (windowControlsSetup) return;
-  windowControlsSetup = true;
-  document
-    .getElementById("titlebar-minimize")
-    ?.addEventListener("click", () => appWindow.minimize());
-  document
-    .getElementById("titlebar-maximize")
-    ?.addEventListener("click", () => appWindow.toggleMaximize());
-  document
-    .getElementById("titlebar-close")
-    ?.addEventListener("click", () => appWindow.close());
 }
 
 // 切换代理状态
@@ -127,8 +109,6 @@ async function createTrayMenu(state?: EngineState) {
 
   const currentState = state ?? (await getEngineState());
   lastEngineState = currentState.kind;
-
-  setupWindowControls();
 
   const baseItems = await createBaseMenuItems(currentState);
 

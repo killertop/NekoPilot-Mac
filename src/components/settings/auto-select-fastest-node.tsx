@@ -56,7 +56,7 @@ export default function ToggleAutoSelectFastestNode() {
 
   return (
     <ToggleSetting
-      icon={<Speedometer2 className="text-[#007AFF]" size={22} />}
+      icon={<Speedometer2 size={22} style={{ color: "var(--onebox-blue)" }} />}
       title={t("auto_select_fastest_node")}
       subTitle={t("auto_select_fastest_node_desc")}
       isEnabled={isEnabled}

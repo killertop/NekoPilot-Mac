@@ -1,10 +1,21 @@
-import { ReactNode, useEffect } from "react";
+import { type ReactNode, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 
 let bodyScrollLockCount = 0;
+const OVERLAY_ROOT_ID = "onebox-overlay-root";
+
+function getOverlayRoot(): HTMLElement {
+  const existing = document.getElementById(OVERLAY_ROOT_ID);
+  if (existing) return existing;
+  const root = document.createElement("div");
+  root.id = OVERLAY_ROOT_ID;
+  document.body.appendChild(root);
+  return root;
+}
 
 /**
- * Render children into document.body instead of the caller's DOM location.
+ * Render children into one shared overlay root under document.body instead
+ * of the caller's DOM location.
  *
  * Use this around modals/dialogs that sit inside `.onebox-grouped-card`
  * (or any other container with descendant-scoped CSS). Rendering in-place
@@ -16,22 +27,22 @@ let bodyScrollLockCount = 0;
  * renders, so there's no SSR guard here.
  */
 export function Portal({ children }: { children: ReactNode }) {
-    return createPortal(children, document.body);
+  return createPortal(children, getOverlayRoot());
 }
 
 /** Keep the underlying page from scrolling while one or more modals are open. */
 export function useBodyScrollLock(locked: boolean) {
-    useEffect(() => {
-        if (!locked) return;
+  useLayoutEffect(() => {
+    if (!locked) return;
 
-        bodyScrollLockCount += 1;
-        document.body.classList.add("overflow-hidden");
+    bodyScrollLockCount += 1;
+    document.body.classList.add("overflow-hidden");
 
-        return () => {
-            bodyScrollLockCount = Math.max(0, bodyScrollLockCount - 1);
-            if (bodyScrollLockCount === 0) {
-                document.body.classList.remove("overflow-hidden");
-            }
-        };
-    }, [locked]);
+    return () => {
+      bodyScrollLockCount = Math.max(0, bodyScrollLockCount - 1);
+      if (bodyScrollLockCount === 0) {
+        document.body.classList.remove("overflow-hidden");
+      }
+    };
+  }, [locked]);
 }

@@ -1,36 +1,42 @@
 import "./App.css";
 
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
-import { getCurrentWindow } from '@tauri-apps/api/window';
-import { MotionConfig, motion } from 'framer-motion';
-import { Suspense, useEffect, useMemo, useState } from 'react';
-import { GearWideConnected, House, Layers, SignIntersectionY } from 'react-bootstrap-icons';
-import { Toaster } from 'sonner';
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { motion, MotionConfig } from "framer-motion";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import {
+  GearWideConnected,
+  House,
+  Layers,
+  SignIntersectionY,
+} from "react-bootstrap-icons";
+import { Toaster } from "sonner";
 
-import React from 'react';
+import React from "react";
 import useSWR from "swr";
-import { primeAllConfigTemplateCaches, purgeLegacyTemplateCache } from "./hooks/useSwr";
+import {
+  primeAllConfigTemplateCaches,
+  purgeLegacyTemplateCache,
+} from "./hooks/useSwr";
 import { EngineStateContext, useEngineStateRoot } from "./hooks/useEngineState";
 import { useAutoNodeSelection } from "./hooks/useAutoNodeSelection";
 import { useSelectedSubscriptionNodeSync } from "./hooks/useSelectedSubscriptionNodeSync";
 import { useApplyPipelineRoot } from "./components/home/hooks";
 import { DeepLinkApplyProgressModal } from "./components/home/deep-link-apply-progress-modal";
+import { Portal } from "./components/common/portal";
 import HomePage from "./page/home";
-import { ActiveScreenType, NavContext } from './single/context';
+import { ActiveScreenType, NavContext } from "./single/context";
 import { cleanupRemovedDeveloperSettings } from "./single/store";
-import { initLanguage, t } from './utils/helper';
+import { initLanguage, t } from "./utils/helper";
 
-const ConfigurationPage = React.lazy(() => import('./page/config'));
-const SettingsPage = React.lazy(() => import('./page/settings'));
-const RouterSettingsPage = React.lazy(() => import('./page/router'));
-
-
-
+const ConfigurationPage = React.lazy(() => import("./page/config"));
+const SettingsPage = React.lazy(() => import("./page/settings"));
+const RouterSettingsPage = React.lazy(() => import("./page/router"));
 
 type BodyProps = {
   activeScreen: ActiveScreenType;
-}
+};
 
 // 加载中的组件
 const LoadingFallback = () => (
@@ -43,23 +49,24 @@ function Body({ activeScreen }: BodyProps) {
   return (
     <div className="flex-1 min-h-0 overflow-hidden">
       {activeScreen && (
-        <div className="animate-fade-in h-full min-h-0 overflow-hidden" key={activeScreen}>
-          {activeScreen === 'home' ? (
-            <HomePage />
-          ) : (
-            <Suspense fallback={<LoadingFallback />}>
-              {activeScreen === 'configuration' && <ConfigurationPage />}
-              {activeScreen === 'settings' && <SettingsPage />}
-              {activeScreen === 'router_settings' && <RouterSettingsPage />}
-            </Suspense>
-          )}
+        <div
+          className="animate-fade-in h-full min-h-0 overflow-hidden"
+          key={activeScreen}
+        >
+          {activeScreen === "home"
+            ? <HomePage />
+            : (
+              <Suspense fallback={<LoadingFallback />}>
+                {activeScreen === "configuration" && <ConfigurationPage />}
+                {activeScreen === "settings" && <SettingsPage />}
+                {activeScreen === "router_settings" && <RouterSettingsPage />}
+              </Suspense>
+            )}
         </div>
       )}
     </div>
   );
 }
-
-
 
 function App() {
   const engineState = useEngineStateRoot();
@@ -67,18 +74,18 @@ function App() {
   useAutoNodeSelection(engineState.kind === "running");
   // Theme initialization is mounted one level up in WindowManger so the app
   // boots with the persisted theme and reacts to toggle events. Do not re-mount here.
-  const [activeScreen, setActiveScreen] = useState<ActiveScreenType>('home');
+  const [activeScreen, setActiveScreen] = useState<ActiveScreenType>("home");
   const [isSettingsHovered, setIsSettingsHovered] = useState(false);
-  const [language, setLanguage] = useState('en');
+  const [language, setLanguage] = useState("en");
   const dockLang = useMemo(() => ({
     home: t("home"),
     nodes: t("nodes"),
     rules: t("router_settings"),
     settings: t("settings"),
   }), [language]);
-  useSWR('swr-purgeLegacyTemplateCache-key', async () => {
+  useSWR("swr-purgeLegacyTemplateCache-key", async () => {
     await purgeLegacyTemplateCache();
-    return 'ok';
+    return "ok";
   }, {
     revalidateOnFocus: false,
     revalidateOnReconnect: false,
@@ -89,65 +96,76 @@ function App() {
   // Periodic background refresh of the template cache. Non-blocking — merges
   // read directly from cache (stale allowed) and this hook just keeps the
   // cache fresh. Revalidates on focus and at most every 30 minutes.
-  useSWR('swr-primeAllConfigTemplateCaches-key', primeAllConfigTemplateCaches, {
+  useSWR("swr-primeAllConfigTemplateCaches-key", primeAllConfigTemplateCaches, {
     revalidateOnFocus: true,
     dedupingInterval: 60000 * 30,
-  })
+  });
 
-  const [deepLinkUrl, setDeepLinkUrl] = useState<string>('');
-  const [deepLinkApplyUrl, setDeepLinkApplyUrl] = useState<string>('');
-  const [deepLinkApplyName, setDeepLinkApplyName] = useState<string>('');
+  const [deepLinkUrl, setDeepLinkUrl] = useState<string>("");
+  const [deepLinkApplyUrl, setDeepLinkApplyUrl] = useState<string>("");
+  const [deepLinkApplyName, setDeepLinkApplyName] = useState<string>("");
   // Default true — deep-link apply=1 uses the auto-start contract.
   // Manual add flips this to false before firing `setDeepLinkApplyUrl`.
-  const [deepLinkApplyAutoStart, setDeepLinkApplyAutoStart] = useState<boolean>(true);
+  const [deepLinkApplyAutoStart, setDeepLinkApplyAutoStart] = useState<boolean>(
+    true,
+  );
 
   useEffect(() => {
     // 统一入口：从 Rust 拉取并消费 pending deep link（take() 保证幂等）
     const processPending = () => {
-      invoke<{ data: string; apply: boolean } | null>('get_pending_deep_link').then(async (payload) => {
-        if (!payload) return;
-        let decoded: string;
-        try {
-          decoded = atob(payload.data);
-        } catch (e) {
-          console.error('Failed to decode pending deep link:', e);
-          return;
-        }
-        // apply=1 只允许经过验证的域名生效；未验证域名回退到 apply=0
-        // 的行为（打开配置页，不自动应用）。验证失败时 Rust 端已记录
-        // warn 日志。
-        let apply = payload.apply;
-        if (apply) {
+      invoke<{ data: string; apply: boolean } | null>("get_pending_deep_link")
+        .then(async (payload) => {
+          if (!payload) return;
+          let decoded: string;
           try {
-            const verified = await invoke<boolean>('verify_deep_link_url', { url: decoded });
-            if (!verified) apply = false;
+            decoded = atob(payload.data);
           } catch (e) {
-            console.warn('verify_deep_link_url failed, treating as unverified:', e);
-            apply = false;
+            console.error("Failed to decode pending deep link:", e);
+            return;
           }
-        }
-        if (apply) {
-          setActiveScreen('home');
-          setDeepLinkApplyUrl(decoded);
-        } else {
-          setDeepLinkUrl(decoded);
-          setActiveScreen('configuration');
-        }
-      });
+          // apply=1 只允许经过验证的域名生效；未验证域名回退到 apply=0
+          // 的行为（打开配置页，不自动应用）。验证失败时 Rust 端已记录
+          // warn 日志。
+          let apply = payload.apply;
+          if (apply) {
+            try {
+              const verified = await invoke<boolean>("verify_deep_link_url", {
+                url: decoded,
+              });
+              if (!verified) apply = false;
+            } catch (e) {
+              console.warn(
+                "verify_deep_link_url failed, treating as unverified:",
+                e,
+              );
+              apply = false;
+            }
+          }
+          if (apply) {
+            setActiveScreen("home");
+            setDeepLinkApplyUrl(decoded);
+          } else {
+            setDeepLinkUrl(decoded);
+            setActiveScreen("configuration");
+          }
+        });
     };
 
     // 冷启动：前端就绪后立即拉取一次
     processPending();
 
     // 热启动信号：on_open_url 存入 pending 后发出，WebView 就绪时收到
-    const unlistenSignal = listen('deep_link_pending', () => processPending());
+    const unlistenSignal = listen("deep_link_pending", () => processPending());
 
     // 兜底：窗口获焦时再拉一次（信号在 WebView 从隐藏恢复过程中可能丢失）
-    const unlistenFocus = getCurrentWindow().listen('tauri://focus', () => processPending());
+    const unlistenFocus = getCurrentWindow().listen(
+      "tauri://focus",
+      () => processPending(),
+    );
 
     return () => {
-      unlistenSignal.then(fn => fn());
-      unlistenFocus.then(fn => fn());
+      unlistenSignal.then((fn) => fn());
+      unlistenFocus.then((fn) => fn());
     };
   }, []);
 
@@ -159,7 +177,10 @@ function App() {
       });
     };
     refreshSystemLanguage();
-    const unlistenFocus = getCurrentWindow().listen('tauri://focus', refreshSystemLanguage);
+    const unlistenFocus = getCurrentWindow().listen(
+      "tauri://focus",
+      refreshSystemLanguage,
+    );
 
     return () => {
       unlistenFocus.then((unlisten) => unlisten());
@@ -189,7 +210,9 @@ function App() {
     <MotionConfig reducedMotion="user">
       <NavContext.Provider value={navContextValue}>
         <EngineStateContext.Provider value={engineState}>
-          <Toaster position="top-center" toastOptions={{ duration: 2000 }} />
+          <Portal>
+            <Toaster position="top-center" toastOptions={{ duration: 2000 }} />
+          </Portal>
           <AppShell
             activeScreen={activeScreen}
             setActiveScreen={setActiveScreen}
@@ -230,37 +253,40 @@ function AppShell({
 
   return (
     <>
-      <main className="onebox-surface relative flex flex-col h-screen">
+      <main
+        id="onebox-app-main"
+        className="onebox-surface relative flex flex-col h-screen"
+      >
         <Body activeScreen={activeScreen} />
 
         <div className="onebox-dock">
           <button
-            onClick={() => setActiveScreen('home')}
-            data-active={activeScreen === 'home'}
+            onClick={() => setActiveScreen("home")}
+            data-active={activeScreen === "home"}
           >
             <House size={18} />
-            <span className='text-[11px] capitalize'>{dockLang.home}</span>
+            <span className="text-[11px] capitalize">{dockLang.home}</span>
           </button>
 
           <button
-            onClick={() => setActiveScreen('configuration')}
-            data-active={activeScreen === 'configuration'}
+            onClick={() => setActiveScreen("configuration")}
+            data-active={activeScreen === "configuration"}
           >
             <Layers size={18} />
-            <span className='text-[11px] capitalize'>{dockLang.nodes}</span>
+            <span className="text-[11px] capitalize">{dockLang.nodes}</span>
           </button>
 
           <button
-            onClick={() => setActiveScreen('router_settings')}
-            data-active={activeScreen === 'router_settings'}
+            onClick={() => setActiveScreen("router_settings")}
+            data-active={activeScreen === "router_settings"}
           >
             <SignIntersectionY size={18} />
-            <span className='text-[11px] capitalize'>{dockLang.rules}</span>
+            <span className="text-[11px] capitalize">{dockLang.rules}</span>
           </button>
 
           <button
-            onClick={() => setActiveScreen('settings')}
-            data-active={activeScreen === 'settings'}
+            onClick={() => setActiveScreen("settings")}
+            data-active={activeScreen === "settings"}
             onMouseEnter={() => setIsSettingsHovered(true)}
             onMouseLeave={() => setIsSettingsHovered(false)}
           >
@@ -270,7 +296,7 @@ function AppShell({
             >
               <GearWideConnected size={18} />
             </motion.div>
-            <span className='text-[11px] capitalize'>{dockLang.settings}</span>
+            <span className="text-[11px] capitalize">{dockLang.settings}</span>
           </button>
         </div>
       </main>

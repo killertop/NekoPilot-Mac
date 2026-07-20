@@ -106,7 +106,7 @@ export default function ToggleLan() {
 
   return (
     <ToggleSetting
-      icon={<Router className="text-[#5856D6] " size={22} />}
+      icon={<Router size={22} style={{ color: "var(--onebox-purple)" }} />}
       title={t("allow_lan_connection")}
       subTitle={`${lanIP}:${proxyPort}`}
       isEnabled={toggle}

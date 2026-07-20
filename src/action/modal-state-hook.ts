@@ -4,18 +4,18 @@ import { NavContext } from "../single/context";
 import { t } from "../utils/helper";
 
 export type ValidationErrors = {
-    name?: string;
-    url?: string;
+  name?: string;
+  url?: string;
 };
 
 const acceptedConfigLink = /^(https?|vless|trojan|vmess|ss|anytls):\/\//i;
 
 const subscriptionSchema = z.object({
-    name: z.string().optional(),
-    url: z.string().trim().min(1, t("url_cannot_empty")).refine(
-        (value) => acceptedConfigLink.test(value),
-        t("please_input_valid_url"),
-    ),
+  name: z.string().optional(),
+  url: z.string().trim().min(1, t("url_cannot_empty")).refine(
+    (value) => acceptedConfigLink.test(value),
+    t("please_input_valid_url"),
+  ),
 });
 
 /**
@@ -30,87 +30,86 @@ const subscriptionSchema = z.object({
  * DeepLinkApplyProgressModal owns the full post-submit flow.
  */
 export function useModalState() {
-    const [open, setOpen] = useState(false);
-    const [name, setName] = useState('');
-    const [url, setUrl] = useState('');
-    const [errors, setErrors] = useState<ValidationErrors>({});
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [url, setUrl] = useState("");
+  const [errors, setErrors] = useState<ValidationErrors>({});
 
-    const {
-        setDeepLinkApplyUrl,
-        setDeepLinkApplyName,
-        setDeepLinkApplyAutoStart,
-        deepLinkUrl,
-        setDeepLinkUrl,
-    } = useContext(NavContext);
+  const {
+    setDeepLinkApplyUrl,
+    setDeepLinkApplyName,
+    setDeepLinkApplyAutoStart,
+    deepLinkUrl,
+    setDeepLinkUrl,
+  } = useContext(NavContext);
 
-    function openModal(prefillUrl = '') {
-        setName('');
-        setUrl(prefillUrl);
-        setErrors({});
-        setOpen(true);
+  function openModal(prefillUrl = "") {
+    setName("");
+    setUrl(prefillUrl);
+    setErrors({});
+    setOpen(true);
+  }
+
+  function closeModal() {
+    setOpen(false);
+  }
+
+  // 收到 apply=0 的 deep link 时，自动预填 URL 并打开弹窗
+  useEffect(() => {
+    if (!deepLinkUrl) return;
+    openModal(deepLinkUrl);
+    setDeepLinkUrl("");
+  }, [deepLinkUrl]);
+
+  function validate(nextName = name, nextUrl = url): boolean {
+    try {
+      subscriptionSchema.parse({ name: nextName, url: nextUrl });
+      setErrors({});
+      return true;
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        const next: ValidationErrors = {};
+        err.issues.forEach((issue) => {
+          next[issue.path[0] as keyof ValidationErrors] = issue.message;
+        });
+        setErrors(next);
+      }
+      return false;
     }
+  }
 
-    function closeModal() {
-        setOpen(false);
-    }
+  function submit() {
+    if (!validate()) return;
+    const target = url;
+    setOpen(false);
+    // Manual add: same modal UI as apply=1, but stays on the current
+    // page (no setActiveScreen). The apply pipeline selects the imported
+    // configuration but must NOT touch the engine. Flag goes before the
+    // URL so the consumer's render sees both updates in one batch.
+    setDeepLinkApplyAutoStart(false);
+    setDeepLinkApplyName(name.trim());
+    setDeepLinkApplyUrl(target);
+  }
 
-    useEffect(() => {
-        if (!open) return;
+  function onNameChange(value: string) {
+    setName(value);
+    if (errors.name) validate(value, url);
+  }
 
-        const handleKeyDown = (event: KeyboardEvent) => {
-            if (event.key === "Escape") setOpen(false);
-        };
+  function onUrlChange(value: string) {
+    setUrl(value);
+    if (errors.url) validate(name, value);
+  }
 
-        document.addEventListener("keydown", handleKeyDown);
-        return () => document.removeEventListener("keydown", handleKeyDown);
-    }, [open]);
-
-    // 收到 apply=0 的 deep link 时，自动预填 URL 并打开弹窗
-    useEffect(() => {
-        if (!deepLinkUrl) return;
-        openModal(deepLinkUrl);
-        setDeepLinkUrl('');
-    }, [deepLinkUrl]);
-
-    function validate(nextName = name, nextUrl = url): boolean {
-        try {
-            subscriptionSchema.parse({ name: nextName, url: nextUrl });
-            setErrors({});
-            return true;
-        } catch (err) {
-            if (err instanceof z.ZodError) {
-                const next: ValidationErrors = {};
-                err.issues.forEach(issue => {
-                    next[issue.path[0] as keyof ValidationErrors] = issue.message;
-                });
-                setErrors(next);
-            }
-            return false;
-        }
-    }
-
-    function submit() {
-        if (!validate()) return;
-        const target = url;
-        setOpen(false);
-        // Manual add: same modal UI as apply=1, but stays on the current
-        // page (no setActiveScreen). The apply pipeline selects the imported
-        // configuration but must NOT touch the engine. Flag goes before the
-        // URL so the consumer's render sees both updates in one batch.
-        setDeepLinkApplyAutoStart(false);
-        setDeepLinkApplyName(name.trim());
-        setDeepLinkApplyUrl(target);
-    }
-
-    function onNameChange(value: string) {
-        setName(value);
-        if (errors.name) validate(value, url);
-    }
-
-    function onUrlChange(value: string) {
-        setUrl(value);
-        if (errors.url) validate(name, value);
-    }
-
-    return { open, name, url, errors, openModal, closeModal, onNameChange, onUrlChange, submit };
+  return {
+    open,
+    name,
+    url,
+    errors,
+    openModal,
+    closeModal,
+    onNameChange,
+    onUrlChange,
+    submit,
+  };
 }

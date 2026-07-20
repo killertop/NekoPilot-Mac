@@ -6,6 +6,7 @@ import ToggleNodeProtocol from "../components/developer/node-protocol-toggle";
 import UASettingsItem from "../components/developer/ua-settings";
 import ToggleLan from "../components/settings/lan";
 import ProxyPortSetting from "../components/settings/proxy-port";
+import { PageContent, PageLayout } from "../components/common/page-layout";
 import { useVersion } from "../hooks/useVersion";
 import { t } from "../utils/helper";
 
@@ -13,23 +14,25 @@ export default function Settings() {
   const version = useVersion();
 
   return (
-    <div className="onebox-scrollpage">
-      <div className="onebox-page-inner">
-        <div className="onebox-grouped-card mb-5">
-          <ToggleAutoSelectFastestNode />
-          <ToggleAutoStart />
-          <ToggleLan />
-          <ProxyPortSetting />
-        </div>
+    <PageLayout>
+      <PageContent>
+        <div className="space-y-4">
+          <div className="onebox-grouped-card">
+            <ToggleAutoSelectFastestNode />
+            <ToggleAutoStart />
+            <ToggleLan />
+            <ProxyPortSetting />
+          </div>
 
-        <div className="onebox-grouped-card mb-5">
-          <DNSSettingsItem />
-          <ToggleNodeProtocol />
-          <UASettingsItem />
-        </div>
+          <div className="onebox-grouped-card">
+            <DNSSettingsItem />
+            <ToggleNodeProtocol />
+            <UASettingsItem />
+          </div>
 
-        <div className="onebox-grouped-card">
-          <AboutItem />
+          <div className="onebox-grouped-card">
+            <AboutItem />
+          </div>
         </div>
 
         <div
@@ -39,7 +42,7 @@ export default function Settings() {
           <p>{t("version")} {version}</p>
           <p className="mt-0.5">© 2026 NekoPilot</p>
         </div>
-      </div>
-    </div>
+      </PageContent>
+    </PageLayout>
   );
 }

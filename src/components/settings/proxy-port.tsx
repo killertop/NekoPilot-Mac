@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Ethernet } from "react-bootstrap-icons";
 import { toast } from "sonner";
 import {
@@ -33,6 +33,7 @@ export default function ProxyPortSetting() {
   const [isLoading, setIsLoading] = useState(false);
   const [skipSystemProxy, setSkipSystemProxyState] = useState(false);
   const [isSavingProxyMode, setIsSavingProxyMode] = useState(false);
+  const operationInFlightRef = useRef(false);
 
   const loadState = async () => {
     const [savedPort, skipProxy] = await Promise.all([
@@ -53,7 +54,8 @@ export default function ProxyPortSetting() {
   }, [isOpen]);
 
   const handleToggleSkipProxy = async () => {
-    if (isSavingProxyMode) return;
+    if (operationInFlightRef.current || isLoading || isSavingProxyMode) return;
+    operationInFlightRef.current = true;
     const next = !skipSystemProxy;
     setSkipSystemProxyState(next);
 
@@ -92,6 +94,7 @@ export default function ProxyPortSetting() {
         t("system_proxy_save_failed", "Failed to save system proxy setting"),
       );
     } finally {
+      operationInFlightRef.current = false;
       setIsSavingProxyMode(false);
     }
   };
@@ -102,11 +105,13 @@ export default function ProxyPortSetting() {
     : undefined;
 
   const handleSave = async () => {
+    if (operationInFlightRef.current || isLoading || isSavingProxyMode) return;
     if (parsedPort === null) {
       toast.error(t("proxy_port_invalid", "Port must be between 1 and 65535"));
       return;
     }
 
+    operationInFlightRef.current = true;
     setIsLoading(true);
     try {
       const applySavedPort = () => {
@@ -143,6 +148,7 @@ export default function ProxyPortSetting() {
     } catch {
       toast.error(t("proxy_port_save_failed", "Failed to save proxy port"));
     } finally {
+      operationInFlightRef.current = false;
       setIsLoading(false);
     }
   };
@@ -150,7 +156,7 @@ export default function ProxyPortSetting() {
   return (
     <>
       <SettingItem
-        icon={<Ethernet className="text-[#FF9500]" size={22} />}
+        icon={<Ethernet size={22} style={{ color: "var(--onebox-orange)" }} />}
         title={t("proxy_port", "Proxy port")}
         subTitle={t("proxy_port_desc", "HTTP/SOCKS mixed inbound")}
         badge={currentPort}
@@ -164,13 +170,15 @@ export default function ProxyPortSetting() {
         confirmLabel={t("save")}
         onConfirm={handleSave}
         confirmDisabled={parsedPort === null || isSavingProxyMode}
-        confirmLoading={isLoading}
+        confirmLoading={isLoading || isSavingProxyMode}
       >
         <IOSTextField
+          label={t("proxy_port", "Proxy port")}
           value={port}
           onChange={(value) => setPort(value.replace(/[^\d]/g, ""))}
           placeholder={DEFAULT_PROXY_PORT.toString()}
           error={error}
+          disabled={isLoading || isSavingProxyMode}
           monospace
           autoFocus
           onSubmit={handleSave}

@@ -2,7 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { message } from "@tauri-apps/plugin-dialog";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { mutate as swrMutate } from "swr";
-import { formatSubscriptionImportError, insertSubscription } from "../../action/db";
+import {
+  formatSubscriptionImportError,
+  insertSubscription,
+} from "../../action/db";
 import { clearEngineError, useEngineState } from "../../hooks/useEngineState";
 import { NavContext } from "../../single/context";
 import { getProxyPort, setStoreValue } from "../../single/store";
@@ -263,11 +266,12 @@ export const useVPNOperations = () => {
   const isRunning = engineState.kind === "running";
   const isLoading = isPreparingStart || engineState.kind === "starting" ||
     engineState.kind === "stopping";
-  const operationStatus: OperationStatus = isPreparingStart || engineState.kind === "starting"
-    ? "starting"
-    : engineState.kind === "stopping"
-    ? "stopping"
-    : "idle";
+  const operationStatus: OperationStatus =
+    isPreparingStart || engineState.kind === "starting"
+      ? "starting"
+      : engineState.kind === "stopping"
+      ? "stopping"
+      : "idle";
 
   // Repair modal state: visible + orphan pids found by prestart_check
   const [repairState, setRepairState] = useState<
@@ -288,30 +292,33 @@ export const useVPNOperations = () => {
     }
   }, []);
 
-  const performSyncAndStart = useCallback(async (onSyncError: (error: any) => Promise<void>) => {
-    if (startInFlightRef.current) return;
-    startInFlightRef.current = true;
-    setIsPreparingStart(true);
-    try {
-      await vpnServiceManager.syncConfig({
-        onSuccess: async () => {
-          try {
-            await vpnServiceManager.start();
-          } catch (error: any) {
-            console.error("启动服务失败:", error);
-            // Let syncConfig route the failure to its single error path.
-            throw error;
-          }
-        },
-        onError: async (error) => {
-          await onSyncError(error);
-        },
-      });
-    } finally {
-      startInFlightRef.current = false;
-      setIsPreparingStart(false);
-    }
-  }, []);
+  const performSyncAndStart = useCallback(
+    async (onSyncError: (error: any) => Promise<void>) => {
+      if (startInFlightRef.current) return;
+      startInFlightRef.current = true;
+      setIsPreparingStart(true);
+      try {
+        await vpnServiceManager.syncConfig({
+          onSuccess: async () => {
+            try {
+              await vpnServiceManager.start();
+            } catch (error: any) {
+              console.error("启动服务失败:", error);
+              // Let syncConfig route the failure to its single error path.
+              throw error;
+            }
+          },
+          onError: async (error) => {
+            await onSyncError(error);
+          },
+        });
+      } finally {
+        startInFlightRef.current = false;
+        setIsPreparingStart(false);
+      }
+    },
+    [],
+  );
 
   const startService = useCallback(async (isEmpty: boolean) => {
     if (isEmpty) {
@@ -349,10 +356,16 @@ export const useVPNOperations = () => {
             });
           }
           if (error?.message === "subscription_no_usable_nodes") {
-            await message(t("subscription_no_usable_nodes", "The subscription has no usable nodes."), {
-              title: t("error"),
-              kind: "error",
-            });
+            await message(
+              t(
+                "subscription_no_usable_nodes",
+                "The subscription has no usable nodes.",
+              ),
+              {
+                title: t("error"),
+                kind: "error",
+              },
+            );
             return;
           }
         });
@@ -370,10 +383,16 @@ export const useVPNOperations = () => {
         });
       }
       if (error?.message === "subscription_no_usable_nodes") {
-        await message(t("subscription_no_usable_nodes", "The subscription has no usable nodes."), {
-          title: t("error"),
-          kind: "error",
-        });
+        await message(
+          t(
+            "subscription_no_usable_nodes",
+            "The subscription has no usable nodes.",
+          ),
+          {
+            title: t("error"),
+            kind: "error",
+          },
+        );
         return;
       }
     });
@@ -384,6 +403,11 @@ export const useVPNOperations = () => {
     const pending = pendingStartRef.current;
     pendingStartRef.current = null;
     pending?.();
+  }, []);
+
+  const onRepairClose = useCallback(() => {
+    setRepairState({ visible: false, orphanPids: [] });
+    pendingStartRef.current = null;
   }, []);
 
   const toggleService = useCallback(async (isEmpty: boolean) => {
@@ -418,5 +442,6 @@ export const useVPNOperations = () => {
     toggleService,
     repairState,
     onRepairSuccess,
+    onRepairClose,
   };
 };

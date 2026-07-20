@@ -1,68 +1,4 @@
-
-
-
-
-
-/*  Window Customization CSS start
-https://v2.tauri.app/learn/window-customization/
-*/
-.titlebar {
-  height: 30px;
-  background: var(--onebox-titlebar);
-  user-select: none;
-  display: flex;
-  justify-content: flex-start;
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  padding-left: 12px; /* 添加左侧内边距 */
-  gap: 8px; /* 按钮之间的间距 */
-}
-
-.titlebar-button {
-  display: inline-flex;
-  justify-content: center;
-  align-items: center;
-  width: 12px;
-  height: 12px;
-  margin-top: 9px; /* 垂直居中 */
-  border-radius: 50%;
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-#titlebar-close {
-  background-color: #ff5f57;
-}
-
-#titlebar-minimize {
-  background-color: #febc2e;
-}
-
-#titlebar-maximize {
-  color: #e3e3e3;
-  background: #e3e3e3;
-  background-color: #e3e3e3;
-
-}
-
-
-
-.titlebar-button svg {
-  width: 8px;
-  height: 8px;
-  opacity: 0;
-  transition: opacity 0.2s;
-}
-
-
-
-.titlebar-button:hover svg {
-  opacity: 1 !important;
-}
-/* Window Customization CSS end */
-
+@import "tailwindcss";
 
 /* Hide scrollbars only on intentional app surfaces. Keeping this scoped is
    important for config viewers, text areas, and modal content where a visible
@@ -117,12 +53,9 @@ input, textarea, [contenteditable="true"] {
 }
 
 /*
-ZH: <pre> 默认可选中 —— 用于配置/日志/模版内容展示，方便复制调试。
-EN: <pre> is selectable by default — used for log / config / template
-content, users need to copy to a clipboard for debugging.
-
-显式标注 `.onebox-selectable` 的容器及其子元素也可选中；日志列表这类
-非 <pre> 的文本块用它。
+ZH: <pre> 与显式标注 `.onebox-selectable` 的内容可选中，方便复制链接和诊断信息。
+EN: <pre> and `.onebox-selectable` content remain selectable for copying links
+and diagnostics.
 */
 pre,
 .onebox-selectable,
@@ -130,8 +63,6 @@ pre,
   -webkit-user-select: text;
   user-select: text;
 }
-
-@import "tailwindcss";
 
 /* ==========================================================================
  * Theme tokens.
@@ -144,7 +75,7 @@ pre,
  *
  * The system branch duplicates the dark token set — there is no CSS-level
  * way to alias one selector to another without wrapping every token in
- * another layer of indirection, and the dark payload is ~15 declarations.
+ * another layer of indirection.
  * ========================================================================== */
 
 :root {
@@ -160,7 +91,6 @@ pre,
   --onebox-bg: #F7F7F7;                 /* systemGroupedBackground (light) */
   --onebox-card: #FFFFFF;               /* secondarySystemGroupedBackground (light) */
   --onebox-card-muted: rgba(118, 118, 128, 0.08);   /* tertiarySystemFill-ish */
-  --onebox-titlebar: #F8F8F8;
   --onebox-label: #1C1C1E;              /* label (primary) */
   --onebox-label-secondary: rgba(60, 60, 67, 0.6);
   --onebox-label-tertiary: rgba(60, 60, 67, 0.3);
@@ -168,62 +98,35 @@ pre,
   --onebox-fill: rgba(118, 118, 128, 0.12);          /* tertiary fill — inputs, chips */
   --onebox-fill-strong: rgba(118, 118, 128, 0.2);
   --onebox-blue: #007AFF;               /* systemBlue (light) */
-  --onebox-blue-hover: #409CFF;
-  --onebox-blue-deep: #0062CC;
   --onebox-red: #FF3B30;
   --onebox-green: #34C759;
   --onebox-orange: #FF9500;
+  --onebox-purple: #5856D6;
+  --onebox-teal: #30B0C7;
+  --onebox-on-accent: #FFFFFF;
+  --onebox-blue-fill-subtle: rgba(0, 122, 255, 0.08);
+  --onebox-blue-fill: rgba(0, 122, 255, 0.12);
+  --onebox-red-fill-subtle: rgba(255, 59, 48, 0.08);
+  --onebox-red-fill: rgba(255, 59, 48, 0.12);
+  --onebox-green-fill: rgba(52, 199, 89, 0.12);
   --onebox-row-hover: rgba(60, 60, 67, 0.025);
   --onebox-row-active: rgba(60, 60, 67, 0.06);
+  --onebox-progress-track: rgba(60, 60, 67, 0.12);
+  --onebox-overlay: rgba(15, 23, 42, 0.38);
   --onebox-shadow-card: 0 1px 2.5px rgba(15, 23, 42, 0.04);
-  /* Translucent popover surface for AppleSelectMenu; sits over a blurred
-     backdrop so a soft-white fill reads as glass. */
-  --onebox-menu-bg: rgba(255, 255, 255, 0.85);
-  /* macOS unified toolbar: translucent over window bg + vibrancy blur. */
-  --onebox-toolbar-bg: rgba(242, 242, 247, 0.72);
-  /* NSSegmentedControl active pill — lifted card with hairline shadow. */
-  --onebox-segctl-active-bg: #FFFFFF;
-  --onebox-segctl-active-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(15, 23, 42, 0.1);
+  --onebox-shadow-accent: 0 2px 8px -2px rgba(0, 122, 255, 0.4), 0 1px 2px rgba(0, 0, 0, 0.05);
+  --onebox-shadow-dialog: 0 22px 48px -12px rgba(15, 23, 42, 0.3), 0 4px 14px rgba(15, 23, 42, 0.08);
+  --onebox-shadow-sheet: 0 -8px 32px -8px rgba(15, 23, 42, 0.28);
 }
 
-/* Legacy explicit dark override retained for CSS compatibility. The app no
-   longer assigns this attribute; system appearance uses the branch below. */
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --onebox-bg: #000000;                 /* systemGroupedBackground (dark) */
-  --onebox-card: #1C1C1E;               /* secondarySystemGroupedBackground (dark) */
-  --onebox-card-muted: rgba(118, 118, 128, 0.24);
-  --onebox-titlebar: #1C1C1E;
-  --onebox-label: #FFFFFF;
-  --onebox-label-secondary: rgba(235, 235, 245, 0.6);
-  --onebox-label-tertiary: rgba(235, 235, 245, 0.3);
-  --onebox-separator: rgba(84, 84, 88, 0.5);
-  --onebox-fill: rgba(118, 118, 128, 0.24);
-  --onebox-fill-strong: rgba(118, 118, 128, 0.36);
-  --onebox-blue: #0A84FF;               /* systemBlue (dark) */
-  --onebox-blue-hover: #409CFF;
-  --onebox-blue-deep: #0051D5;
-  --onebox-red: #FF453A;
-  --onebox-green: #30D158;
-  --onebox-orange: #FF9F0A;
-  --onebox-row-hover: rgba(255, 255, 255, 0.04);
-  --onebox-row-active: rgba(255, 255, 255, 0.08);
-  --onebox-shadow-card: 0 1px 2.5px rgba(0, 0, 0, 0.45);
-  --onebox-menu-bg: rgba(44, 44, 46, 0.9);
-  --onebox-toolbar-bg: rgba(28, 28, 30, 0.72);
-  --onebox-segctl-active-bg: rgba(118, 118, 128, 0.45);
-  --onebox-segctl-active-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.35);
-}
-
-/* Follow-the-OS branch: active only when user hasn't chosen an explicit
-   light/dark override. Payload mirrors [data-theme="dark"] above. */
+/* Follow the operating system. Explicit appearance modes were removed from
+   the product, so this is the only dark token source. */
 @media (prefers-color-scheme: dark) {
   :root[data-theme="system"] {
     color-scheme: dark;
     --onebox-bg: #000000;
     --onebox-card: #1C1C1E;
     --onebox-card-muted: rgba(118, 118, 128, 0.24);
-    --onebox-titlebar: #1C1C1E;
     --onebox-label: #FFFFFF;
     --onebox-label-secondary: rgba(235, 235, 245, 0.6);
     --onebox-label-tertiary: rgba(235, 235, 245, 0.3);
@@ -231,30 +134,38 @@ pre,
     --onebox-fill: rgba(118, 118, 128, 0.24);
     --onebox-fill-strong: rgba(118, 118, 128, 0.36);
     --onebox-blue: #0A84FF;
-    --onebox-blue-hover: #409CFF;
-    --onebox-blue-deep: #0051D5;
     --onebox-red: #FF453A;
     --onebox-green: #30D158;
     --onebox-orange: #FF9F0A;
+    --onebox-purple: #5E5CE6;
+    --onebox-teal: #40C8E0;
+    --onebox-on-accent: #FFFFFF;
+    --onebox-blue-fill-subtle: rgba(10, 132, 255, 0.12);
+    --onebox-blue-fill: rgba(10, 132, 255, 0.18);
+    --onebox-red-fill-subtle: rgba(255, 69, 58, 0.12);
+    --onebox-red-fill: rgba(255, 69, 58, 0.18);
+    --onebox-green-fill: rgba(48, 209, 88, 0.18);
     --onebox-row-hover: rgba(255, 255, 255, 0.04);
     --onebox-row-active: rgba(255, 255, 255, 0.08);
+    --onebox-progress-track: rgba(235, 235, 245, 0.18);
+    --onebox-overlay: rgba(0, 0, 0, 0.55);
     --onebox-shadow-card: 0 1px 2.5px rgba(0, 0, 0, 0.45);
-    --onebox-menu-bg: rgba(44, 44, 46, 0.9);
-    --onebox-toolbar-bg: rgba(28, 28, 30, 0.72);
-    --onebox-segctl-active-bg: rgba(118, 118, 128, 0.45);
-    --onebox-segctl-active-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.35);
+    --onebox-shadow-accent: 0 2px 10px -2px rgba(10, 132, 255, 0.5), 0 1px 3px rgba(0, 0, 0, 0.35);
+    --onebox-shadow-dialog: 0 22px 48px -12px rgba(0, 0, 0, 0.62), 0 4px 14px rgba(0, 0, 0, 0.4);
+    --onebox-shadow-sheet: 0 -8px 32px -8px rgba(0, 0, 0, 0.65);
   }
 }
 
-/* AppleSelectMenu option hover. The hover/active tints follow the theme's
-   row-hover variable so dark mode reads as white-on-dim instead of
-   dark-on-darker. Applied only to non-selected options; selected uses
-   its own systemBlue/10 tint. */
-.onebox-menu-option:not(.bg-blue-500\/10):hover {
-  background: var(--onebox-row-hover);
+.onebox-dialog-backdrop {
+  background: var(--onebox-overlay);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
 }
-.onebox-menu-option:not(.bg-blue-500\/10):active {
-  background: var(--onebox-row-active);
+
+.onebox-dialog-panel {
+  background: var(--onebox-card);
+  box-shadow: var(--onebox-shadow-dialog);
+  outline: none;
 }
 
 /* Whole-app chrome. Provides the page colour under every route. */
@@ -351,11 +262,10 @@ main.onebox-surface {
    section headers. */
 .onebox-section-label {
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--onebox-label-secondary);
-  padding: 0 16px 6px 16px;
 }
 
 /* Page-wide content width cap. */
@@ -394,7 +304,7 @@ main.onebox-surface {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: #FFFFFF;
+  background: var(--onebox-on-accent);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15), 0 1px 3px rgba(0, 0, 0, 0.08);
   transition: transform 0.2s ease;
 }
@@ -499,346 +409,4 @@ main.onebox-surface {
 @keyframes onebox-dot {
   0%, 80%, 100% { opacity: 0.3; transform: scale(0.7); }
   40% { opacity: 1; transform: scale(1); }
-}
-
-/* ==========================================================================
- * iOS-style buttons (inline, small). Replaces daisyUI .btn variants.
- *
- * .onebox-btn   — base: flex row, rounded-8, small padding, medium weight.
- * .onebox-btn-primary / -danger / -info / -ghost — colour variants.
- * ========================================================================== */
-.onebox-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  height: 26px;
-  padding: 0 10px;
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 500;
-  border: 0;
-  cursor: pointer;
-  transition: background-color 0.15s ease, opacity 0.15s ease;
-  white-space: nowrap;
-}
-
-.onebox-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.onebox-btn-primary {
-  background: var(--onebox-blue);
-  color: #FFFFFF;
-}
-.onebox-btn-primary:hover:not(:disabled) { background: var(--onebox-blue-hover); }
-.onebox-btn-primary:active:not(:disabled) { background: var(--onebox-blue-deep); }
-
-.onebox-btn-danger {
-  background: var(--onebox-red);
-  color: #FFFFFF;
-}
-.onebox-btn-danger:hover:not(:disabled) { opacity: 0.9; }
-
-.onebox-btn-info {
-  background: var(--onebox-blue);
-  color: #FFFFFF;
-  opacity: 0.85;
-}
-.onebox-btn-info:hover:not(:disabled) { opacity: 1; }
-
-.onebox-btn-ghost {
-  background: var(--onebox-card);
-  color: var(--onebox-blue);
-  border: 0.5px solid var(--onebox-separator);
-}
-.onebox-btn-ghost:hover:not(:disabled) {
-  background: var(--onebox-fill);
-}
-
-/* ==========================================================================
- * Inputs + selects. Pure utilities; callers compose with Tailwind for layout.
- * ========================================================================== */
-.onebox-input {
-  height: 26px;
-  padding: 0 10px;
-  border-radius: 8px;
-  border: 0.5px solid var(--onebox-separator);
-  background: var(--onebox-card);
-  color: var(--onebox-label);
-  font-size: 12px;
-  outline: none;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.onebox-input:focus {
-  border-color: var(--onebox-blue);
-  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.15);
-}
-
-.onebox-input::placeholder { color: var(--onebox-label-tertiary); }
-
-.onebox-select {
-  height: 26px;
-  padding: 0 22px 0 8px;
-  border-radius: 8px;
-  border: 0.5px solid var(--onebox-separator);
-  background-color: var(--onebox-card);
-  color: var(--onebox-label);
-  font-size: 12px;
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='%23888'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 6px center;
-  background-size: 12px;
-  cursor: pointer;
-  outline: none;
-}
-
-.onebox-select:focus { border-color: var(--onebox-blue); }
-
-/* ==========================================================================
- * Tab bar. iOS-style rounded pills — not an underline strip. Active tab
- * gets a systemBlue-tinted fill; inactive tabs are transparent with a
- * hover fill. Container is a flat flex row (no bottom border) so it
- * reads as a button cluster rather than a document tab strip.
- * ========================================================================== */
-.onebox-tabs {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 4px 0;
-}
-
-.onebox-tab {
-  padding: 0 12px;
-  height: 28px;
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 1;
-  color: var(--onebox-label-secondary);
-  cursor: pointer;
-  border-radius: 8px;
-  transition: background-color 0.15s ease, color 0.15s ease;
-  background: transparent;
-  border: 0;
-  white-space: nowrap;
-  display: inline-flex;
-  align-items: center;
-}
-
-.onebox-tab:hover:not([data-active="true"]) {
-  color: var(--onebox-label);
-  background: var(--onebox-row-hover);
-}
-
-.onebox-tab[data-active="true"] {
-  color: var(--onebox-blue);
-  background: rgba(10, 132, 255, 0.12);
-  font-weight: 600;
-}
-
-/* ==========================================================================
- * macOS window shell — for the advanced-settings (log) window.
- *
- * Aesthetic commitment: Console.app / Xcode debug-console hybrid.
- * Unified translucent toolbar, dense SF Mono log rows, minimal chrome.
- * This language is distinct from the iOS-flavoured `.onebox-tabs`
- * used on the main 371×600 window.
- * ========================================================================== */
-
-.onebox-mac-window {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  background: var(--onebox-card);
-  color: var(--onebox-label);
-  font-family: ui-sans-serif, -apple-system, "SF Pro Text", system-ui, sans-serif;
-}
-
-.onebox-mac-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  height: 44px;
-  padding: 0 12px;
-  background: var(--onebox-toolbar-bg);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  border-bottom: 0.5px solid var(--onebox-separator);
-  position: sticky;
-  top: 0;
-  z-index: 10;
-}
-
-.onebox-mac-content {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-}
-
-.onebox-mac-statusbar {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 16px;
-  height: 24px;
-  padding: 0 12px;
-  background: var(--onebox-toolbar-bg);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  border-top: 0.5px solid var(--onebox-separator);
-  font-size: 11px;
-  color: var(--onebox-label-secondary);
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  font-variant-numeric: tabular-nums;
-}
-
-/* NSSegmentedControl look — track + lifted active pill. */
-.onebox-segctl {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px;
-  border-radius: 7px;
-  background: var(--onebox-fill);
-  height: 26px;
-}
-
-.onebox-segctl-item {
-  height: 22px;
-  padding: 0 12px;
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: -0.005em;
-  color: var(--onebox-label-secondary);
-  background: transparent;
-  border: 0;
-  border-radius: 5px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  white-space: nowrap;
-  transition: background-color 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
-}
-
-.onebox-segctl-item:hover:not([data-active="true"]) {
-  color: var(--onebox-label);
-}
-
-.onebox-segctl-item[data-active="true"] {
-  color: var(--onebox-label);
-  background: var(--onebox-segctl-active-bg);
-  box-shadow: var(--onebox-segctl-active-shadow);
-  font-weight: 600;
-}
-
-/* Compact toolbar search field. Default width 200px; callers that want
-   the field to fill available space (config-template URL row) add Tailwind
-   `flex-1` which overrides the width because `flex: 1 1 0%` sets basis to
-   0 and takes over sizing. */
-.onebox-search {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 24px;
-  padding: 0 8px;
-  border-radius: 6px;
-  background: var(--onebox-fill);
-  width: 200px;
-  min-width: 0;
-  transition: box-shadow 0.15s ease;
-}
-
-.onebox-search:focus-within {
-  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.18);
-}
-
-.onebox-search > svg {
-  width: 11px;
-  height: 11px;
-  color: var(--onebox-label-tertiary);
-  flex-shrink: 0;
-}
-
-.onebox-search > input {
-  flex: 1;
-  background: transparent;
-  border: 0;
-  outline: none;
-  font-size: 12px;
-  color: var(--onebox-label);
-  min-width: 0;
-}
-
-.onebox-search > input::placeholder { color: var(--onebox-label-tertiary); }
-
-/* Toolbar icon+label button. Inactive is muted; data-active paints it
-   systemBlue with a matching tint. Used for the logs-tab auto-scroll
-   toggle. */
-.onebox-toolbar-btn {
-  height: 24px;
-  min-width: 24px;
-  padding: 0 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--onebox-label-secondary);
-  background: transparent;
-  border: 0;
-  border-radius: 5px;
-  cursor: pointer;
-  transition: background-color 0.12s ease, color 0.12s ease;
-}
-
-.onebox-toolbar-btn:hover:not([data-active="true"]) {
-  background: var(--onebox-row-hover);
-  color: var(--onebox-label);
-}
-
-.onebox-toolbar-btn[data-active="true"] {
-  color: var(--onebox-blue);
-  background: rgba(10, 132, 255, 0.12);
-}
-
-/* SF Mono log row. Dense by default (3px vertical padding, 1.55
-   line-height); hover tint surfaces the row under the cursor without
-   competing with the selection highlight. */
-.onebox-logrow {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  padding: 3px 16px;
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 11px;
-  line-height: 1.55;
-  color: var(--onebox-label);
-  transition: background-color 0.08s ease;
-  word-break: break-word;
-  white-space: pre-wrap;
-}
-
-.onebox-logrow:hover {
-  background: var(--onebox-row-hover);
-}
-
-.onebox-logrow-time {
-  flex-shrink: 0;
-  min-width: 72px;
-  color: var(--onebox-label-tertiary);
-  font-variant-numeric: tabular-nums;
-}
-
-/* Search-term highlight mark. systemYellow tint, a touch of padding.
-   Works on both themes because the tint is transparent over --label. */
-.onebox-highlight {
-  background: rgba(255, 204, 0, 0.32);
-  color: inherit;
-  padding: 0 2px;
-  border-radius: 3px;
 }

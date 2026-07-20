@@ -21,14 +21,18 @@
     "npm:@types/react@^19.2.17": "19.2.17",
     "npm:@types/unzipper@~0.10.11": "0.10.11",
     "npm:@vitejs/plugin-react@^5.2.0": "5.2.0_vite@7.3.6__@types+node@25.9.5__picomatch@4.0.4_@babel+core@7.29.7_@types+node@25.9.5",
-    "npm:@vitest/coverage-v8@^3.2.7": "3.2.7_vitest@3.2.7__@types+node@25.9.5__vite@7.3.6___@types+node@25.9.5___picomatch@4.0.4_@types+node@25.9.5",
+    "npm:@vitest/coverage-v8@^3.2.7": "3.2.7_vitest@3.2.7__@types+node@25.9.5__happy-dom@20.11.0__vite@7.3.6___@types+node@25.9.5___picomatch@4.0.4_@types+node@25.9.5_happy-dom@20.11.0",
     "npm:bytes@^3.1.2": "3.1.2",
     "npm:clsx@^2.1.1": "2.1.1",
     "npm:framer-motion@^12.42.2": "12.42.2_react@19.2.7_react-dom@19.2.7__react@19.2.7",
+    "npm:happy-dom@20.11.0": "20.11.0",
+    "npm:happy-dom@^20.11.0": "20.11.0",
     "npm:husky@*": "9.1.7",
     "npm:husky@^9.1.7": "9.1.7",
     "npm:react-bootstrap-icons@^1.11.6": "1.11.6_react@19.2.7",
+    "npm:react-dom@19.2.7": "19.2.7_react@19.2.7",
     "npm:react-dom@^19.2.7": "19.2.7_react@19.2.7",
+    "npm:react@19.2.7": "19.2.7",
     "npm:react@^19.2.7": "19.2.7",
     "npm:sonner@^2.0.7": "2.0.7_react@19.2.7_react-dom@19.2.7__react@19.2.7",
     "npm:swr@^2.4.2": "2.4.2_react@19.2.7",
@@ -39,8 +43,8 @@
     "npm:unzipper@~0.12.5": "0.12.5",
     "npm:vite@*": "7.3.6_@types+node@25.9.5_picomatch@4.0.4",
     "npm:vite@^7.3.6": "7.3.6_@types+node@25.9.5_picomatch@4.0.4",
-    "npm:vitest@^3.2.4": "3.2.7_@types+node@25.9.5_vite@7.3.6__@types+node@25.9.5__picomatch@4.0.4",
-    "npm:vitest@^3.2.7": "3.2.7_@types+node@25.9.5_vite@7.3.6__@types+node@25.9.5__picomatch@4.0.4",
+    "npm:vitest@^3.2.4": "3.2.7_@types+node@25.9.5_happy-dom@20.11.0_vite@7.3.6__@types+node@25.9.5__picomatch@4.0.4",
+    "npm:vitest@^3.2.7": "3.2.7_@types+node@25.9.5_happy-dom@20.11.0_vite@7.3.6__@types+node@25.9.5__picomatch@4.0.4",
     "npm:zod@^4.4.3": "4.4.3"
   },
   "npm": {
@@ -800,6 +804,15 @@
         "@types/node"
       ]
     },
+    "@types/whatwg-mimetype@3.0.2": {
+      "integrity": "sha512-c2AKvDT8ToxLIOUlN51gTiHXflsfIFisS4pO7pDPoKouJCESkhZnEy623gwP9laCy5lnLDAw1vAzu2vM2YLOrA=="
+    },
+    "@types/ws@8.18.1": {
+      "integrity": "sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==",
+      "dependencies": [
+        "@types/node"
+      ]
+    },
     "@vitejs/plugin-react@5.2.0_vite@7.3.6__@types+node@25.9.5__picomatch@4.0.4_@babel+core@7.29.7_@types+node@25.9.5": {
       "integrity": "sha512-YmKkfhOAi3wsB1PhJq5Scj3GXMn3WvtQ/JC0xoopuHoXSdmtdStOpFrYaT1kie2YgFBcIe64ROzMYRjCrYOdYw==",
       "dependencies": [
@@ -812,7 +825,7 @@
         "vite"
       ]
     },
-    "@vitest/coverage-v8@3.2.7_vitest@3.2.7__@types+node@25.9.5__vite@7.3.6___@types+node@25.9.5___picomatch@4.0.4_@types+node@25.9.5": {
+    "@vitest/coverage-v8@3.2.7_vitest@3.2.7__@types+node@25.9.5__happy-dom@20.11.0__vite@7.3.6___@types+node@25.9.5___picomatch@4.0.4_@types+node@25.9.5_happy-dom@20.11.0": {
       "integrity": "sha512-NEGWJS2XNu2PfRLQwOO3CTKj1tTETxNBdk454vDxVBhxJYhPaA/eS0nAI0c+1El1P7a60z8+i+ZrQoGESweGKg==",
       "dependencies": [
         "@ampproject/remapping",
@@ -951,6 +964,12 @@
       ],
       "bin": true
     },
+    "buffer-image-size@0.6.4": {
+      "integrity": "sha512-nEh+kZOPY1w+gcCMobZ6ETUp9WfibndnosbpwB1iJk/8Gt5ZF2bhS6+B6bPYz424KtwsR6Rflc3tCz1/ghX2dQ==",
+      "dependencies": [
+        "@types/node"
+      ]
+    },
     "bytes@3.1.2": {
       "integrity": "sha512-/Nf7TyzTx6S3yRJObOAV7956r8cr2+Oj8AC5dt8wSP3BQAoeX58NoHyCU8P8zGkNXStjTSi6fzO6F0pBdcYbEg=="
     },
@@ -1044,6 +1063,9 @@
         "graceful-fs",
         "tapable"
       ]
+    },
+    "entities@7.0.1": {
+      "integrity": "sha512-TWrgLOFUQTH994YUyl1yT4uyavY5nNB5muff+RtWaqNVCAK408b5ZnnbNAUEWLTCpum9w6arT70i1XdQ4UeOPA=="
     },
     "es-module-lexer@1.7.0": {
       "integrity": "sha512-jEQoCwk8hyb2AZziIOLhDqpm5+2ww5uIE6lkO/6jcOCusfk6LhMHpXXfBLXTZ7Ydyt0j4VoUQv6uGNYbdW+kBA=="
@@ -1154,6 +1176,18 @@
     },
     "graceful-fs@4.2.11": {
       "integrity": "sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ=="
+    },
+    "happy-dom@20.11.0": {
+      "integrity": "sha512-XogN4asPd1a56di9prVG6bZxteNcXsZxxKmAvcEfc5Px5Ca2hMyMgk8wvqK2K1V8zXg40j9VANXsDaJYh9DeNA==",
+      "dependencies": [
+        "@types/node",
+        "@types/whatwg-mimetype",
+        "@types/ws",
+        "buffer-image-size",
+        "entities",
+        "whatwg-mimetype",
+        "ws"
+      ]
     },
     "has-flag@4.0.0": {
       "integrity": "sha512-EykJT/Q1KjTWctppgIAgfSO0tKVuZUjhgMr17kqTumMl6Afv3EISleU7qZUzoXDFTAHTDC4NOoG/ZxU3EvlMPQ=="
@@ -1735,7 +1769,7 @@
       ],
       "bin": true
     },
-    "vitest@3.2.7_@types+node@25.9.5_vite@7.3.6__@types+node@25.9.5__picomatch@4.0.4": {
+    "vitest@3.2.7_@types+node@25.9.5_happy-dom@20.11.0_vite@7.3.6__@types+node@25.9.5__picomatch@4.0.4": {
       "integrity": "sha512-KrxIJ62Fd89gfysR4WotlgZABiz2dqFPgqGzX7s+CwsqLFomRH7777ZcrOD6+WVAh7khPQP41A+BKbpcJFrdEg==",
       "dependencies": [
         "@types/chai",
@@ -1750,6 +1784,7 @@
         "chai",
         "debug",
         "expect-type",
+        "happy-dom",
         "magic-string",
         "pathe",
         "picomatch",
@@ -1764,9 +1799,13 @@
         "why-is-node-running"
       ],
       "optionalPeers": [
-        "@types/node"
+        "@types/node",
+        "happy-dom"
       ],
       "bin": true
+    },
+    "whatwg-mimetype@3.0.0": {
+      "integrity": "sha512-nt+N2dzIutVRxARx1nghPKGv1xHikU7HKdfafKkLNLindmPU/ch3U31NOCGGA/dmPcmb1VlofO0vnKAcsm0o/Q=="
     },
     "which@2.0.2": {
       "integrity": "sha512-BLI3Tl1TW3Pvl70l3yq3Y64i+awpwXqsGBYWkkqMtnbXgrMD+yj7rhW0kuEDxzJaYXGjEW5ogapKNMEKNMjibA==",
@@ -1798,6 +1837,9 @@
         "string-width@5.1.2",
         "strip-ansi@7.2.0"
       ]
+    },
+    "ws@8.21.1": {
+      "integrity": "sha512-+0NTnW77fFN/DjQi6k/Sq/Yvk4Sgajw7urW8V+asjXnRgDs9gyGkdb7EzgfhA4goXsRIZKE28fzIXBHEzhuiWw=="
     },
     "yallist@3.1.1": {
       "integrity": "sha512-a4UGQaWPH59mOXUYnAG2ewncQS4i4F43Tv3JoAM+s2VDAmS9NsK8GpDMLrCHPksFT7h3K6TOoUNn2pb7RoXx4g=="
@@ -1835,6 +1877,7 @@
         "npm:bytes@^3.1.2",
         "npm:clsx@^2.1.1",
         "npm:framer-motion@^12.42.2",
+        "npm:happy-dom@^20.11.0",
         "npm:husky@^9.1.7",
         "npm:react-bootstrap-icons@^1.11.6",
         "npm:react-dom@^19.2.7",
