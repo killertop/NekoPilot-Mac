@@ -1,3 +1,5 @@
+import { displayNodeTag } from "../../utils/node-pool";
+
 export type NodeProtocolMap = Record<string, string>;
 
 type ProxyEntry = {
@@ -36,14 +38,15 @@ export function formatNodeProtocol(type: unknown): string | undefined {
  * the protocol is represented by the optional badge instead.
  */
 export function nodeDisplayName(nodeName: string, protocol?: string): string {
-    if (!protocol) return nodeName;
+    const displayName = displayNodeTag(nodeName);
+    if (!protocol) return displayName;
 
-    const separator = nodeName.indexOf("·");
-    if (separator < 0) return nodeName;
+    const separator = displayName.indexOf("·");
+    if (separator < 0) return displayName;
 
-    const prefix = nodeName.slice(0, separator).trim();
-    const label = nodeName.slice(separator + 1).trim();
-    return label && formatNodeProtocol(prefix) === protocol ? label : nodeName;
+    const prefix = displayName.slice(0, separator).trim();
+    const label = displayName.slice(separator + 1).trim();
+    return label && formatNodeProtocol(prefix) === protocol ? label : displayName;
 }
 
 export function nodeProtocolLabel(protocol?: string): string | undefined {

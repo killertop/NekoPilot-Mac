@@ -26,7 +26,6 @@ export default function HomePage() {
         isRunning,
         operationStatus,
         toggleService,
-        restartService,
         repairState,
         onRepairSuccess,
     } = useVPNOperations();
@@ -34,14 +33,6 @@ export default function HomePage() {
     const isEmpty = !subscriptionsError
         && subscriptions !== undefined
         && subscriptions.length === 0;
-
-    const handleUpdate = async () => {
-        if (subscriptionsLoading || subscriptions === undefined || subscriptionsError) {
-            void retrySubscriptions();
-            return;
-        }
-        await restartService(isEmpty);
-    };
 
     const handlePowerToggle = () => {
         if (subscriptionsLoading || subscriptions === undefined || subscriptionsError) {
@@ -101,10 +92,7 @@ export default function HomePage() {
                 </div>
 
                 <div className="mt-5 w-full flex-1 min-h-0">
-                    <Body
-                        isRunning={Boolean(isRunning)}
-                        onUpdate={handleUpdate}
-                    />
+                    <Body isRunning={Boolean(isRunning)} />
                 </div>
             </div>
         </div>

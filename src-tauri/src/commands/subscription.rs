@@ -61,6 +61,12 @@ pub struct SubscriptionRecord {
     pub source_type: String,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct SubscriptionConfigForBuild {
+    pub identifier: String,
+    pub config: Value,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubscriptionUpsert {
@@ -862,6 +868,36 @@ pub async fn get_subscription_config(app: AppHandle, identifier: String) -> Resu
     .map_err(|error| format!("get subscription config: {error}"))?
     .ok_or_else(|| "subscription_not_exist".to_owned())?;
     serde_json::from_str(&raw).map_err(|error| format!("parse stored subscription config: {error}"))
+}
+
+/// Loads every usable configuration directly inside the native process.
+/// Keeping the aggregate node pool out of the WebView avoids serializing a
+/// potentially large set of airport nodes through the JavaScript bridge.
+pub(crate) async fn subscription_configs_for_build(
+    app: &AppHandle,
+) -> Result<Vec<SubscriptionConfigForBuild>, String> {
+    let pool = database(app).await?;
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT subscriptions.identifier, subscription_configs.config_content \
+         FROM subscriptions \
+         INNER JOIN subscription_configs \
+           ON subscription_configs.identifier = subscriptions.identifier \
+         ORDER BY subscriptions.id DESC, subscription_configs.id DESC",
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(|error| format!("list subscription configs: {error}"))?;
+
+    let mut configs = Vec::with_capacity(rows.len());
+    for (identifier, raw) in rows {
+        match serde_json::from_str(&raw) {
+            Ok(config) => configs.push(SubscriptionConfigForBuild { identifier, config }),
+            Err(error) => log::warn!(
+                "Skipping malformed stored subscription config {identifier}: {error}"
+            ),
+        }
+    }
+    Ok(configs)
 }
 
 #[tauri::command]

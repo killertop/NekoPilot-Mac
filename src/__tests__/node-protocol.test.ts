@@ -31,6 +31,10 @@ describe('node protocol helpers', () => {
         expect(nodeProtocolLabel('anytls')).toBe('AnyTLS');
     });
 
+    it('hides the runtime subscription namespace from node labels', () => {
+        expect(nodeDisplayName('@np:airport-a:VLESS · Tokyo', 'vless')).toBe('Tokyo');
+    });
+
     it('builds a protocol map for the visible node list', () => {
         const response = {
             proxies: {

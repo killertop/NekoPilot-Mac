@@ -1,8 +1,8 @@
 //! Native preparation of generated sing-box configurations.
 //!
-//! The frontend owns UI state and database access, but JSON mutation and
-//! persistence happen here so a large subscription never crosses the
-//! JavaScript hot path more than once.
+//! The frontend owns UI state, while database reads, JSON mutation and
+//! persistence stay native so the aggregate node pool never crosses the
+//! JavaScript bridge.
 
 use std::collections::HashSet;
 
@@ -12,13 +12,18 @@ use tauri::{AppHandle, Manager};
 
 use crate::core::{CLASH_API_PORT, DEFAULT_MIXED_PROXY_PORT};
 
-use super::{config_write::write_atomically, rule_sets, settings};
+use super::{
+    config_write::write_atomically,
+    rule_sets, settings,
+    subscription::{self, SubscriptionConfigForBuild},
+};
 
 const ACTION_ANCHORS: [(&str, &str); 2] = [
     ("direct", "direct-tag.nekopilot.invalid"),
     ("proxy", "proxy-tag.nekopilot.invalid"),
 ];
 const LEGACY_REJECT_ANCHOR: &str = "reject-tag.nekopilot.invalid";
+const RUNTIME_NODE_TAG_PREFIX: &str = "@np:";
 
 #[derive(Debug)]
 pub struct ConfigBuildOptions {
@@ -294,36 +299,20 @@ fn configure_runtime(config: &mut Value, options: &ConfigBuildOptions) -> Result
     Ok(())
 }
 
-fn merge_subscription(config: &mut Value, subscription: &Value) -> Result<(), String> {
+fn runtime_node_tag(identifier: &str, original_tag: &str) -> String {
+    format!("{RUNTIME_NODE_TAG_PREFIX}{identifier}:{original_tag}")
+}
+
+fn subscription_nodes(
+    subscription: &SubscriptionConfigForBuild,
+) -> Result<Vec<(String, Value)>, String> {
     let subscription_outbounds = subscription
+        .config
         .get("outbounds")
         .and_then(Value::as_array)
         .ok_or_else(|| "subscription_config_missing".to_owned())?;
+    let mut tag_map = std::collections::HashMap::<String, String>::new();
 
-    let root = object_mut(config, "root")?;
-    let outbounds = array_mut(root, "outbounds")?;
-    let mut seen_tags: HashSet<String> = outbounds
-        .iter()
-        .filter_map(|outbound| outbound.get("tag").and_then(Value::as_str))
-        .map(ToOwned::to_owned)
-        .collect();
-    let exit_gateway = outbounds
-        .iter_mut()
-        .find(|outbound| {
-            outbound.get("type").and_then(Value::as_str) == Some("selector")
-                && outbound.get("tag").and_then(Value::as_str) == Some("ExitGateway")
-        })
-        .ok_or_else(|| "template_exit_gateway_missing".to_owned())?;
-    let exit_gateway = exit_gateway
-        .as_object_mut()
-        .ok_or_else(|| "template_exit_gateway_invalid".to_owned())?;
-    let selected = exit_gateway
-        .entry("outbounds".to_owned())
-        .or_insert_with(|| Value::Array(Vec::new()))
-        .as_array_mut()
-        .ok_or_else(|| "template_exit_gateway_outbounds_invalid".to_owned())?;
-
-    let mut nodes: Vec<(String, Value)> = Vec::new();
     for outbound in subscription_outbounds {
         let Some(node) = outbound.as_object() else {
             continue;
@@ -345,13 +334,86 @@ fn merge_subscription(config: &mut Value, subscription: &Value) -> Result<(), St
             log::warn!("Skipping subscription outbound without a non-empty tag");
             continue;
         };
-        if !seen_tags.insert(tag.to_owned()) {
-            log::warn!("Skipping duplicate or reserved subscription outbound tag: {tag}");
+        tag_map
+            .entry(tag.to_owned())
+            .or_insert_with(|| runtime_node_tag(&subscription.identifier, tag));
+    }
+
+    let mut seen_original_tags = HashSet::new();
+    let mut nodes = Vec::new();
+    for outbound in subscription_outbounds {
+        let Some(mut node) = outbound.as_object().cloned() else {
+            continue;
+        };
+        let Some(original_tag) = node
+            .get("tag")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+        else {
+            continue;
+        };
+        let Some(runtime_tag) = tag_map.get(&original_tag).cloned() else {
+            continue;
+        };
+        if !seen_original_tags.insert(original_tag.clone()) {
+            log::warn!(
+                "Skipping duplicate outbound tag in subscription {}: {}",
+                subscription.identifier,
+                original_tag
+            );
             continue;
         }
-        let mut node = node.clone();
+        insert_string(&mut node, "tag", &runtime_tag);
+        if let Some(detour) = node.get("detour").and_then(Value::as_str) {
+            if let Some(runtime_detour) = tag_map.get(detour) {
+                insert_string(&mut node, "detour", runtime_detour);
+            }
+        }
         insert_string(&mut node, "domain_resolver", "system");
-        nodes.push((tag.to_owned(), Value::Object(node)));
+        nodes.push((runtime_tag, Value::Object(node)));
+    }
+    Ok(nodes)
+}
+
+fn merge_subscription_pool(
+    config: &mut Value,
+    subscriptions: &[SubscriptionConfigForBuild],
+    selected_identifier: &str,
+) -> Result<(), String> {
+    let root = object_mut(config, "root")?;
+    let outbounds = array_mut(root, "outbounds")?;
+    let exit_gateway = outbounds
+        .iter_mut()
+        .find(|outbound| {
+            outbound.get("type").and_then(Value::as_str) == Some("selector")
+                && outbound.get("tag").and_then(Value::as_str) == Some("ExitGateway")
+        })
+        .ok_or_else(|| "template_exit_gateway_missing".to_owned())?;
+    let exit_gateway = exit_gateway
+        .as_object_mut()
+        .ok_or_else(|| "template_exit_gateway_invalid".to_owned())?;
+    let selected = exit_gateway
+        .entry("outbounds".to_owned())
+        .or_insert_with(|| Value::Array(Vec::new()))
+        .as_array_mut()
+        .ok_or_else(|| "template_exit_gateway_outbounds_invalid".to_owned())?;
+
+    let mut ordered = subscriptions.iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|item| item.identifier != selected_identifier);
+    let mut seen_identifiers = HashSet::new();
+    let mut nodes = Vec::new();
+    for subscription in ordered {
+        if !seen_identifiers.insert(subscription.identifier.as_str()) {
+            continue;
+        }
+        match subscription_nodes(subscription) {
+            Ok(subscription_nodes) => nodes.extend(subscription_nodes),
+            Err(error) => log::warn!(
+                "Skipping invalid stored subscription {}: {}",
+                subscription.identifier,
+                error
+            ),
+        }
     }
     if nodes.is_empty() {
         return Err("subscription_no_usable_nodes".to_owned());
@@ -361,14 +423,32 @@ fn merge_subscription(config: &mut Value, subscription: &Value) -> Result<(), St
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn prepare_config(
-    mut template_config: Value,
+    template_config: Value,
     subscription_config: Value,
+    options: &ConfigBuildOptions,
+) -> Result<Value, String> {
+    let subscriptions = [SubscriptionConfigForBuild {
+        identifier: "selected".to_owned(),
+        config: subscription_config,
+    }];
+    prepare_config_pool(template_config, &subscriptions, "selected", options)
+}
+
+pub(crate) fn prepare_config_pool(
+    mut template_config: Value,
+    subscription_configs: &[SubscriptionConfigForBuild],
+    selected_identifier: &str,
     options: &ConfigBuildOptions,
 ) -> Result<Value, String> {
     configure_runtime(&mut template_config, options)?;
     inject_custom_rules(&mut template_config, options.custom_rules.as_ref());
-    merge_subscription(&mut template_config, &subscription_config)?;
+    merge_subscription_pool(
+        &mut template_config,
+        subscription_configs,
+        selected_identifier,
+    )?;
     Ok(template_config)
 }
 
@@ -381,13 +461,19 @@ pub async fn prepare_write_and_reload_config(
     app: AppHandle,
     file_name: String,
     template_config: Value,
-    subscription_config: Value,
+    selected_identifier: String,
     mode: String,
     reload_if_running: bool,
 ) -> Result<(), String> {
     let options = build_options_from_settings(&app, &mode)?;
     let secret = options.clash_api_secret.clone();
-    let config = prepare_config(template_config, subscription_config, &options)?;
+    let subscription_configs = subscription::subscription_configs_for_build(&app).await?;
+    let config = prepare_config_pool(
+        template_config,
+        &subscription_configs,
+        &selected_identifier,
+        &options,
+    )?;
     let bytes = serde_json::to_vec(&config).map_err(|e| format!("serialize configuration: {e}"))?;
     let dir = app
         .path()
@@ -463,7 +549,7 @@ mod tests {
         assert_eq!(config["inbounds"][0]["listen"], "127.0.0.1");
         assert_eq!(
             config["outbounds"][1]["outbounds"],
-            serde_json::json!(["node-a"])
+            serde_json::json!(["@np:selected:node-a", "@np:selected:direct"])
         );
         assert_eq!(config["outbounds"][2]["domain_resolver"], "system");
         assert_eq!(
@@ -491,11 +577,38 @@ mod tests {
     fn rejects_a_subscription_without_a_usable_node() {
         let subscription = serde_json::json!({"outbounds":[
             {"type":"direct", "tag":"direct"},
-            {"type":"vless", "tag":"ExitGateway"}
+            {"type":"selector", "tag":"ExitGateway"}
         ]});
         assert_eq!(
             prepare_config(template(), subscription, &options()).unwrap_err(),
             "subscription_no_usable_nodes",
         );
+    }
+
+    #[test]
+    fn merges_every_subscription_and_orders_the_selected_pool_first() {
+        let subscriptions = vec![
+            SubscriptionConfigForBuild {
+                identifier: "airport-a".into(),
+                config: serde_json::json!({"outbounds":[
+                    {"type":"vless", "tag":"same-name"}
+                ]}),
+            },
+            SubscriptionConfigForBuild {
+                identifier: "local-b".into(),
+                config: serde_json::json!({"outbounds":[
+                    {"type":"anytls", "tag":"same-name"}
+                ]}),
+            },
+        ];
+        let config =
+            prepare_config_pool(template(), &subscriptions, "local-b", &options()).unwrap();
+
+        assert_eq!(
+            config["outbounds"][1]["outbounds"],
+            serde_json::json!(["@np:local-b:same-name", "@np:airport-a:same-name"])
+        );
+        assert_eq!(config["outbounds"][2]["type"], "anytls");
+        assert_eq!(config["outbounds"][3]["type"], "vless");
     }
 }

@@ -456,25 +456,6 @@ export const useVPNOperations = () => {
     pending?.();
   }, []);
 
-  const restartService = useCallback(async (isEmpty: boolean) => {
-    if (isEmpty) {
-      setActiveScreen("configuration");
-      return message(t("please_add_subscription"), {
-        title: t("tips"),
-        kind: "error",
-      });
-    }
-    try {
-      await vpnServiceManager.syncAndReload();
-    } catch (error) {
-      console.error("重启服务失败:", error);
-      await message(t("reconnect_failed"), {
-        title: t("error"),
-        kind: "error",
-      });
-    }
-  }, [setActiveScreen]);
-
   const toggleService = useCallback(async (isEmpty: boolean) => {
     if (isEmpty) {
       setActiveScreen("configuration");
@@ -504,7 +485,6 @@ export const useVPNOperations = () => {
     isLoading,
     isRunning,
     startService,
-    restartService,
     toggleService,
     repairState,
     onRepairSuccess,

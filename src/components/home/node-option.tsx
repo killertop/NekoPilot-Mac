@@ -1,8 +1,9 @@
 import { useMemo } from 'react';
 import { t } from '../../utils/helper';
+import type { DelayStatus } from '../../utils/node-delay';
 import { nodeDisplayName, nodeProtocolLabel } from "./node-protocol";
 
-export type DelayStatus = '-' | number;
+export type { DelayStatus } from '../../utils/node-delay';
 
 interface NodeOptionProps {
     nodeName: string;
@@ -11,6 +12,7 @@ interface NodeOptionProps {
     showDelay: boolean;
     delay: DelayStatus;
     isTesting: boolean;
+    contextLabel?: string;
 }
 
 // 样式常量
@@ -57,11 +59,13 @@ export default function NodeOption({
     showDelay,
     delay,
     isTesting,
+    contextLabel,
 }: NodeOptionProps) {
     // 计算显示的节点名称
     const displayName = useMemo(() => {
-        return nodeName === 'auto' ? t("auto") : nodeDisplayName(nodeName, protocol);
-    }, [nodeName, protocol]);
+        const label = nodeName === 'auto' ? t("auto") : nodeDisplayName(nodeName, protocol);
+        return contextLabel ? `${contextLabel} · ${label}` : label;
+    }, [nodeName, protocol, contextLabel]);
     const protocolLabel = nodeProtocolLabel(protocol);
 
     // 处理节点名称为空的情况

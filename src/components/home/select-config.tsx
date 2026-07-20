@@ -11,7 +11,7 @@ import {
 type SubscriptionProps = {
     data: Subscription[] | undefined;
     isLoading: boolean;
-    onUpdate: (identifier: string, isUpdate: boolean) => void;
+    onUpdate: (identifier: string, changed: boolean) => Promise<void>;
 };
 
 export default function SelectSub({ data, isLoading, onUpdate }: SubscriptionProps) {
@@ -74,7 +74,7 @@ export default function SelectSub({ data, isLoading, onUpdate }: SubscriptionPro
         const prevId = await getStoreValue(SSI_STORE_KEY);
         setSelected(item.identifier);
         await setStoreValue(SSI_STORE_KEY, item.identifier);
-        onUpdate(item.identifier, prevId !== item.identifier);
+        await onUpdate(item.identifier, prevId !== item.identifier);
     };
 
     return (

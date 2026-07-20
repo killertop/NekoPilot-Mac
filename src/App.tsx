@@ -13,6 +13,8 @@ import useSWR from "swr";
 import { deduplicateSubscriptionsByUrl } from "./action/db";
 import { primeAllConfigTemplateCaches, purgeLegacyTemplateCache } from "./hooks/useSwr";
 import { EngineStateContext, useEngineStateRoot } from "./hooks/useEngineState";
+import { useAutoNodeSelection } from "./hooks/useAutoNodeSelection";
+import { useSelectedSubscriptionNodeSync } from "./hooks/useSelectedSubscriptionNodeSync";
 import { useApplyPipelineRoot } from "./components/home/hooks";
 import { DeepLinkApplyProgressModal } from "./components/home/deep-link-apply-progress-modal";
 import HomePage from "./page/home";
@@ -62,6 +64,8 @@ function Body({ activeScreen }: BodyProps) {
 
 function App() {
   const engineState = useEngineStateRoot();
+  useSelectedSubscriptionNodeSync(engineState.kind === "running");
+  useAutoNodeSelection(engineState.kind === "running");
   // Theme initialization is mounted one level up in WindowManger so the app
   // boots with the persisted theme and reacts to toggle events. Do not re-mount here.
   const [activeScreen, setActiveScreen] = useState<ActiveScreenType>('home');

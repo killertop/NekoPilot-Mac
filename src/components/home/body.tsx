@@ -5,6 +5,7 @@ import NetworkSpeed from "./network-speed";
 import SelectSub from "./select-config";
 import SelectNode from "./select-node";
 import { NODE_SELECTOR_REFRESH_EVENT } from "./events";
+import { switchToSubscriptionNode } from "../../utils/node-pool";
 
 function SectionLabel({
     children,
@@ -30,22 +31,34 @@ function SectionLabel({
 
 export default function Body({
     isRunning,
-    onUpdate,
 }: {
     isRunning: boolean;
-    onUpdate: () => void;
 }) {
     const { data, error, isLoading, mutate } = useSubscriptions();
 
-    const handleUpdate = async (_identifier: string, isUpdate: boolean) => {
+    const handleUpdate = async (identifier: string, changed: boolean) => {
         try {
-            if (isUpdate && isRunning) {
-                await vpnServiceManager.syncConfig({});
-                onUpdate();
+            if (changed && isRunning) {
+                // Current builds keep every airport and local node in the
+                // active selector, so changing configuration is a local API
+                // operation rather than a sing-box restart. The fallback is
+                // needed once when upgrading from an older single-pool config.
+                let switched = await switchToSubscriptionNode(identifier);
+                if (!switched) {
+                    await vpnServiceManager.syncAndReload(0);
+                    for (let attempt = 0; attempt < 8 && !switched; attempt += 1) {
+                        if (attempt > 0) {
+                            await new Promise((resolve) => window.setTimeout(resolve, 125));
+                        }
+                        try {
+                            switched = await switchToSubscriptionNode(identifier);
+                        } catch {
+                            // SIGHUP can briefly recreate the local controller.
+                        }
+                    }
+                }
+                if (!switched) throw new Error("subscription_node_not_loaded");
             }
-            // The selected configuration can replace ExitGateway while the
-            // engine stays running. Refresh the node picker so it never
-            // keeps showing a selector from the previous configuration.
             window.dispatchEvent(new Event(NODE_SELECTOR_REFRESH_EVENT));
         } catch (error) {
             console.error(t("update_config_failed") + ":", error);
@@ -105,7 +118,7 @@ export default function Body({
 
             <section className="w-full">
                 <SectionLabel>{t("node_selection")}</SectionLabel>
-                <SelectNode isRunning={isRunning} />
+                <SelectNode isRunning={isRunning} subscriptions={data} />
             </section>
 
             <NetworkSpeed isRunning={isRunning} />

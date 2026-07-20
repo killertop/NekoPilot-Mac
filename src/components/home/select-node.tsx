@@ -2,20 +2,22 @@ import { useEffect, useMemo, useState } from "react";
 
 import useSWR from "swr";
 import { getShowNodeProtocol } from "../../single/store";
+import type { Subscription } from "../../types/definition";
 import { clashApiFetch } from "../../utils/clash-api";
 import { t } from "../../utils/helper";
+import { measureNodeDelays } from "../../utils/node-delay";
+import {
+    selectExitGatewayNode,
+    subscriptionIdentifierForNode,
+} from "../../utils/node-pool";
 import {
     AppleSelectMenu,
     AppleSelectOption,
     AppleSelectPlaceholder,
 } from "./apple-select-menu";
-import { buildNodeProtocolMap, type NodeProtocolMap } from "./node-protocol";
+import { buildNodeProtocolMap, nodeDisplayName, type NodeProtocolMap } from "./node-protocol";
 import NodeOption, { type DelayStatus } from "./node-option";
 import { NODE_SELECTOR_REFRESH_EVENT } from "./events";
-
-const DELAY_TEST_URL = "https://www.google.com/generate_204";
-const DELAY_TEST_TIMEOUT_MS = 5_000;
-const DELAY_TEST_CONCURRENCY = 3;
 
 function compareNodesByDelay(
     left: string,
@@ -41,24 +43,6 @@ function compareNodesByDelay(
     return 0;
 }
 
-async function measureNodeDelay(nodeName: string): Promise<DelayStatus> {
-    try {
-        const response = await clashApiFetch(
-            `/proxies/${encodeURIComponent(nodeName)}/delay?url=${encodeURIComponent(DELAY_TEST_URL)}&timeout=${DELAY_TEST_TIMEOUT_MS}`,
-        );
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-        }
-        const payload = await response.json() as { delay?: unknown };
-        return typeof payload.delay === "number" && Number.isFinite(payload.delay)
-            ? payload.delay
-            : "-";
-    } catch (error) {
-        console.warn(`Failed to fetch proxy delay for ${nodeName}:`, error);
-        return "-";
-    }
-}
-
 type SelectorResponse = {
     all?: string[];
     now?: string;
@@ -73,6 +57,7 @@ type NodeSelectorData = {
 
 type SelectNodeProps = {
     isRunning: boolean;
+    subscriptions?: Subscription[];
 };
 
 export default function SelectNode(props: SelectNodeProps) {
@@ -151,6 +136,9 @@ export default function SelectNode(props: SelectNodeProps) {
             currentNode={data.now}
             nodeProtocols={data.nodeProtocols}
             showProtocol={data.showProtocol}
+            subscriptionNames={Object.fromEntries(
+                (props.subscriptions ?? []).map((item) => [item.identifier, item.name]),
+            )}
             onUpdate={() => mutate()}
         />
     );
@@ -162,11 +150,12 @@ type NodeMenuProps = {
     nodeProtocols: NodeProtocolMap;
     showProtocol: boolean;
     isRunning: boolean;
+    subscriptionNames: Record<string, string>;
     onUpdate: () => void;
 };
 
 function NodeMenu(props: NodeMenuProps) {
-    const { currentNode, nodeList, nodeProtocols, showProtocol, onUpdate, isRunning } = props;
+    const { currentNode, nodeList, nodeProtocols, showProtocol, subscriptionNames, onUpdate, isRunning } = props;
     const [showDelay, setShowDelay] = useState(false);
     const [delays, setDelays] = useState<Record<string, DelayStatus>>({});
     const [pendingNodes, setPendingNodes] = useState<Set<string>>(new Set());
@@ -175,6 +164,25 @@ function NodeMenu(props: NodeMenuProps) {
         () => Array.from(new Set(nodeList.filter(Boolean))),
         [nodeListKey],
     );
+    const duplicateDisplayNames = useMemo(() => {
+        const counts = new Map<string, number>();
+        for (const node of stableNodeList) {
+            const label = nodeDisplayName(node, nodeProtocols[node]);
+            counts.set(label, (counts.get(label) ?? 0) + 1);
+        }
+        return new Set(
+            Array.from(counts.entries())
+                .filter(([, count]) => count > 1)
+                .map(([label]) => label),
+        );
+    }, [stableNodeList, nodeProtocols]);
+
+    const contextLabel = (node: string) => {
+        const label = nodeDisplayName(node, nodeProtocols[node]);
+        if (!duplicateDisplayNames.has(label)) return undefined;
+        const identifier = subscriptionIdentifierForNode(node);
+        return identifier ? subscriptionNames[identifier] ?? identifier.slice(0, 6) : undefined;
+    };
 
     useEffect(() => {
         if (!isRunning || stableNodeList.length === 0) {
@@ -198,14 +206,9 @@ function NodeMenu(props: NodeMenuProps) {
             if (cancelled) return;
             setShowDelay(true);
 
-            let nextIndex = 0;
-            const worker = async () => {
-                while (!cancelled) {
-                    const nodeName = stableNodeList[nextIndex++];
-                    if (!nodeName) return;
-
-                    const delay = await measureNodeDelay(nodeName);
-                    if (cancelled) return;
+            void measureNodeDelays(stableNodeList, {
+                isCancelled: () => cancelled,
+                onResult: (nodeName, delay) => {
                     setDelays((previous) => ({ ...previous, [nodeName]: delay }));
                     setPendingNodes((previous) => {
                         if (!previous.has(nodeName)) return previous;
@@ -213,15 +216,8 @@ function NodeMenu(props: NodeMenuProps) {
                         next.delete(nodeName);
                         return next;
                     });
-                }
-            };
-
-            void Promise.all(
-                Array.from(
-                    { length: Math.min(DELAY_TEST_CONCURRENCY, stableNodeList.length) },
-                    () => worker(),
-                ),
-            );
+                },
+            });
         }, 500);
 
         return () => {
@@ -249,10 +245,7 @@ function NodeMenu(props: NodeMenuProps) {
 
     const handleNodeChange = async (node: string) => {
         try {
-            await clashApiFetch("/proxies/ExitGateway", {
-                method: "PUT",
-                body: JSON.stringify({ name: node }),
-            });
+            await selectExitGatewayNode(node);
             onUpdate();
         } catch (error) {
             console.error("Error changing node:", error);
@@ -279,6 +272,7 @@ function NodeMenu(props: NodeMenuProps) {
                     showDelay={showDelay}
                     delay={delays[currentNode] ?? "-"}
                     isTesting={pendingNodes.has(currentNode)}
+                    contextLabel={contextLabel(currentNode)}
                 />
             )}
             renderOption={({ option, isSelected }) => (
@@ -299,6 +293,7 @@ function NodeMenu(props: NodeMenuProps) {
                         showDelay={showDelay}
                         delay={delays[option.value] ?? "-"}
                         isTesting={pendingNodes.has(option.value)}
+                        contextLabel={contextLabel(option.value)}
                     />
                 </div>
             )}

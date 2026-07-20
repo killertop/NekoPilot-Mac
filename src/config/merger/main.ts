@@ -1,5 +1,4 @@
 import { invoke } from "@tauri-apps/api/core";
-import { getSubscriptionConfig } from "../../action/db";
 import { getStoreValue, setStoreValue } from "../../single/store";
 
 import { configType, getConfigTemplateCacheKey } from "../common";
@@ -25,14 +24,14 @@ async function getConfigTemplate(mode: configType): Promise<any> {
 
 async function buildAndWriteConfig(
   newConfig: any,
-  dbConfigData: any,
+  selectedIdentifier: string,
   mode: configType,
   reloadIfRunning = false,
 ) {
   await invoke("prepare_write_and_reload_config", {
     fileName: "config.json",
     templateConfig: newConfig,
-    subscriptionConfig: dbConfigData,
+    selectedIdentifier,
     mode,
     reloadIfRunning,
   });
@@ -43,10 +42,9 @@ export async function setMixedConfig(identifier: string, reloadIfRunning = false
   const newConfig = await getConfigTemplate("mixed");
 
   console.log("写入[规则]系统代理配置文件");
-  let dbConfigData = await getSubscriptionConfig(identifier);
   await buildAndWriteConfig(
     newConfig,
-    dbConfigData,
+    identifier,
     "mixed",
     reloadIfRunning,
   );
