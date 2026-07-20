@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AUTO_SELECT_INTERVAL_MS,
+  automaticSelectionDelayMs,
   connectionAgeMs,
   hasLongLivedConnection,
   pickFastestNode,
@@ -9,6 +10,10 @@ import {
   AUTO_SELECT_FASTEST_NODE_CHANGED_EVENT,
   DEFAULT_AUTO_SELECT_FASTEST_NODE,
 } from "../types/definition";
+import {
+  MANUAL_NODE_SELECTION_EVENT,
+  NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT,
+} from "../components/home/events";
 
 describe("automatic node selection", () => {
   it("runs on the fixed ten-minute schedule", () => {
@@ -16,6 +21,15 @@ describe("automatic node selection", () => {
     expect(DEFAULT_AUTO_SELECT_FASTEST_NODE).toBe(true);
     expect(AUTO_SELECT_FASTEST_NODE_CHANGED_EVENT).toBe(
       "nekopilot-auto-select-fastest-node-changed",
+    );
+  });
+
+  it("defers an active cycle for ten minutes after a manual selection", () => {
+    expect(automaticSelectionDelayMs(1_000, 0)).toBe(5_000);
+    expect(automaticSelectionDelayMs(1_000, 601_000)).toBe(600_000);
+    expect(MANUAL_NODE_SELECTION_EVENT).toBe("nekopilot:manual-node-selection");
+    expect(NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT).toBe(
+      "nekopilot:node-selector-optimistic-config",
     );
   });
 

@@ -76,7 +76,7 @@ pub(crate) async fn set_system_proxy(app: &AppHandle) -> anyhow::Result<()> {
     {
         *managed_proxy_port()
             .lock()
-            .expect("managed proxy port lock") = Some(proxy_port);
+            .unwrap_or_else(|error| error.into_inner()) = Some(proxy_port);
     }
     log::info!("Proxy set to {}:{}", PROXY_HOST, proxy_port);
     Ok(())
@@ -123,14 +123,31 @@ fn platform_set_system_proxy(port: u16, bypass: &str) -> anyhow::Result<()> {
 /// stale proxy isn't left behind if the active interface changed since start.
 #[cfg(target_os = "macos")]
 fn platform_clear_system_proxy() -> anyhow::Result<()> {
-    let port = managed_proxy_port()
+    clear_owned_proxy_port_with(managed_proxy_port(), clear_managed_proxy_port)
+}
+
+#[cfg(target_os = "macos")]
+fn clear_owned_proxy_port_with(
+    managed_port: &Mutex<Option<u16>>,
+    clear: impl FnOnce(u16) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    // Keep the ownership lock for the complete clear operation. A concurrent
+    // start uses the same port, so comparing only the numeric value after an
+    // unlocked networksetup call could accidentally erase the newer start's
+    // ownership record.
+    let mut current_port = managed_port
         .lock()
-        .expect("managed proxy port lock")
-        .take();
-    let Some(port) = port else {
+        .unwrap_or_else(|error| error.into_inner());
+    let Some(port) = *current_port else {
         return Ok(());
     };
-    clear_managed_proxy_port(port)
+    // Preserve the ownership proof until every matching service has been
+    // cleared successfully. If networksetup fails during shutdown, the
+    // caller can retry instead of seeing `None` and silently leaving a dead
+    // system proxy behind.
+    clear(port)?;
+    *current_port = None;
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -198,7 +215,8 @@ fn clear_managed_proxy_port(port: u16) -> anyhow::Result<()> {
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
-    use super::proxy_settings_match_managed_port;
+    use super::{clear_owned_proxy_port_with, proxy_settings_match_managed_port};
+    use std::sync::Mutex;
 
     #[test]
     fn only_matches_the_proxy_port_owned_by_this_process() {
@@ -214,6 +232,19 @@ mod tests {
             "Enabled: No\nServer: 127.0.0.1\nPort: 6789\n",
             6789,
         ));
+    }
+
+    #[test]
+    fn failed_proxy_cleanup_keeps_ownership_for_a_retry() {
+        let port = Mutex::new(Some(16789));
+        assert!(clear_owned_proxy_port_with(&port, |_| {
+            Err(anyhow::anyhow!("networksetup failed"))
+        })
+        .is_err());
+        assert_eq!(*port.lock().unwrap(), Some(16789));
+
+        clear_owned_proxy_port_with(&port, |_| Ok(())).unwrap();
+        assert_eq!(*port.lock().unwrap(), None);
     }
 }
 

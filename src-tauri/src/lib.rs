@@ -90,32 +90,3 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(app::events::on_run_event)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn is_valid_ipv4(addr: &str) -> bool {
-        let segments: Vec<&str> = addr.split('.').collect();
-        if segments.len() != 4 {
-            return false;
-        }
-        for segment in segments {
-            match segment.parse::<u8>() {
-                Ok(_) => continue,
-                Err(_) => return false,
-            }
-        }
-        true
-    }
-
-    #[test]
-    fn test_get_optimal_dns_server() {
-        tauri::async_runtime::block_on(async {
-            let res = commands::dns::get_best_dns_server().await;
-            assert!(res.is_some());
-            let dns = res.unwrap();
-            assert!(is_valid_ipv4(&dns));
-        });
-    }
-}

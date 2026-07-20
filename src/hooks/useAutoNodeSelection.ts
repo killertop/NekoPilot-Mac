@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
-import { NODE_SELECTOR_REFRESH_EVENT } from "../components/home/events";
+import {
+  MANUAL_NODE_SELECTION_EVENT,
+  NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT,
+  NODE_SELECTOR_REFRESH_EVENT,
+} from "../components/home/events";
 import { getAutoSelectFastestNode } from "../single/store";
 import { AUTO_SELECT_FASTEST_NODE_CHANGED_EVENT } from "../types/definition";
 import { clashApiFetch } from "../utils/clash-api";
@@ -13,6 +17,13 @@ const INITIAL_TEST_DELAY_MS = 5_000;
 export const AUTO_SELECT_INTERVAL_MS = 10 * 60_000;
 const LONG_CONNECTION_AGE_MS = 60_000;
 const LONG_CONNECTION_RECHECK_MS = 30_000;
+
+export function automaticSelectionDelayMs(
+  nowMs: number,
+  deferUntilMs: number,
+): number {
+  return Math.max(INITIAL_TEST_DELAY_MS, deferUntilMs - nowMs);
+}
 
 type ConnectionRecord = {
   start?: unknown;
@@ -75,30 +86,52 @@ function wait(ms: number): Promise<void> {
  */
 export function useAutoNodeSelection(isRunning: boolean): void {
   const [isEnabled, setIsEnabled] = useState<boolean>();
+  const [deferUntil, setDeferUntil] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
+    let settingChanged = false;
     void getAutoSelectFastestNode()
       .then((value) => {
-        if (!cancelled) setIsEnabled(value);
+        if (!cancelled && !settingChanged) setIsEnabled(value);
       })
       .catch((error) => {
         console.warn("Failed to load automatic node selection setting", error);
-        if (!cancelled) setIsEnabled(true);
+        if (!cancelled && !settingChanged) setIsEnabled(true);
       });
 
     const handleSettingChanged = (event: Event) => {
+      settingChanged = true;
       setIsEnabled((event as CustomEvent<boolean>).detail);
+    };
+    const deferAutomaticSelection = () => {
+      setDeferUntil(Date.now() + AUTO_SELECT_INTERVAL_MS);
     };
     window.addEventListener(
       AUTO_SELECT_FASTEST_NODE_CHANGED_EVENT,
       handleSettingChanged,
+    );
+    window.addEventListener(
+      NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT,
+      deferAutomaticSelection,
+    );
+    window.addEventListener(
+      MANUAL_NODE_SELECTION_EVENT,
+      deferAutomaticSelection,
     );
     return () => {
       cancelled = true;
       window.removeEventListener(
         AUTO_SELECT_FASTEST_NODE_CHANGED_EVENT,
         handleSettingChanged,
+      );
+      window.removeEventListener(
+        NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT,
+        deferAutomaticSelection,
+      );
+      window.removeEventListener(
+        MANUAL_NODE_SELECTION_EVENT,
+        deferAutomaticSelection,
       );
     };
   }, []);
@@ -158,10 +191,10 @@ export function useAutoNodeSelection(isRunning: boolean): void {
       }
     };
 
-    schedule(INITIAL_TEST_DELAY_MS);
+    schedule(automaticSelectionDelayMs(Date.now(), deferUntil));
     return () => {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [isEnabled, isRunning]);
+  }, [deferUntil, isEnabled, isRunning]);
 }

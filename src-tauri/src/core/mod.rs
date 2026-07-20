@@ -385,11 +385,16 @@ pub async fn stop(app: tauri::AppHandle) -> Result<(), String> {
     // applicable, and transitions whatever per-mode state it owns. Actual
     // process exit is observed asynchronously by the process monitor which
     // then calls PlatformEngine::on_process_terminated for DNS restore.
-    if let Err(e) = PlatformEngine::stop(&app).await {
+    let platform_stop_error = PlatformEngine::stop(&app).await.err();
+    if let Some(e) = platform_stop_error.as_ref() {
         ::log::error!(
             "[stop] action={action} PlatformEngine::stop returned error: {}",
             e
         );
+        // Retry the shutdown-specific system-proxy cleanup while the process
+        // manager still retains its mode. Resetting first would erase the
+        // ownership proof and could leave macOS pointing at a dead proxy.
+        crate::engine::cleanup_on_shutdown();
     }
 
     // Snapshot state once, after PlatformEngine::stop returns, to guard
@@ -447,7 +452,11 @@ pub async fn stop(app: tauri::AppHandle) -> Result<(), String> {
         ::log::info!("[stop] action={action} returned, :{mixed_port} released");
     }
     app.emit(EVENT_STATUS_CHANGED, ()).ok();
-    Ok(())
+    if let Some(error) = platform_stop_error {
+        Err(error)
+    } else {
+        Ok(())
+    }
 }
 
 #[tauri::command]

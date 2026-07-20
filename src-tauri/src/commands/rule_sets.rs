@@ -126,9 +126,12 @@ fn write_atomically(path: &Path, data: &[u8]) -> Result<(), String> {
 
 /// Ensures each managed rule set exists on disk before a configuration points
 /// to it. Existing valid copies are never overwritten by the bundled version.
-pub(crate) fn ensure_cn_rule_set_baseline(app: &AppHandle) -> Result<ManagedCnRuleSetPaths, String> {
+pub(crate) fn ensure_cn_rule_set_baseline(
+    app: &AppHandle,
+) -> Result<ManagedCnRuleSetPaths, String> {
     let directory = rule_set_dir(app)?;
-    fs::create_dir_all(&directory).map_err(|error| format!("create rule-set directory: {error}"))?;
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("create rule-set directory: {error}"))?;
 
     for source in &CN_RULE_SETS {
         let destination = directory.join(source.file_name);
@@ -146,8 +149,14 @@ pub(crate) fn ensure_cn_rule_set_baseline(app: &AppHandle) -> Result<ManagedCnRu
     }
 
     Ok(ManagedCnRuleSetPaths {
-        geoip_cn: directory.join("geoip-cn.srs").to_string_lossy().into_owned(),
-        geosite_cn: directory.join("geosite-cn.srs").to_string_lossy().into_owned(),
+        geoip_cn: directory
+            .join("geoip-cn.srs")
+            .to_string_lossy()
+            .into_owned(),
+        geosite_cn: directory
+            .join("geosite-cn.srs")
+            .to_string_lossy()
+            .into_owned(),
     })
 }
 
@@ -170,9 +179,10 @@ pub(crate) fn inject_managed_cn_rule_sets(
         let Some(path) = paths.path_for_tag(source.tag) else {
             continue;
         };
-        let Some(rule_set) = rule_sets.iter_mut().find(|rule_set| {
-            rule_set.get("tag").and_then(Value::as_str) == Some(source.tag)
-        }) else {
+        let Some(rule_set) = rule_sets
+            .iter_mut()
+            .find(|rule_set| rule_set.get("tag").and_then(Value::as_str) == Some(source.tag))
+        else {
             continue;
         };
         let managed = serde_json::json!({
@@ -233,8 +243,9 @@ fn refresh_is_due(directory: &Path) -> bool {
     let last_refresh = fs::read_to_string(refresh_timestamp_path(directory))
         .ok()
         .and_then(|timestamp| timestamp.trim().parse::<u64>().ok());
-    last_refresh
-        .is_none_or(|timestamp| now_unix_secs().saturating_sub(timestamp) >= REFRESH_INTERVAL.as_secs())
+    last_refresh.is_none_or(|timestamp| {
+        now_unix_secs().saturating_sub(timestamp) >= REFRESH_INTERVAL.as_secs()
+    })
 }
 
 fn proxy_port(app: &AppHandle) -> u16 {
@@ -265,7 +276,11 @@ async fn download_rule_set(source: &RuleSetSource, port: u16) -> Result<Vec<u8>,
         .await
         .map_err(|error| format!("download {}: {error}", source.file_name))?;
     if !response.status().is_success() {
-        return Err(format!("download {}: HTTP {}", source.file_name, response.status()));
+        return Err(format!(
+            "download {}: HTTP {}",
+            source.file_name,
+            response.status()
+        ));
     }
     let bytes = response
         .bytes()
@@ -321,7 +336,11 @@ async fn refresh_cn_rule_sets_if_due(app: &AppHandle) {
             continue;
         };
         if let Err(error) = write_atomically(Path::new(path), &bytes) {
-            log::warn!("[RULE-SETS] Failed to store {}: {}", source.file_name, error);
+            log::warn!(
+                "[RULE-SETS] Failed to store {}: {}",
+                source.file_name,
+                error
+            );
             return;
         }
     }
@@ -368,8 +387,14 @@ mod tests {
 
         assert_eq!(config["route"]["rule_set"][0]["type"], "local");
         assert_eq!(config["route"]["rule_set"][0]["path"], "/tmp/geoip-cn.srs");
-        assert_eq!(config["route"]["rule_set"][1]["path"], "/tmp/geosite-cn.srs");
-        assert_eq!(config["route"]["rule_set"][2]["url"], "https://keep.example");
+        assert_eq!(
+            config["route"]["rule_set"][1]["path"],
+            "/tmp/geosite-cn.srs"
+        );
+        assert_eq!(
+            config["route"]["rule_set"][2]["url"],
+            "https://keep.example"
+        );
         assert!(!inject_managed_cn_rule_sets(&mut config, &paths));
     }
 

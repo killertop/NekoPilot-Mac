@@ -8,18 +8,20 @@ use tauri::AppHandle;
 use tauri_plugin_shell::ShellExt;
 
 #[tauri::command]
-pub fn get_tray_icon(app: AppHandle) -> Vec<u8> {
+pub fn get_tray_icon(app: AppHandle) -> Result<Vec<u8>, String> {
     #[cfg(target_os = "macos")]
     {
         log::info!("macos tray icon for app: {:?}", app.package_info().name);
         // A small monochrome alpha-mask made specifically for the macOS menu
         // bar. Do not use the colourful 512px app icon here: macOS template
         // icons are rendered from alpha and need a compact, transparent asset.
-        include_bytes!("../../icons/menu-bar-template.png").to_vec()
+        Ok(include_bytes!("../../icons/menu-bar-template.png").to_vec())
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let icon = app.default_window_icon().unwrap();
+        let icon = app
+            .default_window_icon()
+            .ok_or_else(|| "default_window_icon_missing".to_owned())?;
         let rgba = icon.rgba();
         let width = icon.width();
         let height = icon.height();
@@ -29,10 +31,14 @@ pub fn get_tray_icon(app: AppHandle) -> Vec<u8> {
             let mut encoder = png::Encoder::new(&mut png_data, width, height);
             encoder.set_color(png::ColorType::Rgba);
             encoder.set_depth(png::BitDepth::Eight);
-            let mut writer = encoder.write_header().unwrap();
-            writer.write_image_data(rgba).unwrap();
+            let mut writer = encoder
+                .write_header()
+                .map_err(|error| format!("encode_tray_icon_header: {error}"))?;
+            writer
+                .write_image_data(rgba)
+                .map_err(|error| format!("encode_tray_icon_data: {error}"))?;
         }
-        png_data
+        Ok(png_data)
     }
 }
 
@@ -50,9 +56,11 @@ async fn quit(app: AppHandle) {
         log::error!("Failed to stop proxy: {}", e);
     } else {
         log::info!("Proxy stopped successfully.");
-        log::info!("Application stopped successfully.");
-        app.exit(0);
     }
+    // A quit request must always release the application and tray item. The
+    // final RunEvent::Exit cleanup remains a last-resort proxy cleanup path.
+    log::info!("Application exit requested.");
+    app.exit(0);
 }
 
 pub fn sync_quit(app: AppHandle) {

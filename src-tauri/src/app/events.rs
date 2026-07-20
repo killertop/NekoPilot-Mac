@@ -33,7 +33,6 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
                     api.prevent_close();
                     log::info!("macOS main window close requested; exiting application");
                     crate::commands::shell::sync_quit(window.app_handle().clone());
-                    return;
                 }
 
                 // 其他桌面平台仍沿用关闭窗口后隐藏到托盘的行为。

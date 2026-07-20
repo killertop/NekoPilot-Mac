@@ -14,7 +14,6 @@ import {
   PROXY_PORT_STORE_KEY,
   SHOW_NODE_PROTOCOL_STORE_KEY,
   SKIP_SYSTEM_PROXY_STORE_KEY,
-  USE_DHCP_STORE_KEY,
   USER_AGENT_STORE_KEY,
 } from "../types/definition";
 
@@ -27,6 +26,7 @@ const REMOVED_PREFERENCE_KEYS = [
   "theme_pref_key",
   "custom_ruleset_reject",
   "rule_mode_key",
+  "use_dhcp_key",
 ] as const;
 
 /** Delete obsolete preferences left by earlier builds. */
@@ -98,18 +98,6 @@ export async function setAutoSelectFastestNode(value: boolean): Promise<void> {
  */
 export async function getClashApiSecret(): Promise<string> {
   return await invoke<string>("get_or_create_clash_api_secret");
-}
-
-export async function getUseDHCP(): Promise<boolean> {
-  const b = await getStoreValue(USE_DHCP_STORE_KEY);
-  if (b === undefined) {
-    return false;
-  }
-  return Boolean(b);
-}
-
-export async function setUseDHCP(value: boolean) {
-  await setStoreValue(USE_DHCP_STORE_KEY, value);
 }
 
 export async function getShowNodeProtocol(): Promise<boolean> {

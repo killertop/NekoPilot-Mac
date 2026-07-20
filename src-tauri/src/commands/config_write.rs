@@ -4,7 +4,6 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path};
 
-
 fn validate_file_name(file_name: &str) -> Result<(), String> {
     let mut components = Path::new(file_name).components();
     match (components.next(), components.next()) {
@@ -51,7 +50,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_atomically(dir.path(), "config.json", br#"{"version":1}"#).unwrap();
         write_atomically(dir.path(), "config.json", br#"{"version":2}"#).unwrap();
-        assert_eq!(std::fs::read(dir.path().join("config.json")).unwrap(), br#"{"version":2}"#);
+        assert_eq!(
+            std::fs::read(dir.path().join("config.json")).unwrap(),
+            br#"{"version":2}"#
+        );
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 

@@ -260,8 +260,6 @@
     "update": "更新",
     "updating": "更新中...",
     "url_cannot_empty": "URL不能为空",
-    "use_dhcp_desc": "DNS将通过DHCP获取",
-    "use_dhcp": "DHCP",
     "user_agent_settings": "User Agent",
     "version": "版本",
     "vpn_network": "VPN",

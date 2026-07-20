@@ -8,7 +8,6 @@
   "windows": ["main"],
   "permissions": [
     "autostart:default",
-    "autostart:default",
     "core:app:allow-default-window-icon",
     "core:window:allow-destroy",
     "core:window:allow-hide",

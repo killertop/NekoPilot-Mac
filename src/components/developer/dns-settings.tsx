@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 import { HddRack } from "react-bootstrap-icons";
 import { toast } from "sonner";
-import { getDirectDNS, getUseDHCP, setDirectDNS } from "../../single/store";
-import { DHCP_CHANGED_EVENT } from "../../types/definition";
+import { getDirectDNS, setDirectDNS } from "../../single/store";
 import { t, vpnServiceManager } from "../../utils/helper";
 import { IOSTextField } from "../common/ios-text-field";
 import { SettingsModal } from "../common/settings-modal";
@@ -12,28 +11,12 @@ export default function DNSSettingsItem() {
     const [isOpen, setIsOpen] = useState(false);
     const [dnsServers, setDnsServers] = useState("");
     const [isLoading, setIsLoading] = useState(false);
-    const [isUseDHCP, setIsUseDHCP] = useState<boolean | null>(null);
-
-    useEffect(() => {
-        const loadDHCPState = () => {
-            void getUseDHCP().then(setIsUseDHCP).catch(() => setIsUseDHCP(false));
-        };
-        loadDHCPState();
-        const handleDHCPChange = (event: Event) => {
-            setIsUseDHCP((event as CustomEvent<boolean>).detail);
-        };
-        window.addEventListener(DHCP_CHANGED_EVENT, handleDHCPChange);
-        return () => window.removeEventListener(DHCP_CHANGED_EVENT, handleDHCPChange);
-    }, []);
-
     useEffect(() => {
         if (isOpen) void loadDNS();
     }, [isOpen]);
 
     const loadDNS = async () => {
         const dns = await getDirectDNS();
-        const state: boolean = await getUseDHCP();
-        setIsUseDHCP(state);
         setDnsServers(dns);
     };
 
@@ -56,8 +39,6 @@ export default function DNSSettingsItem() {
             setIsLoading(false);
         }
     };
-
-    if (isUseDHCP !== false) return null;
 
     return (
         <>

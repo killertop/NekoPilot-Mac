@@ -5,7 +5,6 @@ export const SING_BOX_VERSION =
   `v${SING_BOX_MAJOR_VERSION}.${SING_BOX_MINOR_VERSION}`;
 
 export const SSI_STORE_KEY = "selected_subscription_identifier";
-export const USE_DHCP_STORE_KEY = "use_dhcp_key";
 // 是否在节点列表中显示协议类型标签
 export const SHOW_NODE_PROTOCOL_STORE_KEY = "show_node_protocol_key";
 export const AUTO_SELECT_FASTEST_NODE_STORE_KEY = "auto_select_fastest_node_key";
@@ -20,7 +19,6 @@ export const USER_AGENT_STORE_KEY = "user_agent_key";
 export const DEFAULT_PROXY_PORT = 16789;
 export const PROXY_PORT_STORE_KEY = "proxy_port_key";
 export const PROXY_PORT_CHANGED_EVENT = "onebox-proxy-port-changed";
-export const DHCP_CHANGED_EVENT = "nekopilot-dhcp-changed";
 
 // Theme preference: 'light' | 'dark' | 'system' (default when unset).
 // 'system' follows prefers-color-scheme; explicit values override it.

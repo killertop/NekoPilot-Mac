@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import useSWR from "swr";
 import { getShowNodeProtocol } from "../../single/store";
@@ -19,6 +19,7 @@ import {
 import { buildNodeProtocolMap, nodeDisplayName, type NodeProtocolMap } from "./node-protocol";
 import NodeOption, { type DelayStatus } from "./node-option";
 import {
+    MANUAL_NODE_SELECTION_EVENT,
     NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT,
     NODE_SELECTOR_REFRESH_EVENT,
 } from "./events";
@@ -164,7 +165,13 @@ export default function SelectNode(props: SelectNodeProps) {
             subscriptionNames={Object.fromEntries(
                 (props.subscriptions ?? []).map((item) => [item.identifier, item.name]),
             )}
-            onUpdate={() => mutate()}
+            onUpdate={(node) => {
+                if (!node) return mutate();
+                return mutate(
+                    (current) => current ? { ...current, now: node } : current,
+                    { revalidate: false },
+                );
+            }}
         />
     );
 }
@@ -176,7 +183,7 @@ type NodeMenuProps = {
     showProtocol: boolean;
     isRunning: boolean;
     subscriptionNames: Record<string, string>;
-    onUpdate: () => void;
+    onUpdate: (node?: string) => unknown;
 };
 
 function NodeMenu(props: NodeMenuProps) {
@@ -184,6 +191,9 @@ function NodeMenu(props: NodeMenuProps) {
     const [showDelay, setShowDelay] = useState(false);
     const [delays, setDelays] = useState<Record<string, DelayStatus>>({});
     const [pendingNodes, setPendingNodes] = useState<Set<string>>(new Set());
+    const selectedNodeRef = useRef(currentNode);
+    const selectionEpoch = useRef(0);
+    const selectionQueue = useRef<Promise<void>>(Promise.resolve());
     const nodeListKey = useMemo(() => nodeList.join("\u001f"), [nodeList]);
     const stableNodeList = useMemo(
         () => Array.from(new Set(nodeList.filter(Boolean))),
@@ -201,6 +211,10 @@ function NodeMenu(props: NodeMenuProps) {
                 .map(([label]) => label),
         );
     }, [stableNodeList, nodeProtocols]);
+
+    useEffect(() => {
+        selectedNodeRef.current = currentNode;
+    }, [currentNode]);
 
     const contextLabel = (node: string) => {
         const label = nodeDisplayName(node, nodeProtocols[node]);
@@ -268,13 +282,26 @@ function NodeMenu(props: NodeMenuProps) {
         [nodeList, nodeProtocols, delays, pendingNodes],
     );
 
-    const handleNodeChange = async (node: string) => {
-        try {
-            await selectExitGatewayNode(node);
-            onUpdate();
-        } catch (error) {
-            console.error("Error changing node:", error);
-        }
+    const handleNodeChange = (node: string) => {
+        const previous = selectedNodeRef.current;
+        if (node === previous) return;
+        const epoch = ++selectionEpoch.current;
+        selectedNodeRef.current = node;
+        onUpdate(node);
+        window.dispatchEvent(new Event(MANUAL_NODE_SELECTION_EVENT));
+        selectionQueue.current = selectionQueue.current
+            .catch(() => undefined)
+            .then(async () => {
+                if (epoch !== selectionEpoch.current) return;
+                await selectExitGatewayNode(node);
+            })
+            .catch((error) => {
+                if (epoch !== selectionEpoch.current) return;
+                console.error("Error changing node:", error);
+                selectedNodeRef.current = previous;
+                onUpdate(previous);
+                onUpdate();
+            });
     };
 
     if (!nodeList || nodeList.length === 0) {

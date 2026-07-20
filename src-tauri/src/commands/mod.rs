@@ -4,8 +4,8 @@
 //! `invoke()`s is either here, or in `crate::core`/`crate::engine` where
 //! the command is tightly coupled to lifecycle/platform state.
 
-pub mod config_fetch;
 pub mod config_build;
+pub mod config_fetch;
 pub mod config_write;
 pub mod dns;
 pub mod network;

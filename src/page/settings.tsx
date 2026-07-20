@@ -1,7 +1,6 @@
 import AboutItem from "../components/settings/about";
 import ToggleAutoStart from "../components/settings/auto-start";
 import ToggleAutoSelectFastestNode from "../components/settings/auto-select-fastest-node";
-import ToggleDHCP from "../components/developer/dhcp-toggle";
 import DNSSettingsItem from "../components/developer/dns-settings";
 import ToggleNodeProtocol from "../components/developer/node-protocol-toggle";
 import UASettingsItem from "../components/developer/ua-settings";
@@ -24,7 +23,6 @@ export default function Settings() {
         </div>
 
         <div className="onebox-grouped-card mb-5">
-          <ToggleDHCP />
           <DNSSettingsItem />
           <ToggleNodeProtocol />
           <UASettingsItem />

@@ -260,8 +260,6 @@
     "update": "Update",
     "updating": "Updating...",
     "url_cannot_empty": "Url cannot be empty",
-    "use_dhcp_desc": "DNS will be obtained via DHCP",
-    "use_dhcp": "DHCP",
     "user_agent_settings": "User Agent",
     "version": "Version",
     "vpn_network": "VPN",

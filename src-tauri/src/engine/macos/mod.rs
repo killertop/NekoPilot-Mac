@@ -74,15 +74,22 @@ impl EngineManager for MacOSEngine {
 
         match mode.as_ref() {
             crate::engine::ProxyMode::SystemProxy | crate::engine::ProxyMode::ManualProxy => {
+                let mut errors = Vec::new();
                 if matches!(mode.as_ref(), crate::engine::ProxyMode::SystemProxy) {
-                    let _ = clear_system_proxy(app).await;
+                    if let Err(error) = clear_system_proxy(app).await {
+                        errors.push(format!("failed to clear system proxy: {error}"));
+                    }
                 }
                 if let Some(child) = child {
-                    child
-                        .kill()
-                        .map_err(|e| format!("failed to stop sing-box: {e}"))?;
+                    if let Err(error) = child.kill() {
+                        errors.push(format!("failed to stop sing-box: {error}"));
+                    }
                 }
-                Ok(())
+                if errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(errors.join("; "))
+                }
             }
             crate::engine::ProxyMode::TunProxy => Ok(()),
         }

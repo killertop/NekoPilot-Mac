@@ -10,10 +10,10 @@ use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
 const PROXY_PORT_KEY: &str = "proxy_port_key";
-const BOOLEAN_KEYS: [&str; 5] = [
+const DIRECT_DNS_KEY: &str = "direct_dns";
+const BOOLEAN_KEYS: [&str; 4] = [
     "allow_lan_key",
     "auto_select_fastest_node_key",
-    "use_dhcp_key",
     "show_node_protocol_key",
     "skip_system_proxy_key",
 ];
@@ -51,8 +51,7 @@ fn validate_custom_rules(raw: &str) -> bool {
         };
         if values.iter().any(|value| {
             value.as_str().is_none_or(|value| {
-                value.trim().is_empty()
-                    || (field == "ip_cidr" && !is_valid_ip_cidr(value))
+                value.trim().is_empty() || (field == "ip_cidr" && !is_valid_ip_cidr(value))
             })
         }) {
             return false;
@@ -72,6 +71,17 @@ fn validate_setting(key: &str, value: &Value) -> Result<(), String> {
         if !(1..=65535).contains(&port) {
             return Err("invalid_proxy_port".to_owned());
         }
+        return Ok(());
+    }
+    if key == DIRECT_DNS_KEY {
+        let server = value
+            .as_str()
+            .map(str::trim)
+            .filter(|server| !server.is_empty())
+            .ok_or_else(|| "invalid_direct_dns".to_owned())?;
+        server
+            .parse::<IpAddr>()
+            .map_err(|_| "invalid_direct_dns".to_owned())?;
         return Ok(());
     }
     if BOOLEAN_KEYS.contains(&key) {
@@ -105,7 +115,9 @@ fn validate_setting(key: &str, value: &Value) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn settings_store(app: &AppHandle) -> Result<std::sync::Arc<tauri_plugin_store::Store<tauri::Wry>>, String> {
+pub(crate) fn settings_store(
+    app: &AppHandle,
+) -> Result<std::sync::Arc<tauri_plugin_store::Store<tauri::Wry>>, String> {
     app.store("settings.json")
         .map_err(|error| format!("open settings store: {error}"))
 }
@@ -151,7 +163,10 @@ pub fn list_setting_keys(app: AppHandle) -> Result<Vec<String>, String> {
 pub(crate) fn get_or_create_clash_api_secret_for_app(app: &AppHandle) -> Result<String, String> {
     const KEY: &str = "clash_api_secret_key";
     let store = settings_store(app)?;
-    if let Some(secret) = store.get(KEY).and_then(|value| value.as_str().map(ToOwned::to_owned)) {
+    if let Some(secret) = store
+        .get(KEY)
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+    {
         if !secret.trim().is_empty() {
             return Ok(secret);
         }
@@ -176,9 +191,13 @@ mod tests {
     #[test]
     fn rejects_invalid_critical_settings() {
         assert!(validate_setting("proxy_port_key", &serde_json::json!(0)).is_err());
+        assert!(validate_setting("direct_dns", &serde_json::json!("223.5.5.5")).is_ok());
+        assert!(validate_setting("direct_dns", &serde_json::json!("bad dns")).is_err());
         assert!(validate_setting("allow_lan_key", &serde_json::json!("true")).is_err());
         assert!(validate_setting("auto_select_fastest_node_key", &serde_json::json!(true)).is_ok());
-        assert!(validate_setting("auto_select_fastest_node_key", &serde_json::json!("true")).is_err());
+        assert!(
+            validate_setting("auto_select_fastest_node_key", &serde_json::json!("true")).is_err()
+        );
         assert!(validate_setting("custom_ruleset_direct", &serde_json::json!("bad json")).is_err());
         assert!(validate_setting("custom_ruleset_reject", &serde_json::json!("{}")).is_err());
         assert!(validate_setting(
@@ -188,7 +207,9 @@ mod tests {
         .is_err());
         assert!(validate_setting(
             "custom_ruleset_direct",
-            &serde_json::json!(r#"{"domain":[],"domain_suffix":[],"ip_cidr":["10.240.31.0/24","2001:db8::/32"]}"#),
+            &serde_json::json!(
+                r#"{"domain":[],"domain_suffix":[],"ip_cidr":["10.240.31.0/24","2001:db8::/32"]}"#
+            ),
         )
         .is_ok());
         assert!(validate_setting("proxy_port_key", &serde_json::json!(6789)).is_ok());

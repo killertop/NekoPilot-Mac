@@ -62,6 +62,7 @@ export default function Body({
             window.dispatchEvent(new Event(NODE_SELECTOR_REFRESH_EVENT));
         } catch (error) {
             console.error(t("update_config_failed") + ":", error);
+            throw error;
         }
     };
 

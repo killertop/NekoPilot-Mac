@@ -32,7 +32,6 @@ pub struct ConfigBuildOptions {
     pub clash_api_secret: String,
     pub allow_lan: bool,
     pub proxy_port: u16,
-    pub use_dhcp: bool,
     pub direct_dns: String,
     pub custom_rules: Option<CustomRules>,
     pub managed_cn_rule_sets: rule_sets::ManagedCnRuleSetPaths,
@@ -57,13 +56,20 @@ pub struct RuleSet {
 }
 
 fn string_setting(store: &tauri_plugin_store::Store<tauri::Wry>, key: &str) -> Option<String> {
-    store
-        .get(key)
-        .and_then(|value| value.as_str().map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned))
+    store.get(key).and_then(|value| {
+        value
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
 }
 
 fn bool_setting(store: &tauri_plugin_store::Store<tauri::Wry>, key: &str) -> bool {
-    store.get(key).and_then(|value| value.as_bool()).unwrap_or(false)
+    store
+        .get(key)
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
 }
 
 fn custom_rule_setting(store: &tauri_plugin_store::Store<tauri::Wry>, action: &str) -> RuleSet {
@@ -117,8 +123,9 @@ fn build_options_from_settings(app: &AppHandle, mode: &str) -> Result<ConfigBuil
         clash_api_secret: settings::get_or_create_clash_api_secret_for_app(app)?,
         allow_lan: bool_setting(&store, "allow_lan_key"),
         proxy_port,
-        use_dhcp: bool_setting(&store, "use_dhcp_key"),
-        direct_dns: string_setting(&store, "direct_dns").unwrap_or_else(|| "223.5.5.5".to_owned()),
+        direct_dns: string_setting(&store, "direct_dns")
+            .filter(|server| server.parse::<std::net::IpAddr>().is_ok())
+            .unwrap_or_else(|| "223.5.5.5".to_owned()),
         custom_rules: Some(CustomRules {
             direct: custom_rule_setting(&store, "direct"),
             proxy: custom_rule_setting(&store, "proxy"),
@@ -285,15 +292,9 @@ fn configure_runtime(config: &mut Value, options: &ConfigBuildOptions) -> Result
         let server = server
             .as_object_mut()
             .ok_or_else(|| "template_system_dns_invalid".to_owned())?;
-        if options.use_dhcp {
-            insert_string(server, "type", "dhcp");
-            server.remove("server");
-            server.remove("server_port");
-        } else {
-            insert_string(server, "type", "udp");
-            insert_string(server, "server", options.direct_dns.trim());
-            server.insert("server_port".to_owned(), Value::from(53));
-        }
+        insert_string(server, "type", "udp");
+        insert_string(server, "server", options.direct_dns.trim());
+        server.insert("server_port".to_owned(), Value::from(53));
     }
     let _ = rule_sets::inject_managed_cn_rule_sets(config, &options.managed_cn_rule_sets);
     Ok(())
@@ -498,7 +499,6 @@ mod tests {
             clash_api_secret: "secret".into(),
             allow_lan: false,
             proxy_port: 7890,
-            use_dhcp: false,
             direct_dns: " 119.29.29.29 ".into(),
             custom_rules: Some(CustomRules {
                 direct: RuleSet {
@@ -570,7 +570,10 @@ mod tests {
             serde_json::json!(["geoip-cn", "geosite-cn"])
         );
         assert_eq!(config["route"]["rule_set"][0]["type"], "local");
-        assert_eq!(config["route"]["rule_set"][1]["path"], "/tmp/geosite-cn.srs");
+        assert_eq!(
+            config["route"]["rule_set"][1]["path"],
+            "/tmp/geosite-cn.srs"
+        );
     }
 
     #[test]

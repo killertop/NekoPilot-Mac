@@ -292,38 +292,42 @@ pub async fn get_optimal_local_dns_server(app: AppHandle) -> Option<String> {
 mod tests {
     use super::*;
 
-    fn init_logger() {
-        let _ = env_logger::builder()
-            .is_test(true)
-            .filter_level(log::LevelFilter::Info)
-            .try_init();
+    #[test]
+    fn builds_only_valid_dns_a_queries() {
+        let query = build_dns_a_query("www.example.com").expect("valid query");
+        assert_eq!(&query[..2], &[0xAB, 0xCD]);
+        assert_eq!(&query[query.len() - 4..], &[0, 1, 0, 1]);
+        assert!(build_dns_a_query("bad..example").is_none());
+        assert!(build_dns_a_query(&format!("{}.example", "a".repeat(64))).is_none());
     }
 
     #[test]
-    fn test_get_best_dns_server_returns_some() {
-        init_logger();
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let res = rt.block_on(get_best_dns_server());
-        assert!(res.is_some());
+    fn parses_a_record_from_a_complete_response() {
+        let mut response = build_dns_a_query("www.example.com").expect("valid query");
+        response[2] = 0x81;
+        response[3] = 0x80;
+        response[6] = 0;
+        response[7] = 1;
+        response.extend_from_slice(&[
+            0xC0, 0x0C, // compressed answer name
+            0x00, 0x01, // A
+            0x00, 0x01, // IN
+            0x00, 0x00, 0x00, 0x3C, // TTL
+            0x00, 0x04, // RDLENGTH
+            203, 0, 113, 7,
+        ]);
+        assert_eq!(
+            parse_dns_a_record(&response),
+            Some(Ipv4Addr::new(203, 0, 113, 7)),
+        );
+        response.truncate(response.len() - 2);
+        assert_eq!(parse_dns_a_record(&response), None);
     }
 
     #[test]
-    fn test_all_dns_servers() {
-        init_logger();
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        rt.block_on(async {
-            let mut handles = Vec::new();
-            for dns in DNSSERVERDICT {
-                let dns = dns.to_string();
-                let handle = tokio::spawn(async move {
-                    probe_dns_server(dns, None).await;
-                });
-                handles.push(handle);
-            }
-            for handle in handles {
-                let _ = handle.await;
-            }
-        });
+    fn recognizes_ip_addresses_without_network_access() {
+        assert!(is_ip_address("223.5.5.5"));
+        assert!(is_ip_address("2001:db8::1"));
+        assert!(!is_ip_address("dns.example"));
     }
 }

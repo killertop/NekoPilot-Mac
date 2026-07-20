@@ -754,7 +754,10 @@ pub async fn refresh_subscription(
     let url = url.ok_or_else(|| "subscription_url_empty".to_owned())?;
     let fetched = config_fetch::fetch_subscription_config(&app, &url, &user_agent).await?;
     if fetched.status != 200 {
-        return Err(format!("subscription_refresh_http_status_{}", fetched.status));
+        return Err(format!(
+            "subscription_refresh_http_status_{}",
+            fetched.status
+        ));
     }
     let config = fetched
         .data
@@ -892,9 +895,9 @@ pub(crate) async fn subscription_configs_for_build(
     for (identifier, raw) in rows {
         match serde_json::from_str(&raw) {
             Ok(config) => configs.push(SubscriptionConfigForBuild { identifier, config }),
-            Err(error) => log::warn!(
-                "Skipping malformed stored subscription config {identifier}: {error}"
-            ),
+            Err(error) => {
+                log::warn!("Skipping malformed stored subscription config {identifier}: {error}")
+            }
         }
     }
     Ok(configs)
@@ -942,9 +945,9 @@ pub async fn deduplicate_subscriptions(app: AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        content_disposition_filename, database_at_path, has_usable_node,
-        import_subscription_name, parse_proxy_link, parse_subscription_userinfo,
-        subscription_expiry_millis, upsert_into_database, SubscriptionUpsert,
+        content_disposition_filename, database_at_path, has_usable_node, import_subscription_name,
+        parse_proxy_link, parse_subscription_userinfo, subscription_expiry_millis,
+        upsert_into_database, SubscriptionUpsert,
     };
 
     #[test]
@@ -1038,9 +1041,13 @@ mod tests {
         assert_eq!(parsed.outbound["tls"]["insecure"], true);
         assert!(parsed.outbound["tls"].get("server_name").is_none());
 
-        let default_port = parse_proxy_link("anytls://password@example.com?sni=edge.example.com").unwrap();
+        let default_port =
+            parse_proxy_link("anytls://password@example.com?sni=edge.example.com").unwrap();
         assert_eq!(default_port.outbound["server_port"], 443);
-        assert_eq!(default_port.outbound["tls"]["server_name"], "edge.example.com");
+        assert_eq!(
+            default_port.outbound["tls"]["server_name"],
+            "edge.example.com"
+        );
     }
 
     #[test]
