@@ -1,12 +1,6 @@
-//! LAN reachability + captive-portal probes exposed as Tauri commands.
+//! LAN address lookup exposed as a Tauri command.
 
-use tauri::http::{header::LOCATION, StatusCode};
-use tauri::AppHandle;
-use tauri_plugin_http::reqwest::{self, redirect::Policy};
 use tokio::process::Command;
-use url::Url;
-
-const DEFAULT_CAPTIVE_URL: &str = "http://captive.apple.com/hotspot-detect.html";
 
 // Only consumed by the macOS `get_lan_ip` branch; Linux uses a shell
 // pipeline and Windows parses `ipconfig` output directly.
@@ -33,15 +27,6 @@ pub(crate) fn is_private_ip(ip: &str) -> bool {
         }
     }
     false
-}
-
-pub(crate) fn build_no_redirect_client() -> Result<reqwest::Client, String> {
-    reqwest::ClientBuilder::new()
-        .timeout(std::time::Duration::from_secs(10))
-        .redirect(Policy::none())
-        .no_proxy()
-        .build()
-        .map_err(|e| format!("build captive-portal HTTP client: {e}"))
 }
 
 #[tauri::command]
@@ -132,121 +117,6 @@ pub async fn get_lan_ip() -> Result<String, String> {
     }
 }
 
-fn safe_browser_url(value: &str) -> Option<String> {
-    let url = Url::parse(value).ok()?;
-    (matches!(url.scheme(), "http" | "https") && url.host_str().is_some()).then(|| url.to_string())
-}
-
-#[tauri::command]
-pub async fn open_browser(app: AppHandle, url: String) -> Result<(), String> {
-    let url = safe_browser_url(&url).ok_or_else(|| "invalid_browser_url".to_owned())?;
-    // Captive-portal auth often requires stopping the proxy first so the
-    // browser can reach the portal's local LAN address without being
-    // routed through the now-misconfigured tunnel.
-    crate::core::stop(app).await.unwrap_or_else(|e| {
-        log::error!("Failed to stop app: {}", e);
-    });
-
-    match webbrowser::open(&url) {
-        Ok(_) => Ok(()),
-        Err(e) => Err(format!("Failed to open browser: {}", e)),
-    }
-}
-
-/// Returns: -1 unreachable, 0 reachable, 1 behind captive portal.
-///
-/// Any replacement URL must: reach from both mainland China and overseas,
-/// speak plain HTTP with no redirect required, and resolve to IPv4 only
-/// (any IPv6 record causes a false positive in v4-only networks).
-#[tauri::command]
-pub async fn check_captive_portal_status() -> i8 {
-    let url = "http://captive.apple.com/";
-
-    let client = match build_no_redirect_client() {
-        Ok(client) => client,
-        Err(error) => {
-            log::error!("{error}");
-            return -1;
-        }
-    };
-    match client.get(url).send().await {
-        Ok(response) => {
-            let status = response.status();
-            if status == StatusCode::OK {
-                0
-            } else if status.is_redirection() {
-                1
-            } else {
-                log::error!("Unexpected status code: {}", status);
-                -1
-            }
-        }
-        Err(_) => -1,
-    }
-}
-
-#[tauri::command]
-pub async fn get_captive_redirect_url() -> String {
-    let client = match build_no_redirect_client() {
-        Ok(client) => client,
-        Err(error) => {
-            log::error!("{error}");
-            return DEFAULT_CAPTIVE_URL.to_string();
-        }
-    };
-
-    match client.get(DEFAULT_CAPTIVE_URL).send().await {
-        Ok(response) => {
-            let status = response.status();
-            if status.is_redirection() {
-                response
-                    .headers()
-                    .get(LOCATION)
-                    .and_then(|h| h.to_str().ok())
-                    .and_then(safe_browser_url)
-                    .unwrap_or_else(|| DEFAULT_CAPTIVE_URL.to_string())
-            } else {
-                log::error!("Unexpected status code: {}", status);
-                DEFAULT_CAPTIVE_URL.to_string()
-            }
-        }
-        Err(_) => DEFAULT_CAPTIVE_URL.to_string(),
-    }
-}
-
-#[tauri::command]
-pub async fn ping_google(app: tauri::AppHandle) -> bool {
-    let proxy = format!(
-        "http://{}:{}",
-        "127.0.0.1",
-        crate::core::mixed_proxy_port(&app)
-    );
-    let client = match reqwest::Proxy::all(&proxy)
-        .map_err(|e| format!("build proxy URL: {e}"))
-        .and_then(|proxy| {
-            reqwest::ClientBuilder::new()
-                .proxy(proxy)
-                .timeout(std::time::Duration::from_secs(10))
-                .build()
-                .map_err(|e| format!("build ping HTTP client: {e}"))
-        }) {
-        Ok(client) => client,
-        Err(error) => {
-            log::error!("{error}");
-            return false;
-        }
-    };
-
-    match client
-        .get("https://www.google.com/generate_204")
-        .send()
-        .await
-    {
-        Ok(res) => res.status().is_success(),
-        Err(_) => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,16 +126,5 @@ mod tests {
         assert!(is_private_ip("10.0.0.1"));
         assert!(is_private_ip("192.168.1.1"));
         assert!(!is_private_ip("8.8.8.8"));
-    }
-
-    #[test]
-    fn browser_urls_are_limited_to_http_with_a_host() {
-        assert_eq!(
-            safe_browser_url("https://example.com/login"),
-            Some("https://example.com/login".to_owned())
-        );
-        assert!(safe_browser_url("javascript:alert(1)").is_none());
-        assert!(safe_browser_url("file:///tmp/index.html").is_none());
-        assert!(safe_browser_url("https-not-a-url").is_none());
     }
 }

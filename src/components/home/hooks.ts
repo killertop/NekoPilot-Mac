@@ -1,96 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { confirm, message } from "@tauri-apps/plugin-dialog";
+import { message } from "@tauri-apps/plugin-dialog";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
-import useSWR, { mutate as swrMutate } from "swr";
+import { mutate as swrMutate } from "swr";
 import { formatSubscriptionImportError, insertSubscription } from "../../action/db";
 import { clearEngineError, useEngineState } from "../../hooks/useEngineState";
 import { NavContext } from "../../single/context";
 import { getProxyPort, setStoreValue } from "../../single/store";
 import {
   GET_SUBSCRIPTIONS_LIST_SWR_KEY,
+  SELECTED_NODE_STORE_KEY,
   SSI_STORE_KEY,
 } from "../../types/definition";
 import { t, vpnServiceManager } from "../../utils/helper";
 import type { DeepLinkApplyPhase } from "./deep-link-apply-progress-modal";
-
-export function useNetworkCheck(key: string, checkFn: () => Promise<number>) {
-    const [shouldRefresh, setShouldRefresh] = useState(true);
-    const [confirmShown, setConfirmShown] = useState(false);
-    const refreshTimerRef = useRef<number | null>(null);
-
-    useEffect(() => {
-        return () => {
-            if (refreshTimerRef.current !== null) {
-                window.clearTimeout(refreshTimerRef.current);
-            }
-        };
-    }, []);
-
-  async function handleNetworkCheck() {
-    if (!shouldRefresh) {
-      return false;
-    }
-
-    try {
-      const status = await checkFn();
-      if (status == 1 && !confirmShown) {
-        setShouldRefresh(false);
-        setConfirmShown(true);
-        const answer = await confirm(t("network_need_login"), {
-          title: t("network_need_login_title"),
-          kind: "warning",
-        });
-
-        if (answer) {
-          setConfirmShown(false);
-          await vpnServiceManager.stop();
-          let url = await invoke("get_captive_redirect_url");
-          await invoke("open_browser", {
-            app: getCurrentWindow(),
-            url: url,
-          });
-        }
-
-        refreshTimerRef.current = window.setTimeout(() => {
-            refreshTimerRef.current = null;
-            setShouldRefresh(true);
-            setConfirmShown(false);
-        }, 15000);
-      }
-
-      //  状态为 0 代表网络正常。
-      return status == 0;
-    } catch (error) {
-      console.error(`Network check failed: ${error}`);
-      return false;
-    }
-  }
-
-  return useSWR(key, handleNetworkCheck, {
-    refreshInterval: 15_000,
-    revalidateOnFocus: true,
-  });
-}
-
-export function useGstaticNetworkCheck() {
-  return useNetworkCheck(
-    `apple-network-check`,
-    async () => {
-      return await invoke<number>("check_captive_portal_status");
-    },
-  );
-}
-
-export function useGoogleNetworkCheck(isRunning: boolean) {
-  return useSWR(
-    isRunning ? "swr-google-check" : null,
-    async () => {
-      return invoke<boolean>("ping_google");
-    },
-    { refreshInterval: 15_000, revalidateOnFocus: true },
-  );
-}
+import { NODE_SELECTOR_REFRESH_EVENT } from "./events";
 
 // 类型定义
 export type OperationStatus = "starting" | "stopping" | "idle";
@@ -225,19 +148,26 @@ export const useApplyPipelineRoot = () => {
         const id = await insertSubscription(url, name || undefined);
         if (!isCurrentRun()) return;
         if (autoStart) {
-          await setStoreValue(SSI_STORE_KEY, id);
           await Promise.all([
+            setStoreValue(SSI_STORE_KEY, id),
+            setStoreValue(SELECTED_NODE_STORE_KEY, ""),
             swrMutate(GET_SUBSCRIPTIONS_LIST_SWR_KEY),
             vpnServiceManager.stop().catch(() => {}),
           ]);
         } else {
           // A user explicitly chose this link, so it should become the
-          // current configuration immediately. The service remains stopped
-          // until the user presses Connect on Home.
+          // current node source immediately. When already connected, rebuild
+          // the unified pool with a live reload so its nodes appear without a
+          // disconnect/reconnect cycle.
           await Promise.all([
             setStoreValue(SSI_STORE_KEY, id),
+            setStoreValue(SELECTED_NODE_STORE_KEY, ""),
             swrMutate(GET_SUBSCRIPTIONS_LIST_SWR_KEY),
           ]);
+          if (engineState.kind === "running") {
+            await vpnServiceManager.syncAndReload(0);
+            window.dispatchEvent(new Event(NODE_SELECTOR_REFRESH_EVENT));
+          }
         }
       } catch (error) {
         if (!isCurrentRun()) return;
@@ -285,7 +215,7 @@ export const useApplyPipelineRoot = () => {
         },
       });
     })();
-  }, [deepLinkApplyUrl]);
+  }, [deepLinkApplyUrl, engineState.kind]);
 
   const closeApplyModal = () => {
     applyRunRef.current += 1;

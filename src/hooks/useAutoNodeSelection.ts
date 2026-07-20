@@ -1,13 +1,12 @@
 import { useEffect, useState } from "react";
 import {
-  ACTIVE_SUBSCRIPTION_CHANGED_EVENT,
   MANUAL_NODE_SELECTION_EVENT,
-  NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT,
   NODE_SELECTOR_REFRESH_EVENT,
 } from "../components/home/events";
 import { getAutoSelectFastestNode, setStoreValue } from "../single/store";
 import {
   AUTO_SELECT_FASTEST_NODE_CHANGED_EVENT,
+  SELECTED_NODE_STORE_KEY,
   SSI_STORE_KEY,
 } from "../types/definition";
 import { clashApiFetch } from "../utils/clash-api";
@@ -18,7 +17,6 @@ import {
   subscriptionIdentifierForNode,
 } from "../utils/node-pool";
 
-const INITIAL_TEST_DELAY_MS = 5_000;
 export const AUTO_SELECT_INTERVAL_MS = 10 * 60_000;
 const LONG_CONNECTION_AGE_MS = 60_000;
 
@@ -26,7 +24,9 @@ export function automaticSelectionDelayMs(
   nowMs: number,
   deferUntilMs: number,
 ): number {
-  return Math.max(INITIAL_TEST_DELAY_MS, deferUntilMs - nowMs);
+  return deferUntilMs > nowMs
+    ? deferUntilMs - nowMs
+    : AUTO_SELECT_INTERVAL_MS;
 }
 type ConnectionRecord = {
   start?: unknown;
@@ -111,10 +111,6 @@ export function useAutoNodeSelection(isRunning: boolean): void {
       handleSettingChanged,
     );
     window.addEventListener(
-      NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT,
-      deferAutomaticSelection,
-    );
-    window.addEventListener(
       MANUAL_NODE_SELECTION_EVENT,
       deferAutomaticSelection,
     );
@@ -123,10 +119,6 @@ export function useAutoNodeSelection(isRunning: boolean): void {
       window.removeEventListener(
         AUTO_SELECT_FASTEST_NODE_CHANGED_EVENT,
         handleSettingChanged,
-      );
-      window.removeEventListener(
-        NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT,
-        deferAutomaticSelection,
       );
       window.removeEventListener(
         MANUAL_NODE_SELECTION_EVENT,
@@ -166,20 +158,12 @@ export function useAutoNodeSelection(isRunning: boolean): void {
       }
       await selectExitGatewayNode(candidate);
       const identifier = subscriptionIdentifierForNode(candidate);
-      if (identifier) {
-        // The runtime selector spans every imported configuration. If the
-        // fastest node belongs to another one, keep the Home configuration
-        // and its filtered node list aligned with the actual active node.
-        window.dispatchEvent(
-          new CustomEvent<string>(ACTIVE_SUBSCRIPTION_CHANGED_EVENT, {
-            detail: identifier,
-          }),
-        );
-        try {
-          await setStoreValue(SSI_STORE_KEY, identifier);
-        } catch (error) {
-          console.warn("Failed to persist automatically selected configuration", error);
-        }
+      try {
+        const writes = [setStoreValue(SELECTED_NODE_STORE_KEY, candidate)];
+        if (identifier) writes.push(setStoreValue(SSI_STORE_KEY, identifier));
+        await Promise.all(writes);
+      } catch (error) {
+        console.warn("Failed to persist automatically selected node", error);
       }
       window.dispatchEvent(new Event(NODE_SELECTOR_REFRESH_EVENT));
       console.info(`[auto-node] switched to ${candidate}`);
@@ -191,6 +175,9 @@ export function useAutoNodeSelection(isRunning: boolean): void {
         const selector = await getExitGatewaySelector();
         if (selector.all.length > 1) {
           const delays = await measureNodeDelays(selector.all, {
+            // The scheduled optimizer always owns a fresh measurement cycle.
+            // It never depends on Home's manual URL Test cache or UI state.
+            force: true,
             isCancelled: () => cancelled,
           });
           const fastest = pickFastestNode(delays);

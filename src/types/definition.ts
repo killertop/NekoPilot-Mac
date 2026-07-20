@@ -5,6 +5,11 @@ export const SING_BOX_VERSION =
   `v${SING_BOX_MAJOR_VERSION}.${SING_BOX_MINOR_VERSION}`;
 
 export const SSI_STORE_KEY = "selected_subscription_identifier";
+// Stable runtime tag of the node chosen from the unified Home node pool.
+export const SELECTED_NODE_STORE_KEY = "selected_node_tag_key";
+// Last user-triggered URL Test results. Automatic node selection deliberately
+// does not write this key, so history changes only when URL Test is tapped.
+export const NODE_DELAY_HISTORY_STORE_KEY = "node_delay_history_key";
 // 是否在节点列表中显示协议类型标签
 export const SHOW_NODE_PROTOCOL_STORE_KEY = "show_node_protocol_key";
 export const AUTO_SELECT_FASTEST_NODE_STORE_KEY = "auto_select_fastest_node_key";

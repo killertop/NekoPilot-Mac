@@ -9,6 +9,7 @@ pub mod config_fetch;
 pub mod config_write;
 pub mod dns;
 pub mod network;
+pub mod node_delay;
 pub mod prestart;
 pub mod rule_sets;
 pub mod settings;

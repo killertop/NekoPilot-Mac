@@ -25,6 +25,13 @@ const ACTION_ANCHORS: [(&str, &str); 2] = [
 const LEGACY_REJECT_ANCHOR: &str = "reject-tag.nekopilot.invalid";
 const RUNTIME_NODE_TAG_PREFIX: &str = "@np:";
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeNodeSummary {
+    pub tag: String,
+    pub protocol: String,
+}
+
 #[derive(Debug)]
 pub struct ConfigBuildOptions {
     pub log_level: String,
@@ -376,6 +383,37 @@ fn subscription_nodes(
     Ok(nodes)
 }
 
+fn runtime_node_summaries(subscriptions: &[SubscriptionConfigForBuild]) -> Vec<RuntimeNodeSummary> {
+    let mut summaries = Vec::new();
+    let mut seen_identifiers = HashSet::new();
+    for subscription in subscriptions {
+        if !seen_identifiers.insert(subscription.identifier.as_str()) {
+            continue;
+        }
+        match subscription_nodes(subscription) {
+            Ok(nodes) => summaries.extend(nodes.into_iter().filter_map(|(tag, node)| {
+                let protocol = node.get("type")?.as_str()?.to_owned();
+                Some(RuntimeNodeSummary { tag, protocol })
+            })),
+            Err(error) => log::warn!(
+                "Skipping invalid stored subscription {} while listing nodes: {}",
+                subscription.identifier,
+                error
+            ),
+        }
+    }
+    summaries
+}
+
+/// Returns compact node metadata for the disconnected Home list. Full stored
+/// subscription JSON stays native; only stable tags and protocol names cross
+/// the WebView boundary.
+#[tauri::command]
+pub async fn list_runtime_nodes(app: AppHandle) -> Result<Vec<RuntimeNodeSummary>, String> {
+    let subscriptions = subscription::subscription_configs_for_build(&app).await?;
+    Ok(runtime_node_summaries(&subscriptions))
+}
+
 fn merge_subscription_pool(
     config: &mut Value,
     subscriptions: &[SubscriptionConfigForBuild],
@@ -613,5 +651,31 @@ mod tests {
         );
         assert_eq!(config["outbounds"][2]["type"], "anytls");
         assert_eq!(config["outbounds"][3]["type"], "vless");
+    }
+
+    #[test]
+    fn lists_compact_nodes_from_every_stored_source() {
+        let subscriptions = vec![
+            SubscriptionConfigForBuild {
+                identifier: "airport-a".into(),
+                config: serde_json::json!({"outbounds":[
+                    {"type":"vless", "tag":"Tokyo"},
+                    {"type":"selector", "tag":"skip"}
+                ]}),
+            },
+            SubscriptionConfigForBuild {
+                identifier: "local-b".into(),
+                config: serde_json::json!({"outbounds":[
+                    {"type":"anytls", "tag":"Home"}
+                ]}),
+            },
+        ];
+
+        let summaries = runtime_node_summaries(&subscriptions);
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0].tag, "@np:airport-a:Tokyo");
+        assert_eq!(summaries[0].protocol, "vless");
+        assert_eq!(summaries[1].tag, "@np:local-b:Home");
+        assert_eq!(summaries[1].protocol, "anytls");
     }
 }

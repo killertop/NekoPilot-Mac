@@ -402,7 +402,7 @@ main.onebox-surface {
  * iOS-style bottom dock. Replaces daisyUI's .dock, which we used to set
  * a base colour on and fight its default shadow.
  *
- * Four equal-weight tab buttons; 56px tall (matches the calc in
+ * Equal-weight tab buttons; 56px tall (matches the calc in
  * .onebox-scrollpage). Active tab uses --onebox-blue, others
  * --onebox-label-tertiary so they fade into the dock chrome.
  * ========================================================================== */

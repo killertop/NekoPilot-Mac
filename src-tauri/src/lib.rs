@@ -45,13 +45,11 @@ pub fn run() {
     app::plugins::register_plugins(builder)
         .invoke_handler(tauri::generate_handler![
             commands::network::get_lan_ip,
-            commands::network::ping_google,
-            commands::network::open_browser,
-            commands::network::get_captive_redirect_url,
-            commands::network::check_captive_portal_status,
+            commands::node_delay::measure_offline_node_delay,
             commands::dns::get_optimal_local_dns_server,
             commands::config_fetch::verify_deep_link_url,
             commands::config_build::prepare_write_and_reload_config,
+            commands::config_build::list_runtime_nodes,
             commands::subscription::list_subscriptions,
             commands::subscription::upsert_subscription,
             commands::subscription::import_subscription,

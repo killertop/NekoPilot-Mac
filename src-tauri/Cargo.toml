@@ -56,7 +56,6 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 onebox-sysproxy-rs = { git = "https://github.com/OneOhCloud/onebox-sysproxy-rs", tag = "v0.0.3" }
 tauri-plugin-clipboard-manager = "2"
 
-webbrowser = "1.0.4"
 # keyring removed — privilege escalation no longer stores passwords
 rand = "0.10.0"
 png = "0.18.1"

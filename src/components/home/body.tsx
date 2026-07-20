@@ -1,15 +1,9 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { ArrowClockwise } from "react-bootstrap-icons";
 import { useSubscriptions } from "../../hooks/useDB";
-import { t, vpnServiceManager } from "../../utils/helper";
-import { AppleNetworkStatus, GoogleNetworkStatus } from "./network-check";
+import { t } from "../../utils/helper";
 import NetworkSpeed from "./network-speed";
-import SelectSub from "./select-config";
 import SelectNode from "./select-node";
-import {
-    ACTIVE_SUBSCRIPTION_CHANGED_EVENT,
-    NODE_SELECTOR_REFRESH_EVENT,
-} from "./events";
-import { switchToSubscriptionNode } from "../../utils/node-pool";
 
 function SectionLabel({
     children,
@@ -38,55 +32,9 @@ export default function Body({
 }: {
     isRunning: boolean;
 }) {
-    const { data, error, isLoading, mutate } = useSubscriptions();
-    const [selectedIdentifier, setSelectedIdentifier] = useState("");
-
-    useEffect(() => {
-        const syncActiveSubscription = (event: Event) => {
-            const identifier = (event as CustomEvent<string>).detail;
-            if (identifier) setSelectedIdentifier(identifier);
-        };
-        window.addEventListener(
-            ACTIVE_SUBSCRIPTION_CHANGED_EVENT,
-            syncActiveSubscription,
-        );
-        return () => {
-            window.removeEventListener(
-                ACTIVE_SUBSCRIPTION_CHANGED_EVENT,
-                syncActiveSubscription,
-            );
-        };
-    }, []);
-
-    const handleUpdate = async (identifier: string, changed: boolean) => {
-        try {
-            if (changed && isRunning) {
-                // Current builds keep every airport and local node in the
-                // active selector, so changing configuration is a local API
-                // operation rather than a sing-box restart. The fallback is
-                // needed once when upgrading from an older single-pool config.
-                let switched = await switchToSubscriptionNode(identifier);
-                if (!switched) {
-                    await vpnServiceManager.syncAndReload(0);
-                    for (let attempt = 0; attempt < 8 && !switched; attempt += 1) {
-                        if (attempt > 0) {
-                            await new Promise((resolve) => window.setTimeout(resolve, 125));
-                        }
-                        try {
-                            switched = await switchToSubscriptionNode(identifier);
-                        } catch {
-                            // SIGHUP can briefly recreate the local controller.
-                        }
-                    }
-                }
-                if (!switched) throw new Error("subscription_node_not_loaded");
-            }
-            window.dispatchEvent(new Event(NODE_SELECTOR_REFRESH_EVENT));
-        } catch (error) {
-            console.error(t("update_config_failed") + ":", error);
-            throw error;
-        }
-    };
+    const { data, error, mutate } = useSubscriptions();
+    const [urlTestRequest, setUrlTestRequest] = useState(0);
+    const [isUrlTesting, setIsUrlTesting] = useState(false);
 
     if (error) {
         return (
@@ -125,28 +73,33 @@ export default function Body({
                 <SectionLabel
                     trailing={
                         <>
-                            <AppleNetworkStatus />
-                            <GoogleNetworkStatus isRunning={isRunning} />
+                            <button
+                                type="button"
+                                disabled={isUrlTesting}
+                                onClick={() => setUrlTestRequest((request) => request + 1)}
+                                className="inline-flex h-7 items-center gap-1 rounded-full px-2 text-[11px] font-semibold transition-opacity disabled:opacity-40"
+                                style={{
+                                    color: "var(--onebox-blue)",
+                                    background: "rgba(0, 122, 255, 0.10)",
+                                }}
+                                title={t("url_test")}
+                            >
+                                <ArrowClockwise
+                                    size={12}
+                                    className={isUrlTesting ? "animate-spin" : undefined}
+                                />
+                                <span>{isUrlTesting ? t("url_testing") : t("url_test")}</span>
+                            </button>
                         </>
                     }
                 >
-                    {t("current_subscription")}
+                    {t("all_nodes")}
                 </SectionLabel>
-                <SelectSub
-                    onUpdate={handleUpdate}
-                    selectedIdentifier={selectedIdentifier}
-                    onSelectionChange={setSelectedIdentifier}
-                    data={data}
-                    isLoading={isLoading}
-                />
-            </section>
-
-            <section className="w-full">
-                <SectionLabel>{t("node_selection")}</SectionLabel>
                 <SelectNode
                     isRunning={isRunning}
                     subscriptions={data}
-                    selectedIdentifier={selectedIdentifier}
+                    urlTestRequest={urlTestRequest}
+                    onUrlTestStateChange={setIsUrlTesting}
                 />
             </section>
 

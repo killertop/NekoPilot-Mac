@@ -21,6 +21,8 @@ const STRING_LIMIT: usize = 16 * 1024;
 const RULESET_PREFIX: &str = "custom_ruleset_";
 const RULESET_KEYS: [&str; 2] = ["custom_ruleset_direct", "custom_ruleset_proxy"];
 const TEMPLATE_CACHE_MARKER: &str = "-template-config-cache";
+const NODE_DELAY_HISTORY_KEY: &str = "node_delay_history_key";
+const MAX_NODE_DELAY_HISTORY_ENTRIES: usize = 2_000;
 
 pub(crate) fn is_valid_ip_cidr(value: &str) -> bool {
     let Some((address, prefix)) = value.trim().rsplit_once('/') else {
@@ -60,6 +62,27 @@ fn validate_custom_rules(raw: &str) -> bool {
     true
 }
 
+fn validate_node_delay_history(value: &Value) -> bool {
+    let Some(history) = value.as_object() else {
+        return false;
+    };
+    if history.len() > MAX_NODE_DELAY_HISTORY_ENTRIES {
+        return false;
+    }
+    history.iter().all(|(node, entry)| {
+        if node.is_empty() || node.len() > 1_024 {
+            return false;
+        }
+        let Some(entry) = entry.as_object() else {
+            return false;
+        };
+        let delay_is_valid = entry.get("delay").is_some_and(|delay| {
+            delay.as_str() == Some("-") || delay.as_u64().is_some_and(|delay| delay <= 600_000)
+        });
+        delay_is_valid && entry.get("measuredAt").and_then(Value::as_u64).is_some()
+    })
+}
+
 fn validate_setting(key: &str, value: &Value) -> Result<(), String> {
     if key.trim().is_empty() || key.len() > 256 {
         return Err("invalid_setting_key".to_owned());
@@ -87,6 +110,12 @@ fn validate_setting(key: &str, value: &Value) -> Result<(), String> {
     if BOOLEAN_KEYS.contains(&key) {
         if !value.is_boolean() {
             return Err("invalid_boolean_setting".to_owned());
+        }
+        return Ok(());
+    }
+    if key == NODE_DELAY_HISTORY_KEY {
+        if !validate_node_delay_history(value) {
+            return Err("invalid_node_delay_history".to_owned());
         }
         return Ok(());
     }
@@ -213,5 +242,15 @@ mod tests {
         )
         .is_ok());
         assert!(validate_setting("proxy_port_key", &serde_json::json!(6789)).is_ok());
+        assert!(validate_setting(
+            "node_delay_history_key",
+            &serde_json::json!({"node-a":{"delay":48,"measuredAt":1_784_000_000_000_u64}}),
+        )
+        .is_ok());
+        assert!(validate_setting(
+            "node_delay_history_key",
+            &serde_json::json!({"node-a":{"delay":-1,"measuredAt":1}}),
+        )
+        .is_err());
     }
 }

@@ -1,53 +1,54 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-
+import {
+    startTransition,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+} from "react";
+import { Check } from "react-bootstrap-icons";
+import { invoke } from "@tauri-apps/api/core";
 import useSWR from "swr";
-import { getShowNodeProtocol } from "../../single/store";
-import type { Subscription } from "../../types/definition";
+
+import {
+    getShowNodeProtocol,
+    getStoreValue,
+    setStoreValue,
+} from "../../single/store";
+import {
+    NODE_DELAY_HISTORY_STORE_KEY,
+    SELECTED_NODE_STORE_KEY,
+    SSI_STORE_KEY,
+    type Subscription,
+} from "../../types/definition";
 import { clashApiFetch } from "../../utils/clash-api";
 import { t } from "../../utils/helper";
-import { measureNodeDelays } from "../../utils/node-delay";
 import {
-    preferredNodeForSubscription,
-    scopedNodeSelection,
+    measureNodeDelays,
+    measureOfflineNodeDelay,
+} from "../../utils/node-delay";
+import { compareNodesByDelay } from "../../utils/node-order";
+import {
+    delaysFromHistory,
+    parseNodeDelayHistory,
+    retainNodeDelayHistory,
+    updateNodeDelayHistory,
+    type NodeDelayHistory,
+} from "../../utils/node-delay-history";
+import {
     selectExitGatewayNode,
     subscriptionIdentifierForNode,
 } from "../../utils/node-pool";
+import { AppleSelectPlaceholder } from "./apple-select-menu";
 import {
-    AppleSelectMenu,
-    AppleSelectOption,
-    AppleSelectPlaceholder,
-} from "./apple-select-menu";
-import { buildNodeProtocolMap, nodeDisplayName, type NodeProtocolMap } from "./node-protocol";
+    buildNodeProtocolMap,
+    nodeDisplayName,
+    type NodeProtocolMap,
+} from "./node-protocol";
 import NodeOption, { type DelayStatus } from "./node-option";
 import {
     MANUAL_NODE_SELECTION_EVENT,
-    NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT,
     NODE_SELECTOR_REFRESH_EVENT,
 } from "./events";
-
-function compareNodesByDelay(
-    left: string,
-    right: string,
-    delays: Record<string, DelayStatus>,
-    pendingNodes: Set<string>,
-): number {
-    const leftDelay = delays[left];
-    const rightDelay = delays[right];
-    const leftHasDelay = typeof leftDelay === "number";
-    const rightHasDelay = typeof rightDelay === "number";
-
-    // Results should visibly converge toward the fastest nodes while the
-    // batch is still running. Pending nodes stay below measured ones, and
-    // completed timeouts move to the bottom after every successful result.
-    if (leftHasDelay && rightHasDelay) return leftDelay - rightDelay;
-    if (leftHasDelay) return -1;
-    if (rightHasDelay) return 1;
-
-    const leftPending = pendingNodes.has(left);
-    const rightPending = pendingNodes.has(right);
-    if (leftPending !== rightPending) return leftPending ? -1 : 1;
-    return 0;
-}
 
 type SelectorResponse = {
     all?: string[];
@@ -61,30 +62,62 @@ type NodeSelectorData = {
     showProtocol: boolean;
 };
 
+type RuntimeNodeSummary = {
+    tag: string;
+    protocol: string;
+};
+
 type SelectNodeProps = {
     isRunning: boolean;
     subscriptions?: Subscription[];
-    selectedIdentifier: string;
+    urlTestRequest: number;
+    onUrlTestStateChange: (isTesting: boolean) => void;
 };
 
-export default function SelectNode(props: SelectNodeProps) {
-    const { isRunning } = props;
-    const { data, isLoading, error, mutate } = useSWR(
-        `swr-clash-proxies-ExitGateway-${props.isRunning}`,
+export default function SelectNode({
+    isRunning,
+    subscriptions,
+    urlTestRequest,
+    onUrlTestStateChange,
+}: SelectNodeProps) {
+    const nodeSourcesKey = useMemo(
+        () => (subscriptions ?? [])
+            .map((item) => `${item.identifier}:${item.last_update_time}`)
+            .join("\u001f"),
+        [subscriptions],
+    );
+    const { data, isLoading, error, mutate } = useSWR<NodeSelectorData>(
+        `swr-unified-node-pool-${isRunning}-${nodeSourcesKey}`,
         async () => {
-            if (!isRunning) {
-                return { all: [], now: "", nodeProtocols: {}, showProtocol: false };
-            }
             const showProtocol = await getShowNodeProtocol();
+            if (!isRunning) {
+                const [nodes, selectedNode] = await Promise.all([
+                    invoke<RuntimeNodeSummary[]>("list_runtime_nodes"),
+                    getStoreValue(SELECTED_NODE_STORE_KEY) as Promise<
+                        string | undefined
+                    >,
+                ]);
+                const all = nodes.map((node) => node.tag);
+                return {
+                    all,
+                    now: selectedNode && all.includes(selectedNode)
+                        ? selectedNode
+                        : all[0] ?? "",
+                    nodeProtocols: Object.fromEntries(
+                        nodes.map((node) => [node.tag, node.protocol]),
+                    ),
+                    showProtocol,
+                };
+            }
             const [selectorResponse, allProxiesResponse] = await Promise.all([
                 clashApiFetch("/proxies/ExitGateway"),
-                // Read protocol metadata once per selector refresh, never on a
-                // timer. It is needed both for the optional badge and to hide
-                // the internal `VLESS ·` prefix when the badge is disabled.
                 clashApiFetch("/proxies")
                     .then((response) => response.json())
-                    .catch((error) => {
-                        console.warn("Failed to fetch proxy protocol metadata:", error);
+                    .catch((fetchError) => {
+                        console.warn(
+                            "Failed to fetch proxy protocol metadata:",
+                            fetchError,
+                        );
                         return undefined;
                     }),
             ]);
@@ -95,53 +128,42 @@ export default function SelectNode(props: SelectNodeProps) {
                 now: selector.now ?? "",
                 nodeProtocols: buildNodeProtocolMap(nodeList, allProxiesResponse),
                 showProtocol,
-            } satisfies NodeSelectorData;
+            };
         },
         {
             revalidateOnFocus: true,
-            // Node changes are initiated by this component and call mutate()
-            // directly. Polling the local Clash API every second adds no value.
             refreshInterval: 0,
         },
     );
 
     useEffect(() => {
-        const refresh = () => {
-            void mutate();
-        };
-        const optimisticallySelectConfiguration = (event: Event) => {
-            const identifier = (event as CustomEvent<string>).detail;
-            if (!identifier) return;
-            void mutate((current) => {
-                if (!current) return current;
-                const target = preferredNodeForSubscription(identifier, current.all);
-                return target && target !== current.now
-                    ? { ...current, now: target }
-                    : current;
-            }, { revalidate: false });
-        };
+        const refresh = () => void mutate();
         window.addEventListener(NODE_SELECTOR_REFRESH_EVENT, refresh);
-        window.addEventListener(
-            NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT,
-            optimisticallySelectConfiguration,
-        );
         return () => {
             window.removeEventListener(NODE_SELECTOR_REFRESH_EVENT, refresh);
-            window.removeEventListener(
-                NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT,
-                optimisticallySelectConfiguration,
-            );
         };
     }, [mutate]);
 
-    if (!isRunning) {
-        return (
-            <AppleSelectPlaceholder>{t("not_started")}</AppleSelectPlaceholder>
-        );
-    }
-
     if (error) {
         console.error(error);
+        return (
+            <div className="onebox-plain-card flex items-center gap-3 px-3.5 py-2.5">
+                <span
+                    className="min-w-0 flex-1 text-sm"
+                    style={{ color: "var(--onebox-label-secondary)" }}
+                >
+                    {t("node_load_failed")}
+                </span>
+                <button
+                    type="button"
+                    className="shrink-0 text-[13px] font-medium"
+                    style={{ color: "var(--onebox-blue)" }}
+                    onClick={() => void mutate()}
+                >
+                    {t("retry")}
+                </button>
+            </div>
+        );
     }
     if (isLoading || !data) {
         return (
@@ -150,29 +172,25 @@ export default function SelectNode(props: SelectNodeProps) {
                     <span className="inline-block size-3 rounded-full bg-blue-500/20 animate-pulse" />
                     <span
                         className="h-3 w-24 rounded-full animate-pulse"
-                        style={{ background: 'var(--onebox-fill)' }}
+                        style={{ background: "var(--onebox-fill)" }}
                     />
                 </span>
             </AppleSelectPlaceholder>
         );
     }
 
-    const scopedSelection = scopedNodeSelection(
-        props.selectedIdentifier,
-        data.all,
-        data.now,
-    );
-
     return (
-        <NodeMenu
-            isRunning={isRunning}
-            nodeList={scopedSelection.all}
-            currentNode={scopedSelection.now}
+        <NodeList
+            nodeList={data.all}
+            currentNode={data.now}
             nodeProtocols={data.nodeProtocols}
             showProtocol={data.showProtocol}
+            isRunning={isRunning}
             subscriptionNames={Object.fromEntries(
-                (props.subscriptions ?? []).map((item) => [item.identifier, item.name]),
+                (subscriptions ?? []).map((item) => [item.identifier, item.name]),
             )}
+            urlTestRequest={urlTestRequest}
+            onUrlTestStateChange={onUrlTestStateChange}
             onUpdate={(node) => {
                 if (!node) return mutate();
                 return mutate(
@@ -184,24 +202,38 @@ export default function SelectNode(props: SelectNodeProps) {
     );
 }
 
-type NodeMenuProps = {
+type NodeListProps = {
     currentNode: string;
     nodeList: string[];
     nodeProtocols: NodeProtocolMap;
     showProtocol: boolean;
     isRunning: boolean;
     subscriptionNames: Record<string, string>;
+    urlTestRequest: number;
+    onUrlTestStateChange: (isTesting: boolean) => void;
     onUpdate: (node?: string) => unknown;
 };
 
-function NodeMenu(props: NodeMenuProps) {
-    const { currentNode, nodeList, nodeProtocols, showProtocol, subscriptionNames, onUpdate, isRunning } = props;
-    const [showDelay, setShowDelay] = useState(false);
+function NodeList({
+    currentNode,
+    nodeList,
+    nodeProtocols,
+    showProtocol,
+    isRunning,
+    subscriptionNames,
+    urlTestRequest,
+    onUrlTestStateChange,
+    onUpdate,
+}: NodeListProps) {
     const [delays, setDelays] = useState<Record<string, DelayStatus>>({});
     const [pendingNodes, setPendingNodes] = useState<Set<string>>(new Set());
     const selectedNodeRef = useRef(currentNode);
     const selectionEpoch = useRef(0);
     const selectionQueue = useRef<Promise<void>>(Promise.resolve());
+    const lastUrlTestRequest = useRef(0);
+    const delayHistory = useRef<NodeDelayHistory>({});
+    const delayHistoryLoad = useRef<Promise<void>>(Promise.resolve());
+    const delayHistoryWriteQueue = useRef<Promise<void>>(Promise.resolve());
     const nodeListKey = useMemo(() => nodeList.join("\u001f"), [nodeList]);
     const stableNodeList = useMemo(
         () => Array.from(new Set(nodeList.filter(Boolean))),
@@ -224,70 +256,131 @@ function NodeMenu(props: NodeMenuProps) {
         selectedNodeRef.current = currentNode;
     }, [currentNode]);
 
+    useEffect(() => {
+        let cancelled = false;
+        const load = getStoreValue(NODE_DELAY_HISTORY_STORE_KEY)
+            .then((raw) => {
+                if (cancelled) return;
+                // A fast new measurement may finish while the native store is
+                // loading. Merge it over persisted history so fresh data wins.
+                delayHistory.current = retainNodeDelayHistory({
+                    ...parseNodeDelayHistory(raw),
+                    ...delayHistory.current,
+                }, stableNodeList);
+                const historicalDelays = delaysFromHistory(
+                    delayHistory.current,
+                    stableNodeList,
+                );
+                if (Object.keys(historicalDelays).length === 0) return;
+                setDelays((previous) => ({
+                    ...historicalDelays,
+                    ...previous,
+                }));
+            })
+            .catch((historyError) => {
+                console.warn("Failed to restore URL Test history:", historyError);
+            });
+        delayHistoryLoad.current = load;
+        return () => {
+            cancelled = true;
+        };
+    }, [stableNodeList]);
+
     const contextLabel = (node: string) => {
         const label = nodeDisplayName(node, nodeProtocols[node]);
         if (!duplicateDisplayNames.has(label)) return undefined;
         const identifier = subscriptionIdentifierForNode(node);
-        return identifier ? subscriptionNames[identifier] ?? identifier.slice(0, 6) : undefined;
+        return identifier
+            ? subscriptionNames[identifier] ?? identifier.slice(0, 6)
+            : undefined;
     };
 
     useEffect(() => {
-        if (!isRunning || stableNodeList.length === 0) {
-            setShowDelay(false);
+        const isManualUrlTest = urlTestRequest > lastUrlTestRequest.current;
+
+        if (stableNodeList.length === 0) {
             setDelays({});
             setPendingNodes(new Set());
+            onUrlTestStateChange(false);
             return;
         }
 
-        // A connection starts one bounded test pass for every node in the
-        // active selector. Results are shared by both the trigger and popup,
-        // rather than relying on each visible option to start its own request.
-        // This avoids a request storm for large subscriptions while still
-        // filling all rows automatically after Connect succeeds.
+        lastUrlTestRequest.current = urlTestRequest;
+
+        // Home never tests merely because it mounted, regained focus, changed
+        // connection state, or refreshed its node pool. Manual URL Test owns
+        // only the visible delay/sort state here; the independent ten-minute
+        // auto-selection hook keeps its own schedule and node-switching logic.
+        if (!isManualUrlTest) {
+            setPendingNodes(new Set());
+            onUrlTestStateChange(false);
+            return;
+        }
+
+        // One bounded pass measures the unified runtime pool. React transitions
+        // keep row reordering low-priority, so a large airport cannot block a
+        // click while results arrive and the list converges toward fastest-first.
         let cancelled = false;
-        setShowDelay(false);
-        setDelays({});
         setPendingNodes(new Set(stableNodeList));
+        onUrlTestStateChange(true);
 
-        const timer = window.setTimeout(() => {
+        const timer = window.setTimeout(async () => {
             if (cancelled) return;
-            setShowDelay(true);
-
-            void measureNodeDelays(stableNodeList, {
-                isCancelled: () => cancelled,
-                onResult: (nodeName, delay) => {
-                    setDelays((previous) => ({ ...previous, [nodeName]: delay }));
-                    setPendingNodes((previous) => {
-                        if (!previous.has(nodeName)) return previous;
-                        const next = new Set(previous);
-                        next.delete(nodeName);
-                        return next;
-                    });
-                },
-            });
-        }, 500);
+            try {
+                await measureNodeDelays(stableNodeList, {
+                    force: true,
+                    measure: isRunning ? undefined : measureOfflineNodeDelay,
+                    isCancelled: () => cancelled,
+                    onResult: (nodeName, delay) => {
+                        delayHistory.current = retainNodeDelayHistory(
+                            updateNodeDelayHistory(
+                                delayHistory.current,
+                                nodeName,
+                                delay,
+                            ),
+                            stableNodeList,
+                        );
+                        delayHistoryWriteQueue.current = delayHistoryWriteQueue.current
+                            .catch(() => undefined)
+                            .then(() => delayHistoryLoad.current)
+                            .then(() => setStoreValue(
+                                NODE_DELAY_HISTORY_STORE_KEY,
+                                delayHistory.current,
+                            ))
+                            .catch((historyError) => {
+                                console.warn("Failed to save URL Test history:", historyError);
+                            });
+                        startTransition(() => {
+                            setDelays((previous) => ({
+                                ...previous,
+                                [nodeName]: delay,
+                            }));
+                            setPendingNodes((previous) => {
+                                if (!previous.has(nodeName)) return previous;
+                                const next = new Set(previous);
+                                next.delete(nodeName);
+                                return next;
+                            });
+                        });
+                    },
+                });
+            } finally {
+                if (!cancelled) onUrlTestStateChange(false);
+            }
+        }, 0);
 
         return () => {
             cancelled = true;
             window.clearTimeout(timer);
+            onUrlTestStateChange(false);
         };
-    }, [isRunning, stableNodeList]);
+    }, [isRunning, stableNodeList, urlTestRequest, onUrlTestStateChange]);
 
-    const options = useMemo<AppleSelectOption<string>[]>(
-        () =>
-            nodeList
-                .map((name) => ({
-                    value: name,
-                    key: name,
-                    raw: nodeProtocols[name],
-                }))
-                .sort((left, right) => compareNodesByDelay(
-                    left.value,
-                    right.value,
-                    delays,
-                    pendingNodes,
-                )),
-        [nodeList, nodeProtocols, delays, pendingNodes],
+    const sortedNodes = useMemo(
+        () => [...stableNodeList].sort((left, right) =>
+            compareNodesByDelay(left, right, delays, pendingNodes)
+        ),
+        [stableNodeList, delays, pendingNodes],
     );
 
     const handleNodeChange = (node: string) => {
@@ -297,66 +390,78 @@ function NodeMenu(props: NodeMenuProps) {
         selectedNodeRef.current = node;
         onUpdate(node);
         window.dispatchEvent(new Event(MANUAL_NODE_SELECTION_EVENT));
+
         selectionQueue.current = selectionQueue.current
             .catch(() => undefined)
             .then(async () => {
                 if (epoch !== selectionEpoch.current) return;
-                await selectExitGatewayNode(node);
+                if (isRunning) await selectExitGatewayNode(node);
+                const identifier = subscriptionIdentifierForNode(node);
+                const writes = [setStoreValue(SELECTED_NODE_STORE_KEY, node)];
+                if (identifier) writes.push(setStoreValue(SSI_STORE_KEY, identifier));
+                await Promise.all(writes).catch((persistError) => {
+                    console.warn("Failed to persist selected node:", persistError);
+                });
             })
-            .catch((error) => {
+            .catch((switchError) => {
                 if (epoch !== selectionEpoch.current) return;
-                console.error("Error changing node:", error);
+                console.error("Error changing node:", switchError);
                 selectedNodeRef.current = previous;
                 onUpdate(previous);
                 onUpdate();
             });
     };
 
-    if (!nodeList || nodeList.length === 0) {
-        return (
-            <AppleSelectPlaceholder>{t("no_node")}</AppleSelectPlaceholder>
-        );
+    if (sortedNodes.length === 0) {
+        return <AppleSelectPlaceholder>{t("no_node")}</AppleSelectPlaceholder>;
     }
 
     return (
-        <AppleSelectMenu<string>
-            value={currentNode}
-            options={options}
-            onChange={handleNodeChange}
-            menuMaxHeight={220}
-            renderTrigger={() => (
-                <NodeOption
-                    nodeName={currentNode}
-                    protocol={nodeProtocols[currentNode]}
-                    showProtocol={showProtocol}
-                    showDelay={showDelay}
-                    delay={delays[currentNode] ?? "-"}
-                    isTesting={pendingNodes.has(currentNode)}
-                    contextLabel={contextLabel(currentNode)}
-                />
-            )}
-            renderOption={({ option, isSelected }) => (
-                <div
-                    className={isSelected ? "font-semibold text-blue-600" : ""}
-                    style={
-                        isSelected ? undefined : { color: 'var(--onebox-label)' }
-                    }
-                >
-                    <NodeOption
-                        nodeName={option.value}
-                        protocol={
-                            typeof option.raw === "string"
-                                ? option.raw
-                                : undefined
-                        }
-                        showProtocol={showProtocol}
-                        showDelay={showDelay}
-                        delay={delays[option.value] ?? "-"}
-                        isTesting={pendingNodes.has(option.value)}
-                        contextLabel={contextLabel(option.value)}
-                    />
-                </div>
-            )}
-        />
+        <div
+            className="onebox-grouped-card"
+            role="listbox"
+            aria-label={t("all_nodes")}
+        >
+            {sortedNodes.map((node) => {
+                const isSelected = node === currentNode;
+                return (
+                    <button
+                        key={node}
+                        type="button"
+                        role="option"
+                        aria-selected={isSelected}
+                        onClick={() => handleNodeChange(node)}
+                        className="w-full min-h-11 px-3.5 py-2.5 flex items-center gap-2 text-left transition-colors active:bg-[rgba(0,122,255,0.12)]"
+                        style={{
+                            background: isSelected
+                                ? "rgba(0, 122, 255, 0.08)"
+                                : undefined,
+                            contentVisibility: "auto",
+                            containIntrinsicSize: "44px",
+                        }}
+                    >
+                        <div className="min-w-0 flex-1">
+                            <NodeOption
+                                nodeName={node}
+                                protocol={nodeProtocols[node]}
+                                showProtocol={showProtocol}
+                                delay={delays[node] ?? "-"}
+                                hasDelay={Object.prototype.hasOwnProperty.call(delays, node)}
+                                isTesting={pendingNodes.has(node)}
+                                contextLabel={contextLabel(node)}
+                            />
+                        </div>
+                        <Check
+                            size={16}
+                            className="shrink-0 transition-opacity"
+                            style={{
+                                color: "var(--onebox-blue)",
+                                opacity: isSelected ? 1 : 0,
+                            }}
+                        />
+                    </button>
+                );
+            })}
+        </div>
     );
 }

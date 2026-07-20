@@ -3,9 +3,7 @@ vi.mock("../utils/clash-api", () => ({ clashApiFetch: vi.fn() }));
 import { clashApiFetch } from "../utils/clash-api";
 import {
   displayNodeTag,
-  nodesForSubscription,
   preferredNodeForSubscription,
-  scopedNodeSelection,
   subscriptionIdentifierForNode,
   subscriptionNodePrefix,
   switchToSubscriptionNode,
@@ -33,30 +31,6 @@ describe("runtime node pool tags", () => {
     expect(preferredNodeForSubscription("airport-b", nodes)).toBe(
       "@np:airport-b:Osaka",
     );
-  });
-
-  it("shows only nodes belonging to the configuration displayed on Home", () => {
-    const nodes = [
-      "@np:airport-a:Tokyo",
-      "@np:airport-b:Osaka",
-      "@np:airport-a:Singapore",
-    ];
-    expect(nodesForSubscription("airport-a", nodes)).toEqual([
-      "@np:airport-a:Tokyo",
-      "@np:airport-a:Singapore",
-    ]);
-    expect(
-      scopedNodeSelection("airport-a", nodes, "@np:airport-b:Osaka"),
-    ).toEqual({
-      all: ["@np:airport-a:Tokyo", "@np:airport-a:Singapore"],
-      now: "@np:airport-a:Tokyo",
-    });
-  });
-
-  it("keeps legacy single-configuration node pools visible during upgrade", () => {
-    expect(
-      scopedNodeSelection("airport-a", ["Tokyo", "Singapore"], "Singapore"),
-    ).toEqual({ all: ["Tokyo", "Singapore"], now: "Singapore" });
   });
 
   it("switches configuration through the local selector without a config reload", async () => {

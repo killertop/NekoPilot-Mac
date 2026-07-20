@@ -9,8 +9,8 @@ interface NodeOptionProps {
     nodeName: string;
     protocol?: string;
     showProtocol: boolean;
-    showDelay: boolean;
     delay: DelayStatus;
+    hasDelay: boolean;
     isTesting: boolean;
     contextLabel?: string;
 }
@@ -28,18 +28,31 @@ const STYLES = {
 // 延迟指示器组件
 interface DelayIndicatorProps {
     delay: DelayStatus;
-    showDelay: boolean;
+    hasDelay: boolean;
     isTesting: boolean;
 }
 
-const DelayIndicator = ({ delay, showDelay, isTesting }: DelayIndicatorProps) => {
+const DelayIndicator = ({ delay, hasDelay, isTesting }: DelayIndicatorProps) => {
     const displayText = delay === '-' ? t("timeout") : `${delay}ms`;
 
     return (
         <div className="h-5 flex items-center justify-end min-w-[3.5rem]">
-            {showDelay && !isTesting ? (
-                <div className="text-sm font-medium transition-all duration-300 ease">
+            {hasDelay ? (
+                <div
+                    className="text-sm font-medium"
+                    style={isTesting
+                        ? { color: "var(--onebox-label-tertiary)" }
+                        : undefined}
+                    title={isTesting ? t("url_testing") : undefined}
+                >
                     {displayText}
+                </div>
+            ) : !isTesting ? (
+                <div
+                    className="text-sm font-medium"
+                    style={{ color: "var(--onebox-label-tertiary)" }}
+                >
+                    —
                 </div>
             ) : (
                 <span className="onebox-spinner onebox-spinner-dots onebox-spinner-sm">
@@ -56,8 +69,8 @@ export default function NodeOption({
     nodeName,
     protocol,
     showProtocol,
-    showDelay,
     delay,
+    hasDelay,
     isTesting,
     contextLabel,
 }: NodeOptionProps) {
@@ -100,7 +113,7 @@ export default function NodeOption({
             )}
             <DelayIndicator
                 delay={delay}
-                showDelay={showDelay}
+                hasDelay={hasDelay}
                 isTesting={isTesting}
             />
         </div>

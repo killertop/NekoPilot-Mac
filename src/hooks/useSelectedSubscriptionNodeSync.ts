@@ -1,19 +1,37 @@
 import { useEffect } from "react";
 import { NODE_SELECTOR_REFRESH_EVENT } from "../components/home/events";
 import { getStoreValue } from "../single/store";
-import { SSI_STORE_KEY } from "../types/definition";
-import { switchToSubscriptionNode } from "../utils/node-pool";
+import { SELECTED_NODE_STORE_KEY, SSI_STORE_KEY } from "../types/definition";
+import {
+  getExitGatewaySelector,
+  selectExitGatewayNode,
+  switchToSubscriptionNode,
+} from "../utils/node-pool";
 
-/** Ensures a fresh engine honors the configuration selected while offline. */
+/** Restores the exact unified-pool node, with the old source preference as fallback. */
 export function useSelectedSubscriptionNodeSync(isRunning: boolean): void {
   useEffect(() => {
     if (!isRunning) return;
     let cancelled = false;
     const sync = async () => {
-      const identifier = await getStoreValue(SSI_STORE_KEY) as string | undefined;
-      if (!identifier || cancelled) return;
+      const [nodeTag, identifier] = await Promise.all([
+        getStoreValue(SELECTED_NODE_STORE_KEY) as Promise<string | undefined>,
+        getStoreValue(SSI_STORE_KEY) as Promise<string | undefined>,
+      ]);
+      if (cancelled) return;
       try {
-        if (await switchToSubscriptionNode(identifier)) {
+        let switched = false;
+        if (nodeTag) {
+          const selector = await getExitGatewaySelector();
+          if (selector.all.includes(nodeTag)) {
+            if (selector.now !== nodeTag) await selectExitGatewayNode(nodeTag);
+            switched = true;
+          }
+        }
+        if (!switched && identifier) {
+          switched = await switchToSubscriptionNode(identifier);
+        }
+        if (switched) {
           window.dispatchEvent(new Event(NODE_SELECTOR_REFRESH_EVENT));
         }
       } catch (error) {

@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { clashApiFetch } from "./clash-api";
 
 export type DelayStatus = "-" | number;
@@ -45,6 +46,24 @@ export async function measureNodeDelay(
   return request;
 }
 
+/**
+ * Runs a one-shot sing-box fetch without starting the app engine or changing
+ * the system proxy. Used only when the Home page is currently disconnected.
+ */
+export async function measureOfflineNodeDelay(
+  nodeName: string,
+): Promise<DelayStatus> {
+  try {
+    const delay = await invoke<number | null>("measure_offline_node_delay", {
+      nodeName,
+    });
+    return typeof delay === "number" && Number.isFinite(delay) ? delay : "-";
+  } catch (error) {
+    console.warn("Offline URL Test failed:", error);
+    return "-";
+  }
+}
+
 export async function measureNodeDelays(
   nodeNames: readonly string[],
   options: {
@@ -52,6 +71,7 @@ export async function measureNodeDelays(
     concurrency?: number;
     onResult?: (nodeName: string, delay: DelayStatus) => void;
     isCancelled?: () => boolean;
+    measure?: (nodeName: string) => Promise<DelayStatus>;
   } = {},
 ): Promise<Record<string, DelayStatus>> {
   const uniqueNodes = Array.from(new Set(nodeNames.filter(Boolean)));
@@ -61,7 +81,9 @@ export async function measureNodeDelays(
     while (!options.isCancelled?.()) {
       const nodeName = uniqueNodes[nextIndex++];
       if (!nodeName) return;
-      const delay = await measureNodeDelay(nodeName, { force: options.force });
+      const delay = options.measure
+        ? await options.measure(nodeName)
+        : await measureNodeDelay(nodeName, { force: options.force });
       if (options.isCancelled?.()) return;
       results[nodeName] = delay;
       options.onResult?.(nodeName, delay);

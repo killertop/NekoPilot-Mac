@@ -11,9 +11,7 @@ import {
   DEFAULT_AUTO_SELECT_FASTEST_NODE,
 } from "../types/definition";
 import {
-  ACTIVE_SUBSCRIPTION_CHANGED_EVENT,
   MANUAL_NODE_SELECTION_EVENT,
-  NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT,
 } from "../components/home/events";
 
 describe("automatic node selection", () => {
@@ -25,16 +23,10 @@ describe("automatic node selection", () => {
     );
   });
 
-  it("defers an active cycle for ten minutes after a manual selection", () => {
-    expect(automaticSelectionDelayMs(1_000, 0)).toBe(5_000);
+  it("waits ten minutes initially and after a manual node selection", () => {
+    expect(automaticSelectionDelayMs(1_000, 0)).toBe(600_000);
     expect(automaticSelectionDelayMs(1_000, 601_000)).toBe(600_000);
     expect(MANUAL_NODE_SELECTION_EVENT).toBe("nekopilot:manual-node-selection");
-    expect(NODE_SELECTOR_OPTIMISTIC_CONFIG_EVENT).toBe(
-      "nekopilot:node-selector-optimistic-config",
-    );
-    expect(ACTIVE_SUBSCRIPTION_CHANGED_EVENT).toBe(
-      "nekopilot:active-subscription-changed",
-    );
   });
 
   it("picks the lowest successful delay and ignores timeouts", () => {
