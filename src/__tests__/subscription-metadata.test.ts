@@ -1,13 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { extractLocalNodeInfo } from "../components/configuration/local-node-info";
 import {
-    hasExpiry,
     hasTrafficQuota,
     isLocalConfiguration,
 } from "../components/configuration/subscription-metadata";
 
 describe("subscription metadata visibility", () => {
-    it("never treats a local node as a traffic quota or an expiring subscription", () => {
+    it("never treats a local node as a traffic quota", () => {
         const local = {
             source_type: "local_link" as const,
             used_traffic: 0,
@@ -16,10 +15,9 @@ describe("subscription metadata visibility", () => {
         };
         expect(isLocalConfiguration(local)).toBe(true);
         expect(hasTrafficQuota(local)).toBe(false);
-        expect(hasExpiry(local)).toBe(false);
     });
 
-    it("only shows upstream-provided subscription metadata", () => {
+    it("only shows upstream-provided traffic metadata", () => {
         const provided = {
             source_type: "subscription" as const,
             used_traffic: 100,
@@ -27,7 +25,6 @@ describe("subscription metadata visibility", () => {
             expire_time: 1_900_000_000_000,
         };
         expect(hasTrafficQuota(provided)).toBe(true);
-        expect(hasExpiry(provided)).toBe(true);
 
         const legacyPlaceholder = {
             source_type: "subscription" as const,
@@ -36,7 +33,6 @@ describe("subscription metadata visibility", () => {
             expire_time: 1_000,
         };
         expect(hasTrafficQuota(legacyPlaceholder)).toBe(false);
-        expect(hasExpiry(legacyPlaceholder)).toBe(false);
     });
 });
 

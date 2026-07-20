@@ -3,19 +3,16 @@ import bytes from "bytes";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import React, { useState } from "react";
-import { ChevronDown, InfoCircle, Trash3 } from "react-bootstrap-icons";
+import { ArrowClockwise, ChevronDown, InfoCircle, Trash3 } from "react-bootstrap-icons";
+import { toast } from "sonner";
 import { mutate } from "swr";
 import { deleteSubscription } from "../../action/db";
+import { refreshSubscription } from "../../action/subscription-hooks";
 import { GET_SUBSCRIPTIONS_LIST_SWR_KEY, Subscription } from "../../types/definition";
 import { t } from "../../utils/helper";
 import Avatar from "./avatar";
 import { SubscriptionDetailModal } from "./detail-modal";
-import {
-    hasExpiry,
-    hasTrafficQuota,
-    isLocalConfiguration,
-    LOCAL_FILE_SENTINEL,
-} from "./subscription-metadata";
+import { hasTrafficQuota, isLocalConfiguration } from "./subscription-metadata";
 
 interface SubscriptionItemProps {
     item: Subscription;
@@ -29,24 +26,18 @@ export const SubscriptionItem = React.memo(function SubscriptionItem({
     setExpanded,
 }: SubscriptionItemProps) {
     const isExpanded = expanded === item.identifier;
-    const isLocalFile = item.expire_time === LOCAL_FILE_SENTINEL;
     const isLocalLink = item.source_type === "local_link";
     const isLocalConfig = isLocalConfiguration(item);
     const hasQuota = hasTrafficQuota(item);
-    const hasExpiration = hasExpiry(item);
     const usage = hasQuota ? Math.floor((item.used_traffic / item.total_traffic) * 100) : 0;
     const danger = usage >= 100;
-    const remainingDays = Math.floor(
-        (item.expire_time - item.last_update_time) / (1000 * 60 * 60 * 24),
-    );
     const trafficText = `${bytes(item.used_traffic) ?? "0"} / ${bytes(item.total_traffic) ?? "0"}`;
-    const remainingText = isLocalLink
+    const localStatusText = isLocalLink
         ? t("local_link_no_expire")
-        : isLocalFile
-        ? t("local_file_no_expire")
-        : `${remainingDays} ${t("days")}`;
+        : t("local_file_no_expire");
 
     const [isDeleting, setIsDeleting] = useState(false);
+    const [isRefreshing, setIsRefreshing] = useState(false);
     const [detailOpen, setDetailOpen] = useState(false);
 
     const handleDelete = async () => {
@@ -60,6 +51,20 @@ export const SubscriptionItem = React.memo(function SubscriptionItem({
 
     const handleToggleExpand = () => {
         setExpanded(isExpanded ? "" : item.identifier);
+    };
+
+    const handleRefresh = async () => {
+        if (isRefreshing || isDeleting || isLocalConfig) return;
+        setIsRefreshing(true);
+        try {
+            await refreshSubscription(item.identifier);
+            await mutate(GET_SUBSCRIPTIONS_LIST_SWR_KEY);
+        } catch (error) {
+            console.error("Failed to refresh subscription:", error);
+            toast.error(t("update_subscription_failed"));
+        } finally {
+            setIsRefreshing(false);
+        }
     };
 
     const handleAvatarClick = (e: React.MouseEvent) => {
@@ -114,13 +119,9 @@ export const SubscriptionItem = React.memo(function SubscriptionItem({
                         style={{ color: "var(--onebox-label-secondary)" }}
                     >
                         {isLocalConfig ? (
-                            remainingText
+                            localStatusText
                         ) : (
-                            <>
-                                {hasQuota && trafficText}
-                                {hasQuota && hasExpiration && <span className="mx-1.5 opacity-50">·</span>}
-                                {hasExpiration ? remainingText : !hasQuota && t("subscription_metadata_unavailable")}
-                            </>
+                            hasQuota ? trafficText : t("subscription_metadata_unavailable")
                         )}
                     </div>
 
@@ -169,16 +170,39 @@ export const SubscriptionItem = React.memo(function SubscriptionItem({
                         className="overflow-hidden"
                     >
                         <div
-                            className="grid grid-cols-2 relative"
+                            className={clsx(
+                                "grid relative",
+                                isLocalConfig ? "grid-cols-2" : "grid-cols-3",
+                            )}
                             style={{
                                 borderTop: "0.5px solid var(--onebox-separator)",
                             }}
                         >
+                            {!isLocalConfig && (
+                                <button
+                                    type="button"
+                                    disabled={isRefreshing || isDeleting}
+                                    onClick={() => void handleRefresh()}
+                                    className="py-2.5 flex items-center justify-center gap-1.5 text-[13px] font-medium transition-colors active:bg-[rgba(0,122,255,0.06)] disabled:opacity-50"
+                                    style={{ color: "var(--onebox-blue)" }}
+                                >
+                                    <ArrowClockwise
+                                        size={13}
+                                        className={isRefreshing ? "animate-spin" : undefined}
+                                    />
+                                    <span>{isRefreshing ? t("updating") : t("update")}</span>
+                                </button>
+                            )}
                             <button
                                 type="button"
                                 onClick={() => setDetailOpen(true)}
                                 className="py-2.5 flex items-center justify-center gap-1.5 text-[13px] font-medium transition-colors active:bg-[rgba(0,122,255,0.06)]"
-                                style={{ color: "var(--onebox-blue)" }}
+                                style={{
+                                    color: "var(--onebox-blue)",
+                                    borderLeft: !isLocalConfig
+                                        ? "0.5px solid var(--onebox-separator)"
+                                        : undefined,
+                                }}
                             >
                                 <InfoCircle size={13} />
                                 <span>{t("details")}</span>

@@ -24,10 +24,3 @@ export function hasTrafficQuota(item: SubscriptionMetadataSource): boolean {
         && Number.isFinite(item.total_traffic)
         && item.total_traffic > 0;
 }
-
-export function hasExpiry(item: SubscriptionMetadataSource): boolean {
-    return !isLocalConfiguration(item)
-        && !isLegacyMissingMetadata(item)
-        && Number.isFinite(item.expire_time)
-        && item.expire_time > 0;
-}

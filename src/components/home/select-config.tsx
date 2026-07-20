@@ -14,23 +14,6 @@ type SubscriptionProps = {
     onUpdate: (identifier: string, isUpdate: boolean) => void;
 };
 
-const LOCAL_FILE_SENTINEL = 32503680000000;
-
-function formatExpireHint(subscription: Subscription): string | null {
-    if (subscription.source_type === "local_link") {
-        return t("local_link_no_expire");
-    }
-    const { expire_time: expire } = subscription;
-    if (expire === LOCAL_FILE_SENTINEL) {
-        return t("local_file_no_expire");
-    }
-    try {
-        return `${t("expired_at")} ${new Date(expire).toLocaleDateString("zh-CN")}`;
-    } catch {
-        return null;
-    }
-}
-
 export default function SelectSub({ data, isLoading, onUpdate }: SubscriptionProps) {
     const [selected, setSelected] = useState<string>("");
 
@@ -111,9 +94,8 @@ export default function SelectSub({ data, isLoading, onUpdate }: SubscriptionPro
             renderOption={({ option, isSelected }) => {
                 const sub = option.raw as Subscription | undefined;
                 if (!sub) return null;
-                const hint = formatExpireHint(sub);
                 return (
-                    <div className="flex flex-col min-w-0">
+                    <div className="flex min-w-0">
                         <span
                             className={`truncate text-[14px] ${
                                 isSelected
@@ -128,14 +110,6 @@ export default function SelectSub({ data, isLoading, onUpdate }: SubscriptionPro
                         >
                             {sub.name}
                         </span>
-                        {hint && (
-                            <span
-                                className="truncate text-[11px] mt-0.5"
-                                style={{ color: 'var(--onebox-label-tertiary)' }}
-                            >
-                                {hint}
-                            </span>
-                        )}
                     </div>
                 );
             }}

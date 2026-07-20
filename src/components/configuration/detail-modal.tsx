@@ -20,7 +20,6 @@ import { Portal, useBodyScrollLock } from "../common/portal";
 import Avatar from "./avatar";
 import { extractLocalNodeInfo, type LocalNodeInfo } from "./local-node-info";
 import {
-    hasExpiry,
     hasTrafficQuota,
 } from "./subscription-metadata";
 
@@ -117,14 +116,10 @@ export function SubscriptionDetailModal({
 
     const isLocalLink = item.source_type === 'local_link';
     const hasQuota = hasTrafficQuota(item);
-    const hasExpiration = hasExpiry(item);
     const usage = hasQuota
         ? Math.min(100, Math.floor((item.used_traffic / item.total_traffic) * 100))
         : 0;
     const danger = usage >= 100;
-    const remainingDays = Math.floor(
-        (item.expire_time - Date.now()) / (1000 * 60 * 60 * 24),
-    );
     const locale = typeof navigator !== 'undefined' ? navigator.language : 'en';
 
     const trafficText = `${bytes(item.used_traffic) ?? '0'} / ${bytes(item.total_traffic) ?? '0'}`;
@@ -411,13 +406,7 @@ export function SubscriptionDetailModal({
                                                             tail={<ProgressBar percent={usage} danger={danger} />}
                                                         />
                                                     )}
-                                                    {hasExpiration && (
-                                                        <InfoRow
-                                                            label={t('expired_at')}
-                                                            value={`${formatAbsolute(item.expire_time, locale).split(' ')[0]} · ${remainingDays} ${t('days')}`}
-                                                        />
-                                                    )}
-                                                    {!hasQuota && !hasExpiration && (
+                                                    {!hasQuota && (
                                                         <InfoRow
                                                             label={t('subscription_metadata')}
                                                             value={t('subscription_metadata_unavailable')}
