@@ -17,6 +17,30 @@ const DELAY_TEST_URL = "https://www.google.com/generate_204";
 const DELAY_TEST_TIMEOUT_MS = 5_000;
 const DELAY_TEST_CONCURRENCY = 3;
 
+function compareNodesByDelay(
+    left: string,
+    right: string,
+    delays: Record<string, DelayStatus>,
+    pendingNodes: Set<string>,
+): number {
+    const leftDelay = delays[left];
+    const rightDelay = delays[right];
+    const leftHasDelay = typeof leftDelay === "number";
+    const rightHasDelay = typeof rightDelay === "number";
+
+    // Results should visibly converge toward the fastest nodes while the
+    // batch is still running. Pending nodes stay below measured ones, and
+    // completed timeouts move to the bottom after every successful result.
+    if (leftHasDelay && rightHasDelay) return leftDelay - rightDelay;
+    if (leftHasDelay) return -1;
+    if (rightHasDelay) return 1;
+
+    const leftPending = pendingNodes.has(left);
+    const rightPending = pendingNodes.has(right);
+    if (leftPending !== rightPending) return leftPending ? -1 : 1;
+    return 0;
+}
+
 async function measureNodeDelay(nodeName: string): Promise<DelayStatus> {
     try {
         const response = await clashApiFetch(
@@ -208,12 +232,19 @@ function NodeMenu(props: NodeMenuProps) {
 
     const options = useMemo<AppleSelectOption<string>[]>(
         () =>
-            nodeList.map((name) => ({
-                value: name,
-                key: name,
-                raw: nodeProtocols[name],
-            })),
-        [nodeList, nodeProtocols],
+            nodeList
+                .map((name) => ({
+                    value: name,
+                    key: name,
+                    raw: nodeProtocols[name],
+                }))
+                .sort((left, right) => compareNodesByDelay(
+                    left.value,
+                    right.value,
+                    delays,
+                    pendingNodes,
+                )),
+        [nodeList, nodeProtocols, delays, pendingNodes],
     );
 
     const handleNodeChange = async (node: string) => {

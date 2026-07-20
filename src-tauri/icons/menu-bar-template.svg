@@ -1,10 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 36 36">
   <!-- macOS status-bar template: the system uses this opaque alpha mask to
        tint the icon for light and dark menu bars. -->
-  <g fill="none" stroke="#000" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Scale around the visual centre, then drop one logical pixel. The menu
+       bar otherwise renders this template smaller and noticeably high. -->
+  <g transform="translate(18 19) scale(1.1) translate(-18 -18)" fill="none" stroke="#000" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round">
     <path d="M10.1 5.8c5.1 2.6 10.7 2.6 15.8 0 1.1 8.5-1.4 17.5-7.9 23.1C11.5 23.3 9 14.3 10.1 5.8Z"/>
     <path d="M4.7 18h26.6"/>
     <circle cx="31.2" cy="18" r="1.6"/>
   </g>
-  <path fill="#000" d="M18 13c2.2 0 4 1.8 4 4 0 .9-.3 1.7-.8 2.4l-1.3-1c.3-.4.5-.9.5-1.4 0-1.3-1.1-2.4-2.4-2.4s-2.4 1.1-2.4 2.4c0 .5.2 1 .5 1.4l-1.3 1A4 4 0 0 1 14 17c0-2.2 1.8-4 4-4Z"/>
+  <path transform="translate(18 19) scale(1.1) translate(-18 -18)" fill="#000" d="M18 13c2.2 0 4 1.8 4 4 0 .9-.3 1.7-.8 2.4l-1.3-1c.3-.4.5-.9.5-1.4 0-1.3-1.1-2.4-2.4-2.4s-2.4 1.1-2.4 2.4c0 .5.2 1 .5 1.4l-1.3 1A4 4 0 0 1 14 17c0-2.2 1.8-4 4-4Z"/>
 </svg>
