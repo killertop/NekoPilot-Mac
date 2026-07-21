@@ -10,6 +10,7 @@ public actor EngineSupervisor {
     private var status: EngineStatus = .stopped
     private var process: Process?
     private var sessionID: UUID?
+    private var apiEndpoint: LocalAPIEndpoint?
     private var proxySessionID: UUID?
     private var epoch: UInt64 = 0
     private var isShuttingDown = false
@@ -100,6 +101,7 @@ public actor EngineSupervisor {
             startedSession = session
             process = child
             sessionID = session
+            self.apiEndpoint = apiEndpoint
 
             guard await waitUntilReady(endpoint: apiEndpoint, epoch: startEpoch) else {
                 try ensureCurrent(startEpoch)
@@ -187,7 +189,13 @@ public actor EngineSupervisor {
         }
 
         do {
-            let config = try await compiler.compile(selectedNode: selectedNode)
+            guard let apiEndpoint else {
+                throw NekoPilotError.processFailed("sing-box API 会话已丢失")
+            }
+            let config = try await compiler.compile(
+                selectedNode: selectedNode,
+                apiEndpoint: apiEndpoint
+            )
             try await SingBoxValidator.validate(configuration: config)
             let reloadEpoch = epoch
             let expectedNodes = try expectedSelectorNodes(in: config)
@@ -351,6 +359,7 @@ public actor EngineSupervisor {
         }
         process = nil
         sessionID = nil
+        apiEndpoint = nil
         removeOwnershipIfMatching(session: expectedSession)
         return true
     }
@@ -360,6 +369,7 @@ public actor EngineSupervisor {
         let expectedProxySession = proxySessionID
         process = nil
         sessionID = nil
+        apiEndpoint = nil
         removeOwnershipIfMatching(session: session)
         try? await systemProxy.removeOwnedProxy(expectedSession: expectedProxySession)
         guard sessionID == nil else { return }

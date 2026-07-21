@@ -284,7 +284,7 @@ if ProcessInfo.processInfo.environment["NEKOPILOT_VALIDATE_MULTI_NODE_URL_TEST"]
     }))
 }
 
-if ProcessInfo.processInfo.environment["NEKOPILOT_VALIDATE_ENGINE"] == "1" {
+if ProcessInfo.processInfo.environment["NEKOPILOT_SKIP_ENGINE_VALIDATION"] != "1" {
     checks.append(("native supervisor starts and stops sing-box", {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("NekoPilot-Engine-\(UUID().uuidString)", isDirectory: true)

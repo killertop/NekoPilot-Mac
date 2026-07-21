@@ -33,9 +33,11 @@ mkdir -p "$OUTPUT_DIR"
 
 NEKOPILOT_SING_BOX="$SING_BOX_SOURCE" \
 NEKOPILOT_VALIDATE_SINGBOX_IMPORT=1 \
+NEKOPILOT_SKIP_ENGINE_VALIDATION=0 \
   swift test --package-path "$NATIVE_DIR"
 swift build --package-path "$NATIVE_DIR" -c release --arch arm64 --product NekoPilot
-swift run --package-path "$NATIVE_DIR" -c release NekoPilotCoreChecks
+NEKOPILOT_SKIP_ENGINE_VALIDATION=0 \
+  swift run --package-path "$NATIVE_DIR" -c release NekoPilotCoreChecks
 BUILD_ROOT=$(swift build --package-path "$NATIVE_DIR" -c release --arch arm64 --show-bin-path)
 [[ -x "$BUILD_ROOT/NekoPilot" ]] || fail "Swift release executable was not produced"
 

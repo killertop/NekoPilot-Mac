@@ -229,8 +229,8 @@ public actor ConfigurationCompiler {
                       let tag = ruleSet["tag"]?.stringValue else { return value }
                 let file: URL?
                 switch tag {
-                case "geoip-cn": file = paths.ruleSets.appendingPathComponent("geoip-cn.srs")
-                case "geosite-cn": file = paths.ruleSets.appendingPathComponent("geosite-cn.srs")
+                case "geoip-cn": file = RuleSetUpdater.activeRuleSetURL(in: paths.ruleSets, name: "geoip-cn")
+                case "geosite-cn": file = RuleSetUpdater.activeRuleSetURL(in: paths.ruleSets, name: "geosite-cn")
                 default: file = nil
                 }
                 guard let file else { return value }
@@ -342,23 +342,19 @@ public actor ConfigurationCompiler {
     }
 
     private func installRuleSetBaseline() throws {
-        try FileManager.default.createDirectory(at: paths.ruleSets, withIntermediateDirectories: true)
+        var bundledFiles: [(String, Data)] = []
         for name in ["geoip-cn", "geosite-cn"] {
-            let destination = paths.ruleSets.appendingPathComponent("\(name).srs")
-            if let existing = try? Data(contentsOf: destination),
-               RuleSetUpdater.isValidRuleSet(existing) {
-                continue
-            }
             guard let source = Self.resourceURL(name: name, extension: "srs", subdirectory: "rules")
                 ?? Self.resourceURL(name: name, extension: "srs") else {
                 throw NekoPilotError.processFailed("缺少内置中国规则库")
             }
-            let bundled = try Data(contentsOf: source)
-            guard RuleSetUpdater.isValidRuleSet(bundled) else {
+            let bundledData = try Data(contentsOf: source)
+            guard RuleSetUpdater.isValidRuleSet(bundledData) else {
                 throw NekoPilotError.processFailed("内置中国规则库无效")
             }
-            try AtomicFile.write(bundled, to: destination)
+            bundledFiles.append((name, bundledData))
         }
+        try RuleSetUpdater.installBundledBaseline(in: paths.ruleSets, files: bundledFiles)
     }
 
     private static func validIPAddress(_ value: String) -> Bool {

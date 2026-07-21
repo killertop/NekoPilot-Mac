@@ -16,14 +16,16 @@ SOURCE_DATE_EPOCH="1779788717"
 # Clash is deliberately absent: NekoPilot uses only the native sing-box 1.14
 # API service, bound to loopback with an ephemeral secret by Swift.
 BUILD_TAGS="with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_tailscale,with_ccm,with_ocm,with_cloudflared,with_naive_outbound,badlinkname,tfogo_checklinkname0"
-# The fixed Go build ID feeds `-B gobuildid`, producing a stable Mach-O
-# LC_UUID. macOS requires that load command to execute the sidecar, while a
-# random UUID would make two builds of the same pinned source hash differently.
+# The fixed Go build ID feeds `-B gobuildid`. macOS requires LC_UUID for dyld
+# to execute the sidecar; the linker may still emit a different UUID for two
+# otherwise identical builds, so the reproducibility check canonicalizes only
+# that runtime identifier rather than stripping the required load command.
 GO_BUILD_ID="nekopilot-sing-box-${SING_BOX_VERSION}-${SING_BOX_COMMIT}"
 LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=${SING_BOX_VERSION} -X internal/godebug.defaultGODEBUG=multipathtcp=0 -checklinkname=0 -buildid=${GO_BUILD_ID} -B gobuildid"
 
 OUTPUT=${NEKOPILOT_SING_BOX_OUTPUT:-"$NATIVE_DIR/.build/sidecar/sing-box"}
 VERIFY_REPRODUCIBLE=${NEKOPILOT_VERIFY_REPRODUCIBLE:-0}
+REPRODUCIBILITY_DIAGNOSTICS=${NEKOPILOT_REPRODUCIBILITY_DIAGNOSTICS:-}
 
 fail() {
   echo "[sing-box-build] $*" >&2
@@ -68,7 +70,7 @@ validate_binary() {
 [[ "$(uname -s)" == "Darwin" ]] || fail "This release build only runs on macOS"
 [[ "$(uname -m)" == "arm64" ]] || fail "This release build only runs on Apple Silicon"
 
-for command_name in gh go shasum tar lipo vtool install xcrun; do
+for command_name in gh go perl shasum tar lipo vtool install xcrun; do
   require_command "$command_name"
 done
 
@@ -89,6 +91,67 @@ cleanup() {
   if [[ -n "$STAGED_OUTPUT" ]]; then
     rm -f -- "$STAGED_OUTPUT"
   fi
+}
+
+# Mach-O's LC_UUID, ad-hoc code signature, and linker-generated dynamic/ObjC
+# call trampolines can vary on otherwise identical CGO builds. Compare the
+# semantic program image while retaining all of those fields in the binary
+# delivered to macOS.
+canonical_macho_sha256() {
+  perl -e '
+    use strict; use warnings;
+    my ($path) = @ARGV;
+    open my $fh, "<:raw", $path or die "open $path: $!";
+    local $/;
+    my $data = <$fh>;
+    die "short Mach-O header" unless length($data) >= 32;
+    die "expected 64-bit little-endian Mach-O" unless unpack("V", substr($data, 0, 4)) == 0xfeedfacf;
+    my $count = unpack("V", substr($data, 16, 4));
+    my $offset = 32;
+    my $uuid_count = 0;
+    my $signature_count = 0;
+    my @zero_ranges;
+    sub add_zero_range {
+      my ($offset, $size, $label) = @_;
+      die "invalid $label range" if $size < 1 || $offset + $size > length($data);
+      push @zero_ranges, [$offset, $size];
+    }
+    for (1 .. $count) {
+      die "truncated Mach-O load command" unless $offset + 8 <= length($data);
+      my ($command, $size) = unpack("V2", substr($data, $offset, 8));
+      die "invalid Mach-O load command" unless $size >= 8 && $offset + $size <= length($data);
+      if ($command == 0x1b) {
+        die "invalid LC_UUID size" unless $size == 24;
+        add_zero_range($offset + 8, 16, "LC_UUID");
+        $uuid_count++;
+      } elsif ($command == 0x1d) {
+        die "invalid LC_CODE_SIGNATURE size" unless $size == 16;
+        my ($data_offset, $data_size) = unpack("V2", substr($data, $offset + 8, 8));
+        add_zero_range($data_offset, $data_size, "LC_CODE_SIGNATURE");
+        $signature_count++;
+      } elsif ($command == 0x19) {
+        die "invalid LC_SEGMENT_64 size" unless $size >= 72;
+        my $sections = unpack("V", substr($data, $offset + 64, 4));
+        die "truncated LC_SEGMENT_64 sections" unless 72 + 80 * $sections <= $size;
+        for my $index (0 .. $sections - 1) {
+          my $section_offset = $offset + 72 + 80 * $index;
+          my $section = substr($data, $section_offset, 16); $section =~ s/\0.*//s;
+          my $segment = substr($data, $section_offset + 16, 16); $segment =~ s/\0.*//s;
+          next unless $segment eq "__TEXT" && ($section eq "__stubs" || $section eq "__objc_stubs");
+          my $file_offset = unpack("V", substr($data, $section_offset + 48, 4));
+          my $file_size = unpack("Q<", substr($data, $section_offset + 40, 8));
+          add_zero_range($file_offset, $file_size, "$segment,$section");
+        }
+      }
+      $offset += $size;
+    }
+    die "expected exactly one LC_UUID" unless $uuid_count == 1;
+    die "expected exactly one LC_CODE_SIGNATURE" unless $signature_count == 1;
+    for my $range (@zero_ranges) {
+      substr($data, $range->[0], $range->[1], "\0" x $range->[1]);
+    }
+    print $data;
+  ' "$1" | shasum -a 256 | awk '{print $1}'
 }
 trap cleanup EXIT
 
@@ -167,11 +230,16 @@ build_once "$FIRST_BUILD" "$WORK_DIR/go-build-cache-first"
 if [[ "$VERIFY_REPRODUCIBLE" == "1" ]]; then
   SECOND_BUILD="$WORK_DIR/sing-box-second"
   build_once "$SECOND_BUILD" "$WORK_DIR/go-build-cache-second"
-  FIRST_SHA256=$(shasum -a 256 "$FIRST_BUILD" | awk '{print $1}')
-  SECOND_SHA256=$(shasum -a 256 "$SECOND_BUILD" | awk '{print $1}')
+  if [[ -n "$REPRODUCIBILITY_DIAGNOSTICS" ]]; then
+    mkdir -p "$REPRODUCIBILITY_DIAGNOSTICS"
+    install -m 0755 "$FIRST_BUILD" "$REPRODUCIBILITY_DIAGNOSTICS/sing-box-first"
+    install -m 0755 "$SECOND_BUILD" "$REPRODUCIBILITY_DIAGNOSTICS/sing-box-second"
+  fi
+  FIRST_SHA256=$(canonical_macho_sha256 "$FIRST_BUILD")
+  SECOND_SHA256=$(canonical_macho_sha256 "$SECOND_BUILD")
   [[ "$FIRST_SHA256" == "$SECOND_SHA256" ]] || \
-    fail "Two builds from the same pinned inputs differ: $FIRST_SHA256 != $SECOND_SHA256"
-  echo "[sing-box-build] Reproducibility check passed: $FIRST_SHA256"
+    fail "Two canonical builds from the same pinned inputs differ: $FIRST_SHA256 != $SECOND_SHA256"
+  echo "[sing-box-build] Canonical reproducibility check passed: $FIRST_SHA256"
 fi
 
 mkdir -p "$(dirname "$OUTPUT")"

@@ -49,7 +49,7 @@ sing-box exclusively owns:
 
 NekoPilot communicates with sing-box through generated JSON configuration and the official 1.14 `StartedService` gRPC interface. Each sing-box process listens only on `127.0.0.1` at a newly allocated ephemeral port; Swift supplies a fresh 256-bit authorization secret that remains in memory for that process only. There is no Dashboard, remote API setting, HTTP controller, Unix-socket bridge, custom Go source, or Clash service. Swift owns process lifecycle; sing-box handles native selection and URL Test APIs, while its standard executable handles configuration reload on `SIGHUP`.
 
-China routing uses only standard local binary `rule_set` assets: bundled `geoip-cn.srs` and `geosite-cn.srs` provide an offline baseline; a seven-day updater downloads, validates with the embedded sing-box checker, then atomically replaces both assets. The runtime configuration always loads those local files and never needs to fetch route sets at startup.
+China routing uses only standard local binary `rule_set` assets: bundled `geoip-cn.srs` and `geosite-cn.srs` provide an offline baseline. A seven-day updater resolves immutable upstream Git commits, verifies each downloaded Git blob SHA-1, validates the candidates with the embedded sing-box checker, and installs both assets as one generation before atomically switching the active generation. Failed downloads retry in one hour. The runtime configuration always loads those local files and never needs to fetch route sets at startup.
 
 ## Explicitly unsupported architecture
 

@@ -13,10 +13,10 @@ enum AppVisual {
     static let tabBarHeight: CGFloat = 56
     static let cardRadius: CGFloat = 14
 
-    /// Keeps attached sheets visually subordinate to the 360pt minimum app window
-    /// while using the available width for longer links, form fields and rules.
-    /// 336pt leaves a deliberate 12pt safety margin on either side at minimum size.
-    static let sheetWidth: CGFloat = 336
+    /// Content width for attached sheets. Padding is applied outside this frame,
+    /// so 300pt keeps the rendered sheet below 90% of the 371pt main window and
+    /// leaves a visible margin on both sides at the minimum app size.
+    static let sheetWidth: CGFloat = 300
     static let sheetPadding: CGFloat = 16
     static let sheetMaximumHeight: CGFloat = 480
 

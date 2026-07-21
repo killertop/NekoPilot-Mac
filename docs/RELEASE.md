@@ -29,9 +29,17 @@ Manual dispatch also supports a rolling `manual` channel. A stable tag can never
 - upstream release build tags;
 - `CGO_ENABLED=1`, `GOOS=darwin`, `GOARCH=arm64`;
 - `MACOSX_DEPLOYMENT_TARGET=13.0`;
-- trimmed source paths and a fixed Go build ID that produces a stable Mach-O UUID.
+- trimmed source paths and a fixed Go build ID; the required Mach-O UUID,
+  matching ad-hoc signature, and generated dynamic/Objective-C trampolines are
+  retained for runtime compatibility but excluded from the semantic comparison
+  because the CGO linker may lay them out differently between equivalent builds.
 
-The GitHub build runs this compile twice and requires identical output hashes. This proves repeatability on the pinned runner/toolchain; package hashes themselves can still differ because DMG filesystem metadata is created at packaging time.
+The GitHub build runs this compile twice and requires identical canonical Mach-O
+hashes. Canonicalization excludes only the runtime UUID, its ad-hoc signature,
+and generated external-call trampolines; it compares the complete Go program,
+resources, metadata, and symbol data. This proves repeatability on the pinned
+runner/toolchain; package hashes themselves can still differ because DMG
+filesystem metadata is created at packaging time.
 
 ## Local preflight
 

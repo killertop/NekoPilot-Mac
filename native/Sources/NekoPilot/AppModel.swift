@@ -786,13 +786,21 @@ final class AppModel: ObservableObject {
         let generation = ruleUpdateGeneration
         ruleUpdateTask = Task { [weak self] in
             guard let self else { return }
-            let changed = await ruleSetUpdater.refreshIfDue()
-            guard !Task.isCancelled else { return }
-            if changed, status.isRunning {
+            while !Task.isCancelled, status.isRunning, generation == ruleUpdateGeneration {
+                let result = await ruleSetUpdater.refreshIfDue()
+                guard !Task.isCancelled, generation == ruleUpdateGeneration else { return }
+                if result.didUpdate {
+                    do {
+                        try await reloadRunningEngine(selectedNode: selectedNode)
+                    } catch {
+                        AppLogger.shared.warning("updated rule sets require a later reload: \(error.localizedDescription)")
+                    }
+                }
+                let delay = result.nextCheckDelay
                 do {
-                    try await reloadRunningEngine(selectedNode: selectedNode)
+                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 } catch {
-                    AppLogger.shared.warning("updated rule sets require a later reload: \(error.localizedDescription)")
+                    return
                 }
             }
             if generation == ruleUpdateGeneration { ruleUpdateTask = nil }

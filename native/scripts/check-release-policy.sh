@@ -64,6 +64,7 @@ require_text "$CORE_BUILD" 'SING_BOX_ARCHIVE_SHA256='
 require_text "$CORE_BUILD" 'vtool -show-build'
 require_text "$CORE_BUILD" './cmd/sing-box'
 require_text "$CORE_BUILD" '-B gobuildid'
+require_text "$CORE_BUILD" 'canonical_macho_sha256'
 reject_pattern "$CORE_BUILD" 'src-tauri/binaries'
 
 require_text "$PACKAGE" 'menu-bar-template.png'
