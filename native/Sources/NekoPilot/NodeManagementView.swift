@@ -24,28 +24,7 @@ struct NodeManagementView: View {
                         .padding(.vertical, 32)
                     } else {
                         SectionTitle(L10n.text("节点来源", "Node Sources")) {
-                            HStack(spacing: 12) {
-                                if model.subscriptions.contains(where: { $0.sourceType == .subscription }) {
-                                    Button {
-                                        Task { await model.refreshAllSubscriptions() }
-                                    } label: {
-                                        HStack(spacing: 5) {
-                                            if model.isRefreshingAllSubscriptions {
-                                                ProgressView().controlSize(.mini)
-                                            } else {
-                                                Image(systemName: "arrow.clockwise")
-                                            }
-                                            Text(model.isRefreshingAllSubscriptions ? L10n.text("正在更新", "Updating") : L10n.text("更新全部", "Update All"))
-                                        }
-                                        .font(AppTypography.bodyEmphasized)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .foregroundStyle(Color.accentColor)
-                                    .disabled(model.isRefreshingAllSubscriptions || !model.refreshingSubscriptionIDs.isEmpty)
-                                }
-
-                                addNodeHeaderButton
-                            }
+                            addNodeHeaderButton
                         }
 
                         sourceList(now: context.date)
@@ -201,7 +180,7 @@ struct NodeManagementView: View {
                     .frame(minWidth: 36, minHeight: 28)
                 }
                 .buttonStyle(.plain)
-                .disabled(model.isRefreshingAllSubscriptions || model.refreshingSubscriptionIDs.contains(subscription.identifier))
+                .disabled(model.refreshingSubscriptionIDs.contains(subscription.identifier))
                 .accessibilityLabel(L10n.text(
                     "更新 \(subscription.name.isEmpty ? subscription.identifier : subscription.name)",
                     "Update \(subscription.name.isEmpty ? subscription.identifier : subscription.name)"
@@ -228,14 +207,14 @@ struct NodeManagementView: View {
                 } label: {
                     Label(L10n.text("编辑", "Edit"), systemImage: "pencil")
                 }
-                .disabled(model.isRefreshingAllSubscriptions || model.refreshingSubscriptionIDs.contains(subscription.identifier))
+                .disabled(model.refreshingSubscriptionIDs.contains(subscription.identifier))
                 Divider()
                 Button(role: .destructive) {
                     deleteTarget = subscription
                 } label: {
                     Label(L10n.text("删除", "Delete"), systemImage: "trash")
                 }
-                .disabled(model.isRefreshingAllSubscriptions || model.refreshingSubscriptionIDs.contains(subscription.identifier))
+                .disabled(model.refreshingSubscriptionIDs.contains(subscription.identifier))
             } label: {
                 Image(systemName: "slider.horizontal.3")
                     .font(.system(size: 13, weight: .medium))
@@ -346,7 +325,7 @@ private struct RefreshErrorSheet: View {
                     }
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(model.refreshingSubscriptionIDs.contains(subscription.identifier) || model.isRefreshingAllSubscriptions)
+                .disabled(model.refreshingSubscriptionIDs.contains(subscription.identifier))
             }
         }
         .padding(AppVisual.sheetPadding)

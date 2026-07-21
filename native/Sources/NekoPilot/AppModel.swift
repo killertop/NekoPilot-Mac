@@ -43,7 +43,6 @@ final class AppModel: ObservableObject {
     @Published private(set) var lastAutomaticSelectionUpdate: AutoNodeSelectionUpdate?
     @Published private(set) var refreshingSubscriptionIDs: Set<String> = []
     @Published private(set) var subscriptionRefreshErrors: [String: String] = [:]
-    @Published private(set) var isRefreshingAllSubscriptions = false
 
     let paths: AppPaths
     let settings: SettingsStore
@@ -334,7 +333,6 @@ final class AppModel: ObservableObject {
 
     func refresh(_ subscription: NekoPilotCore.Subscription) async {
         guard subscription.sourceType == .subscription,
-              !isRefreshingAllSubscriptions,
               refreshingSubscriptionIDs.insert(subscription.identifier).inserted else { return }
         defer { refreshingSubscriptionIDs.remove(subscription.identifier) }
         do {
@@ -345,58 +343,6 @@ final class AppModel: ObservableObject {
         } catch {
             subscriptionRefreshErrors[subscription.identifier] = error.localizedDescription
             show(error)
-        }
-    }
-
-    func refreshAllSubscriptions() async {
-        guard !isRefreshingAllSubscriptions, refreshingSubscriptionIDs.isEmpty else { return }
-        let candidates = subscriptions.filter { $0.sourceType == .subscription }
-        guard !candidates.isEmpty else { return }
-        isRefreshingAllSubscriptions = true
-        refreshingSubscriptionIDs = Set(candidates.map(\.identifier))
-        defer {
-            refreshingSubscriptionIDs.removeAll()
-            isRefreshingAllSubscriptions = false
-        }
-        await withTaskGroup(of: (String, String?).self) { group in
-            var nextIndex = 0
-            let limit = min(3, candidates.count)
-            for _ in 0 ..< limit {
-                let subscription = candidates[nextIndex]
-                nextIndex += 1
-                group.addTask { [importer] in
-                    do {
-                        try await importer.refresh(identifier: subscription.identifier)
-                        return (subscription.identifier, nil)
-                    } catch {
-                        return (subscription.identifier, error.localizedDescription)
-                    }
-                }
-            }
-            while let (identifier, errorMessage) = await group.next() {
-                if let errorMessage {
-                    AppLogger.shared.warning("refresh failed for \(identifier): \(errorMessage)")
-                    subscriptionRefreshErrors[identifier] = errorMessage
-                } else {
-                    subscriptionRefreshErrors.removeValue(forKey: identifier)
-                }
-                if nextIndex < candidates.count {
-                    let subscription = candidates[nextIndex]
-                    nextIndex += 1
-                    group.addTask { [importer] in
-                        do {
-                            try await importer.refresh(identifier: subscription.identifier)
-                            return (subscription.identifier, nil)
-                        } catch {
-                            return (subscription.identifier, error.localizedDescription)
-                        }
-                    }
-                }
-            }
-        }
-        await refreshData()
-        if status.isRunning {
-            do { try await reloadRunningEngine(selectedNode: selectedNode) } catch { show(error) }
         }
     }
 
