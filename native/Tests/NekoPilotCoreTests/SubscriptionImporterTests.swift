@@ -52,6 +52,50 @@ struct SubscriptionImporterTests {
         #expect(nodes.map(\.originalTag) == ["VLESS · Accepted"])
     }
 
+    @Test("Editing a local node replaces its name and link atomically")
+    func editingLocalNodeReplacesNameAndLink() async throws {
+        let location = try temporaryRepositoryLocation()
+        defer { try? FileManager.default.removeItem(at: location.directory) }
+        let repository = try SubscriptionRepository(databaseURL: location.database)
+        let importer = SubscriptionImporter(repository: repository, candidateValidator: { _ in })
+        let original = "vless://00000000-0000-0000-0000-000000000001@one.example:443?security=tls#Original"
+        let replacement = "anytls://password@two.example:443?insecure=1#Replacement"
+        let identifier = try await importer.importInput(original, name: "Before")
+
+        try await importer.replace(identifier: identifier, rawInput: replacement, name: "After")
+
+        let subscription = try #require(try await repository.subscription(identifier: identifier))
+        let nodes = try await repository.nodes()
+        #expect(subscription.name == "After")
+        #expect(subscription.subscriptionURL == replacement)
+        #expect(subscription.sourceType == .localLink)
+        #expect(nodes.map(\.protocolName) == ["anytls"])
+        #expect(nodes.map(\.originalTag) == ["ANYTLS · Replacement"])
+    }
+
+    @Test("Invalid edit leaves the previous local node untouched")
+    func invalidEditLeavesPreviousNodeUntouched() async throws {
+        let location = try temporaryRepositoryLocation()
+        defer { try? FileManager.default.removeItem(at: location.directory) }
+        let repository = try SubscriptionRepository(databaseURL: location.database)
+        let importer = SubscriptionImporter(repository: repository, candidateValidator: { _ in })
+        let original = "vless://00000000-0000-0000-0000-000000000001@one.example:443?security=tls#Original"
+        let identifier = try await importer.importInput(original, name: "Before")
+
+        do {
+            try await importer.replace(identifier: identifier, rawInput: "https://example.com/sub", name: "After")
+            Issue.record("A local node accepted a subscription URL")
+        } catch {
+            // Expected: editing keeps the existing source type.
+        }
+
+        let subscription = try #require(try await repository.subscription(identifier: identifier))
+        let nodes = try await repository.nodes()
+        #expect(subscription.name == "Before")
+        #expect(subscription.subscriptionURL == original)
+        #expect(nodes.map(\.originalTag) == ["VLESS · Original"])
+    }
+
     @Test(
         "Default candidate validator runs the bundled sing-box checker",
         .enabled(if: ProcessInfo.processInfo.environment["NEKOPILOT_VALIDATE_SINGBOX_IMPORT"] == "1")
@@ -265,6 +309,6 @@ struct SubscriptionImporterTests {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("NekoPilotImporterTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return (directory, directory.appendingPathComponent("data.db"))
+        return (directory, directory.appendingPathComponent("nekopilot.sqlite3"))
     }
 }

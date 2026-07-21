@@ -98,6 +98,27 @@ struct RootView: View {
                 )
             )
         }
+        .alert(
+            L10n.text("发现新版本", "Update Available"),
+            isPresented: Binding(
+                get: { model.availableUpdate != nil },
+                set: { if !$0 { model.dismissAvailableUpdate() } }
+            )
+        ) {
+            Button(L10n.text("稍后", "Later"), role: .cancel) {
+                model.dismissAvailableUpdate()
+            }
+            Button(L10n.text("前往下载", "Download")) {
+                model.openAvailableUpdate()
+            }
+        } message: {
+            Text(
+                L10n.text(
+                    "GitHub 已发布 \(model.availableUpdate?.version ?? "")，是否打开正式版下载页面？",
+                    "Version \(model.availableUpdate?.version ?? "") is available on GitHub. Open the official download page?"
+                )
+            )
+        }
         .onChange(of: model.selectedTab) { tab in
             if tab != .home { model.cancelURLTest() }
         }

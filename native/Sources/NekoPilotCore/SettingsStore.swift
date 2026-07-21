@@ -3,19 +3,19 @@ import Darwin
 
 public actor SettingsStore {
     public enum Key {
-        public static let allowLAN = "allow_lan_key"
-        public static let autoSelect = "auto_select_fastest_node_key"
-        public static let showProtocol = "show_node_protocol_key"
-        public static let skipSystemProxy = "skip_system_proxy_key"
-        public static let proxyPort = "proxy_port_key"
+        public static let allowLAN = "allow_lan"
+        public static let autoSelect = "auto_select"
+        public static let showProtocol = "show_protocol"
+        public static let skipSystemProxy = "skip_system_proxy"
+        public static let proxyPort = "proxy_port"
         public static let directDNS = "direct_dns"
-        public static let userAgent = "user_agent_key"
-        public static let selectedNode = "selected_node_tag_key"
-        public static let selectedSubscription = "selected_subscription_identifier"
-        public static let delayHistory = "node_delay_history_key"
-        public static let clashSecret = "clash_api_secret_key"
-        public static let directRules = "custom_ruleset_direct"
-        public static let proxyRules = "custom_ruleset_proxy"
+        public static let userAgent = "user_agent"
+        public static let selectedNode = "selected_node"
+        public static let delayHistory = "delay_history"
+        public static let lastUpdateCheck = "github_release_update_last_check"
+        public static let clashSecret = "clash_api_secret"
+        public static let directRules = "rules_direct"
+        public static let proxyRules = "rules_proxy"
     }
 
     public static let defaultProxyPort = 16_789
@@ -30,12 +30,11 @@ public actor SettingsStore {
             do {
                 values = try JSONValue.decodeObject(from: Data(contentsOf: fileURL))
             } catch {
-                throw NekoPilotError.invalidSetting("settings.json")
+                throw NekoPilotError.invalidSetting("preferences.json")
             }
         } else {
             values = [:]
         }
-        try Self.removeObsoleteValues(from: &values)
     }
 
     public func bool(_ key: String, default defaultValue: Bool = false) -> Bool {
@@ -95,7 +94,7 @@ public actor SettingsStore {
             }
             result[node] = DelayRecord(
                 delay: delay,
-                measuredAt: Date(timeIntervalSince1970: measured / 1_000)
+                measuredAt: Date(timeIntervalSince1970: measured)
             )
         }
         return result
@@ -105,7 +104,7 @@ public actor SettingsStore {
         let entries = history.prefix(2_000).reduce(into: [String: JSONValue]()) { output, item in
             output[item.key] = .object([
                 "delay": item.value.delay.map { .number(Double($0)) } ?? .string("-"),
-                "measuredAt": .number(item.value.measuredAt.timeIntervalSince1970 * 1_000),
+                "measuredAt": .number(item.value.measuredAt.timeIntervalSince1970),
             ])
         }
         try commit { values[Key.delayHistory] = .object(entries) }
@@ -115,9 +114,7 @@ public actor SettingsStore {
         var result: [RoutingRule] = []
         for action in RuleAction.allCases {
             let key = action == .direct ? Key.directRules : Key.proxyRules
-            guard let raw = values[key]?.stringValue,
-                  let data = raw.data(using: .utf8),
-                  let object = try? JSONValue.decodeObject(from: data) else { continue }
+            guard let object = values[key]?.objectValue else { continue }
             for kind in RuleKind.allCases {
                 let entries = object[kind.rawValue]?.arrayValue ?? []
                 result.append(contentsOf: entries.compactMap(\.stringValue).map {
@@ -141,9 +138,7 @@ public actor SettingsStore {
                         .map(JSONValue.string)
                     object[kind.rawValue] = .array(entries)
                 }
-                let data = try JSONValue.encodeObject(object)
-                guard let raw = String(data: data, encoding: .utf8) else { continue }
-                values[action == .direct ? Key.directRules : Key.proxyRules] = .string(raw)
+                values[action == .direct ? Key.directRules : Key.proxyRules] = .object(object)
             }
         }
     }
@@ -174,9 +169,13 @@ public actor SettingsStore {
                   number >= 1, number <= 65_535 else {
                 throw NekoPilotError.invalidSetting(key)
             }
+        case Key.lastUpdateCheck:
+            guard let number = value.numberValue, number.isFinite, number >= 0 else {
+                throw NekoPilotError.invalidSetting(key)
+            }
         case Key.allowLAN, Key.autoSelect, Key.showProtocol, Key.skipSystemProxy:
             guard value.boolValue != nil else { throw NekoPilotError.invalidSetting(key) }
-        case Key.selectedNode, Key.selectedSubscription, Key.clashSecret:
+        case Key.selectedNode, Key.clashSecret:
             guard let string = value.stringValue, string.utf8.count <= 16 * 1024 else {
                 throw NekoPilotError.invalidSetting(key)
             }
@@ -197,15 +196,6 @@ public actor SettingsStore {
             let data = try JSONEncoder().encode(value)
             guard data.count <= 2 * 1024 * 1024 else { throw NekoPilotError.invalidSetting(key) }
         }
-    }
-
-    private static func removeObsoleteValues(from values: inout [String: JSONValue]) throws {
-        let removed = [
-            "developer_toggle_key", "stage_version_key", "support_local_file_key",
-            "theme_pref_key", "custom_ruleset_reject", "rule_mode_key", "use_dhcp_key",
-            "language", "last_update_check_time_key",
-        ]
-        removed.forEach { values.removeValue(forKey: $0) }
     }
 
     private static func isIPAddress(_ value: String) -> Bool {

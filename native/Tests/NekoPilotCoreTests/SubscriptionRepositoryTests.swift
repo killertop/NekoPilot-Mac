@@ -4,37 +4,32 @@ import Testing
 
 @Suite("Subscription repository", .serialized)
 struct SubscriptionRepositoryTests {
-    @Test("Legacy migration deduplicates rows and adds source type")
-    func legacyMigrationDeduplicatesAndAddsSourceType() async throws {
+    @Test("Fresh schema keeps only current subscription fields and cascades deletes")
+    func freshSchemaUsesCurrentConstraints() async throws {
         let location = try temporaryDatabaseLocation()
         defer { try? FileManager.default.removeItem(at: location.directory) }
-        try createLegacyDatabase(at: location.database)
-
         let repository = try SubscriptionRepository(databaseURL: location.database)
+        let identifier = try await repository.upsert(
+            url: "https://example.com/sub",
+            name: "Current",
+            sourceType: .subscription,
+            config: configuration(tag: "node")
+        )
         let subscriptions = try await repository.subscriptions()
-        let migratedNodes = try await repository.nodes()
-        #expect(subscriptions.map(\.identifier) == ["new"])
+        let nodes = try await repository.nodes()
+        #expect(subscriptions.map(\.identifier) == [identifier])
         #expect(subscriptions.first?.sourceType == .subscription)
-        #expect(subscriptions.first?.lastUpdateTime.timeIntervalSince1970 == 1_784_554_018)
-        #expect(migratedNodes.map(\.originalTag) == ["new-node"])
+        #expect(nodes.map(\.originalTag) == ["node"])
 
         let inspection = try SQLiteDatabase(url: location.database)
-        let sourceTypeColumns = try inspection.query("PRAGMA table_info(subscriptions)") {
+        let columns = try inspection.query("PRAGMA table_info(subscriptions)") {
             SQLiteDatabase.text($0, 1) ?? ""
         }
-        #expect(sourceTypeColumns.contains("source_type"))
+        #expect(columns == ["id", "identifier", "name", "subscription_url", "last_update_time", "source_type"])
         #expect(try count(in: inspection, table: "subscriptions") == 1)
         #expect(try count(in: inspection, table: "subscription_configs") == 1)
-        let storedTimestamp = try inspection.query(
-            "SELECT last_update_time FROM subscriptions WHERE identifier = 'new'"
-        ) { SQLiteDatabase.integer($0, 0) }.first
-        #expect(storedTimestamp == 1_784_554_018_889)
-        let indexNames = try inspection.query(
-            "SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('subscriptions_url_unique', 'subscription_configs_identifier_unique')"
-        ) { SQLiteDatabase.text($0, 0) ?? "" }
-        #expect(Set(indexNames) == Set(["subscriptions_url_unique", "subscription_configs_identifier_unique"]))
 
-        try await repository.delete(identifier: "new")
+        try await repository.delete(identifier: identifier)
         #expect(try count(in: inspection, table: "subscriptions") == 0)
         #expect(try count(in: inspection, table: "subscription_configs") == 0)
     }
@@ -56,7 +51,7 @@ struct SubscriptionRepositoryTests {
             "SELECT last_update_time FROM subscriptions WHERE identifier = ?",
             bindings: [.text(identifier)]
         ) { SQLiteDatabase.integer($0, 0) }.first
-        #expect(storedTimestamp.map { $0 >= SubscriptionRepository.millisecondEpochThreshold } == true)
+        #expect(storedTimestamp.map { $0 > 0 && $0 < 100_000_000_000 } == true)
         try inspection.execute(
             "CREATE TRIGGER reject_config_update BEFORE UPDATE ON subscription_configs BEGIN SELECT RAISE(ABORT, 'test failure'); END"
         )
@@ -79,25 +74,42 @@ struct SubscriptionRepositoryTests {
         #expect(nodes.map(\.originalTag) == ["original"])
     }
 
-    private func createLegacyDatabase(at url: URL) throws {
-        let database = try SQLiteDatabase(url: url)
-        try database.execute(
-            "CREATE TABLE subscriptions (id INTEGER PRIMARY KEY AUTOINCREMENT, identifier TEXT NOT NULL UNIQUE, name TEXT, used_traffic INTEGER DEFAULT 0, total_traffic INTEGER DEFAULT 0, subscription_url TEXT, official_website TEXT, expire_time INTEGER DEFAULT 0, last_update_time INTEGER DEFAULT 0)"
+    @Test("Editing never overwrites another source that owns the requested URL")
+    func editingDoesNotOverwriteAnotherSource() async throws {
+        let location = try temporaryDatabaseLocation()
+        defer { try? FileManager.default.removeItem(at: location.directory) }
+        let repository = try SubscriptionRepository(databaseURL: location.database)
+        let first = try await repository.upsert(
+            url: "https://one.example/sub",
+            name: "One",
+            sourceType: .subscription,
+            config: configuration(tag: "one")
         )
-        try database.execute(
-            "CREATE TABLE subscription_configs (id INTEGER PRIMARY KEY AUTOINCREMENT, identifier TEXT NOT NULL, config_content TEXT)"
+        let second = try await repository.upsert(
+            url: "https://two.example/sub",
+            name: "Two",
+            sourceType: .subscription,
+            config: configuration(tag: "two")
         )
-        try database.execute(
-            "INSERT INTO subscriptions(identifier, name, subscription_url, last_update_time) VALUES ('old', 'Old', 'https://example.com/sub', 1784554000000), ('new', 'New', 'https://example.com/sub', 1784554018889)"
-        )
-        try database.execute(
-            "INSERT INTO subscription_configs(identifier, config_content) VALUES ('old', ?), ('new', ?), ('new', ?), ('orphan', '{}')",
-            bindings: [
-                .text(try configurationText(tag: "old-node")),
-                .text(try configurationText(tag: "stale-new-node")),
-                .text(try configurationText(tag: "new-node")),
-            ]
-        )
+
+        do {
+            _ = try await repository.upsert(
+                url: "https://one.example/sub",
+                name: "Changed",
+                sourceType: .subscription,
+                config: configuration(tag: "changed"),
+                identifier: second
+            )
+            Issue.record("An edit overwrote another source")
+        } catch {
+            // Expected: the unique source URL constraint aborts the transaction.
+        }
+
+        let sources = try await repository.subscriptions()
+        #expect(sources.count == 2)
+        #expect(try await repository.subscription(identifier: first)?.name == "One")
+        #expect(try await repository.subscription(identifier: second)?.name == "Two")
+        #expect(Set(try await repository.nodes().map(\.originalTag)) == Set(["one", "two"]))
     }
 
     private func configuration(tag: String) -> [String: JSONValue] {
@@ -110,14 +122,6 @@ struct SubscriptionRepositoryTests {
                 "uuid": .string("uuid"),
             ])]),
         ]
-    }
-
-    private func configurationText(tag: String) throws -> String {
-        let data = try JSONValue.encodeObject(configuration(tag: tag))
-        guard let text = String(data: data, encoding: .utf8) else {
-            throw NekoPilotError.invalidSubscription
-        }
-        return text
     }
 
     private func temporaryDatabaseLocation() throws -> (directory: URL, database: URL) {

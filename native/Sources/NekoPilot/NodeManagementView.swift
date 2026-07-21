@@ -7,7 +7,7 @@ struct NodeManagementView: View {
     @ObservedObject var model: AppModel
     @State private var showingAdd = false
     @State private var refreshingAll = false
-    @State private var renameTarget: NekoPilotCore.Subscription?
+    @State private var editTarget: NekoPilotCore.Subscription?
     @State private var detailTarget: NekoPilotCore.Subscription?
 
     var body: some View {
@@ -67,10 +67,10 @@ struct NodeManagementView: View {
         .sheet(isPresented: $showingAdd) {
             AddNodeSheet(model: model, isPresented: $showingAdd)
         }
-        .sheet(item: $renameTarget) { target in
-            RenameSourceSheet(model: model, subscription: target, isPresented: Binding(
-                get: { renameTarget != nil },
-                set: { if !$0 { renameTarget = nil } }
+        .sheet(item: $editTarget) { target in
+            EditSourceSheet(model: model, subscription: target, isPresented: Binding(
+                get: { editTarget != nil },
+                set: { if !$0 { editTarget = nil } }
             ))
         }
         .sheet(item: $detailTarget) { target in
@@ -100,7 +100,7 @@ struct NodeManagementView: View {
 
                     VStack(alignment: .leading, spacing: 3) {
                         Text(subscription.name.isEmpty ? subscription.identifier : subscription.name)
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.system(size: 14.5, weight: .medium))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
                         Text(sourceSubtitle(subscription))
@@ -128,9 +128,9 @@ struct NodeManagementView: View {
                     }
                 }
                 Button {
-                    renameTarget = subscription
+                    editTarget = subscription
                 } label: {
-                    Label(L10n.text("重命名", "Rename"), systemImage: "pencil")
+                    Label(L10n.text("编辑", "Edit"), systemImage: "pencil")
                 }
                 Divider()
                 Button(role: .destructive) {
@@ -237,34 +237,64 @@ private struct AddNodeSheet: View {
     }
 }
 
-private struct RenameSourceSheet: View {
+private struct EditSourceSheet: View {
     @ObservedObject var model: AppModel
     let subscription: NekoPilotCore.Subscription
     @Binding var isPresented: Bool
     @State private var name: String
+    @State private var input: String
+    @State private var saving = false
 
     init(model: AppModel, subscription: NekoPilotCore.Subscription, isPresented: Binding<Bool>) {
         self.model = model
         self.subscription = subscription
         _isPresented = isPresented
         _name = State(initialValue: subscription.name)
+        _input = State(initialValue: subscription.subscriptionURL ?? "")
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text(L10n.text("重命名", "Rename")).font(.title2.bold())
+            HStack {
+                Text(L10n.text("编辑节点", "Edit Node Source")).font(.title2.bold())
+                Spacer()
+                Button { isPresented = false } label: { Image(systemName: "xmark.circle.fill") }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+            }
+            Text(
+                subscription.sourceType == .subscription
+                    ? L10n.text("修改名称或机场订阅 URL。保存前会重新下载并校验节点。", "Change the name or subscription URL. Nodes are downloaded and validated before saving.")
+                    : L10n.text("修改名称或单节点链接。保存前会重新解析并校验节点。", "Change the name or single-node link. The node is parsed and validated before saving.")
+            )
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
             TextField(L10n.text("名称", "Name"), text: $name).textFieldStyle(.roundedBorder)
+            TextEditor(text: $input)
+                .font(.system(size: 12, design: .monospaced))
+                .frame(minHeight: 110)
+                .padding(8)
+                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                .overlay { RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.12)) }
             HStack {
                 Spacer()
                 Button(L10n.text("取消", "Cancel")) { isPresented = false }
-                Button(L10n.text("保存", "Save")) {
+                    .keyboardShortcut(.cancelAction)
+                Button {
                     Task {
-                        await model.rename(subscription, name: name)
-                        isPresented = false
+                        saving = true
+                        let success = await model.edit(subscription, name: name, input: input)
+                        saving = false
+                        if success { isPresented = false }
                     }
+                } label: {
+                    if saving { ProgressView().controlSize(.small) } else { Text(L10n.text("保存", "Save")) }
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(
+                    saving || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                        input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                )
             }
         }
         .padding(22)
@@ -285,7 +315,7 @@ private struct SourceDetailSheet: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(subscription.name.isEmpty ? subscription.identifier : subscription.name)
-                            .font(.system(size: 20, weight: .semibold))
+                            .font(.system(size: 17, weight: .medium))
                             .lineLimit(1)
                         Text(L10n.text("节点来源详情", "Node Source Details"))
                             .font(.system(size: 12))
@@ -323,7 +353,11 @@ private struct SourceDetailSheet: View {
                         if let url = subscription.subscriptionURL, !url.isEmpty {
                             AppCard {
                                 VStack(alignment: .leading, spacing: 10) {
-                                    Text(L10n.text("订阅 URL", "Subscription URL"))
+                                    Text(
+                                        subscription.sourceType == .subscription
+                                            ? L10n.text("订阅 URL", "Subscription URL")
+                                            : L10n.text("节点链接", "Node Link")
+                                    )
                                         .font(.system(size: 11, weight: .semibold))
                                         .foregroundStyle(.secondary)
                                     Text(url)
@@ -334,7 +368,12 @@ private struct SourceDetailSheet: View {
                                     Button {
                                         copyToPasteboard(url)
                                     } label: {
-                                        Label(L10n.text("复制订阅 URL", "Copy Subscription URL"), systemImage: "doc.on.doc")
+                                        Label(
+                                            subscription.sourceType == .subscription
+                                                ? L10n.text("复制订阅 URL", "Copy Subscription URL")
+                                                : L10n.text("复制节点链接", "Copy Node Link"),
+                                            systemImage: "doc.on.doc"
+                                        )
                                             .font(.system(size: 12, weight: .medium))
                                     }
                                     .buttonStyle(.plain)
@@ -408,7 +447,7 @@ private struct SourceDetailSheet: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Text(displayName(node))
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 13, weight: .regular))
                     .lineLimit(1)
                 Spacer(minLength: 6)
                 Text(node.protocolName.uppercased())

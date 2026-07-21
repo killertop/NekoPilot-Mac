@@ -50,6 +50,16 @@ swift run --package-path native NekoPilotCoreChecks
 native/scripts/package-macos.sh
 ```
 
+Activate the tracked native pre-commit and pre-push checks once per checkout:
+
+```bash
+make hooks
+```
+
+The pre-commit hook enforces the architecture policy and compiles the Swift
+application. The pre-push hook runs the complete native test suite. These
+hooks replace the retired Husky/Deno hooks and require no Node dependency.
+
 The package script performs these hard checks:
 
 - application and sing-box are arm64-only;
@@ -62,6 +72,7 @@ The package script performs these hard checks:
 - both the mounted DMG and extracted app archive pass the same bundle checks;
 - `SHA256SUMS` contains exactly the DMG and archive.
 - the real packaged executable creates exactly one visible initial window, rejects a second instance, and completes a normal quit handshake.
+- when the build host grants Accessibility permission, the packaged SwiftUI window exposes Home, Nodes, the Add Node sheet, and Settings through the macOS accessibility tree and survives navigation back to Home; hosts without that permission report this check as skipped instead of fabricating a pass.
 
 Passing these checks still does not prove real proxy egress.
 

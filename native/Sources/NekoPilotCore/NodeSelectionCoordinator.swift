@@ -45,9 +45,6 @@ public actor NodeSelectionCoordinator {
             do {
                 try await engine.select(node: request.node)
                 try await settings.set(.string(request.node), for: SettingsStore.Key.selectedNode)
-                if let source = Self.sourceIdentifier(from: request.node) {
-                    try await settings.set(.string(source), for: SettingsStore.Key.selectedSubscription)
-                }
                 for continuation in continuations.values { continuation.yield(request.node) }
                 request.continuation.resume()
             } catch {
@@ -59,13 +56,5 @@ public actor NodeSelectionCoordinator {
 
     private func removeContinuation(_ identifier: UUID) {
         continuations.removeValue(forKey: identifier)
-    }
-
-    nonisolated public static func sourceIdentifier(from runtimeTag: String) -> String? {
-        guard runtimeTag.hasPrefix("@np:") else { return nil }
-        let remainder = runtimeTag.dropFirst(4)
-        guard let separator = remainder.firstIndex(of: ":") else { return nil }
-        let identifier = remainder[..<separator]
-        return identifier.isEmpty ? nil : String(identifier)
     }
 }

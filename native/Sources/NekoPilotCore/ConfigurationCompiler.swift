@@ -17,7 +17,7 @@ public actor ConfigurationCompiler {
         var config = try Self.loadTemplate()
         let port = await settings.proxyPort()
         let allowLAN = await settings.bool(SettingsStore.Key.allowLAN)
-        let dns = await settings.string(SettingsStore.Key.directDNS, default: "223.5.5.5")
+        let dns = await settings.string(SettingsStore.Key.directDNS, default: DNSResolverDetector.fallback)
         let secret = try await settings.clashSecret()
         let rules = await settings.rules()
         try installRuleSetBaseline()
@@ -100,7 +100,7 @@ public actor ConfigurationCompiler {
                 guard var server = value.objectValue,
                       server["tag"]?.stringValue == "system" else { return value }
                 server["type"] = .string("udp")
-                server["server"] = .string(Self.validIPAddress(directDNS) ? directDNS : "223.5.5.5")
+                server["server"] = .string(Self.validIPAddress(directDNS) ? directDNS : DNSResolverDetector.fallback)
                 server["server_port"] = .number(53)
                 return .object(server)
             }

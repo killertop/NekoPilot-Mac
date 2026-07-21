@@ -50,6 +50,16 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 done
 [[ "${WINDOW_COUNT:-0}" == "1" ]] || fail "Expected one visible packaged-app window, found ${WINDOW_COUNT:-0}"
 
+set +e
+swift "$SCRIPT_DIR/ui-smoke.swift" "$APP_PID"
+UI_SMOKE_STATUS=$?
+set -e
+case "$UI_SMOKE_STATUS" in
+  0) ;;
+  77) echo "[app-smoke] Accessibility navigation skipped: test runner permission is unavailable" ;;
+  *) fail "Native UI navigation smoke test failed" ;;
+esac
+
 CFFIXED_USER_HOME="$SMOKE_HOME" "$APP_EXECUTABLE" >>"$LOG_FILE" 2>&1 &
 SECOND_PID=$!
 for _ in 1 2 3 4 5; do

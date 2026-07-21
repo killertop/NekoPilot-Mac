@@ -43,7 +43,7 @@ public actor SubscriptionImporter {
             let resolvedName = nodeName.flatMap { $0.isEmpty ? nil : $0 } ?? fallback
             try await candidateValidator(config)
             return try await repository.upsert(
-                url: nil,
+                url: input,
                 name: resolvedName,
                 sourceType: .localLink,
                 config: config
@@ -62,6 +62,43 @@ public actor SubscriptionImporter {
             name: resolvedName,
             sourceType: .subscription,
             config: config
+        )
+    }
+
+    public func replace(identifier: String, rawInput: String, name: String) async throws {
+        guard let existing = try await repository.subscription(identifier: identifier) else {
+            throw NekoPilotError.invalidLink
+        }
+        let input = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !input.isEmpty, !resolvedName.isEmpty else { throw NekoPilotError.invalidLink }
+
+        let config: [String: JSONValue]
+        let sourceURL: String
+        switch existing.sourceType {
+        case .localLink:
+            guard let scheme = URLComponents(string: input)?.scheme?.lowercased(),
+                  ProxyLinkParser.supportedSchemes.contains(scheme) else {
+                throw NekoPilotError.invalidLink
+            }
+            config = try Self.validateConfiguration(ProxyLinkParser.parse(input))
+            sourceURL = input
+        case .subscription:
+            guard let url = URL(string: input),
+                  ["http", "https"].contains(url.scheme?.lowercased() ?? "") else {
+                throw NekoPilotError.invalidLink
+            }
+            config = try await fetchConfiguration(from: url)
+            sourceURL = url.absoluteString
+        }
+
+        try await candidateValidator(config)
+        _ = try await repository.upsert(
+            url: sourceURL,
+            name: resolvedName,
+            sourceType: existing.sourceType,
+            config: config,
+            identifier: identifier
         )
     }
 

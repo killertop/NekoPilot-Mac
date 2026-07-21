@@ -1,4 +1,4 @@
-.PHONY: help sidecar dev test check build bump clean
+.PHONY: help sidecar dev test check build hooks bump clean
 
 help:
 	@echo "Available targets:"
@@ -7,6 +7,7 @@ help:
 	@echo "  test     Run Swift unit and native core checks"
 	@echo "  check    Enforce the Swift/Go Apple Silicon architecture"
 	@echo "  build    Build and verify the native Apple Silicon package"
+	@echo "  hooks    Install repository-local Swift build/test hooks"
 	@echo "  bump     Increment native/VERSION patch number"
 	@echo "  clean    Remove generated Swift and package outputs"
 
@@ -26,6 +27,9 @@ check:
 
 build: sidecar check
 	native/scripts/package-macos.sh
+
+hooks:
+	native/scripts/install-git-hooks.sh
 
 bump:
 	native/scripts/version.sh --bump-patch

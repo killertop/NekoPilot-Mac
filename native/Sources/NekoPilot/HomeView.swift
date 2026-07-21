@@ -117,7 +117,7 @@ struct HomeView: View {
                             Image(systemName: "arrow.clockwise")
                                 .font(.system(size: 11, weight: .semibold))
                         }
-                        Text(model.isURLTesting ? L10n.text("测速中", "Testing") : "URL Test")
+                        Text(model.isURLTesting ? L10n.text("测速中", "Testing") : L10n.text("测速", "Speed Test"))
                     }
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Color.accentColor)
@@ -155,7 +155,7 @@ struct HomeView: View {
         } label: {
             HStack(spacing: 8) {
                 Text(model.displayName(for: node))
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.system(size: 14, weight: .regular))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -192,7 +192,7 @@ struct HomeView: View {
     private func delayLabel(_ node: ProxyNode) -> some View {
         if let delay = model.delayHistory[node.runtimeTag]?.delay {
             Text("\(delay)ms")
-                .font(.system(size: 14, weight: .medium))
+                .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(delay < 250 ? Color.green : delay < 600 ? Color.orange : Color.red)
         } else if model.delayHistory[node.runtimeTag] != nil {
             Text(L10n.text("超时", "Timeout"))
@@ -200,7 +200,7 @@ struct HomeView: View {
                 .foregroundStyle(AppVisual.tertiaryLabel(colorScheme))
         } else {
             Text("—")
-                .font(.system(size: 14, weight: .medium))
+                .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(AppVisual.tertiaryLabel(colorScheme))
         }
     }

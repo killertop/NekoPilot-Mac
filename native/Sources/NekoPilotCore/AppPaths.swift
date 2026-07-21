@@ -31,10 +31,10 @@ public struct AppPaths: Sendable {
         return AppPaths(applicationSupport: support, logs: logs)
     }
 
-    public var database: URL { applicationSupport.appendingPathComponent("data.db") }
-    public var settings: URL { applicationSupport.appendingPathComponent("settings.json") }
-    public var runtimeConfig: URL { applicationSupport.appendingPathComponent("config.json") }
-    public var cacheDatabase: URL { applicationSupport.appendingPathComponent("mixed-cache-rule-v2.db") }
+    public var database: URL { applicationSupport.appendingPathComponent("nekopilot.sqlite3") }
+    public var settings: URL { applicationSupport.appendingPathComponent("preferences.json") }
+    public var runtimeConfig: URL { applicationSupport.appendingPathComponent("runtime.json") }
+    public var cacheDatabase: URL { applicationSupport.appendingPathComponent("sing-box-cache.sqlite3") }
     public var proxyOwnership: URL { applicationSupport.appendingPathComponent("system-proxy-owner.json") }
     public var engineOwnership: URL { applicationSupport.appendingPathComponent("sing-box-owner.json") }
     public var ruleSets: URL { applicationSupport.appendingPathComponent("rule-sets", isDirectory: true) }

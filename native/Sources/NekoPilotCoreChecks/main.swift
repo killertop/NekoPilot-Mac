@@ -42,24 +42,32 @@ checks.append(("base64 subscription", {
     try expect(config["outbounds"]?.arrayValue?.count == 1, "base64 subscription did not produce one node")
 }))
 
-checks.append(("legacy settings compatibility", {
+checks.append(("settings persistence", {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("NekoPilot-Settings-\(UUID().uuidString)", isDirectory: true)
     defer { try? FileManager.default.removeItem(at: directory) }
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    let file = directory.appendingPathComponent("settings.json")
+    let file = directory.appendingPathComponent("preferences.json")
     let settings = try SettingsStore(fileURL: file)
     try await settings.set(.number(17_777), for: SettingsStore.Key.proxyPort)
     try await settings.set(.bool(true), for: SettingsStore.Key.showProtocol)
     let history = ["@np:source:node": DelayRecord(delay: 88, measuredAt: Date(timeIntervalSince1970: 1_000))]
     try await settings.replaceDelayHistory(history)
+    try await settings.replaceRules([
+        RoutingRule(action: .direct, kind: .domainSuffix, value: ".example.local"),
+    ])
     let reopened = try SettingsStore(fileURL: file)
     let reopenedPort = await reopened.proxyPort()
     let reopenedProtocol = await reopened.bool(SettingsStore.Key.showProtocol)
     let reopenedHistory = await reopened.delayHistory()
+    let reopenedRules = await reopened.rules()
     try expect(reopenedPort == 17_777, "proxy port did not persist")
     try expect(reopenedProtocol, "protocol setting did not persist")
     try expect(reopenedHistory["@np:source:node"]?.delay == 88, "delay history did not persist")
+    try expect(
+        reopenedRules.contains { $0.action == .direct && $0.kind == .domainSuffix && $0.value == ".example.local" },
+        "routing rules did not persist"
+    )
 }))
 
 checks.append(("repository and config compiler", {
@@ -98,86 +106,44 @@ checks.append(("repository and config compiler", {
     )
 }))
 
-checks.append(("selection source identifier", {
-    try expect(
-        NodeSelectionCoordinator.sourceIdentifier(from: "@np:source-a:node") == "source-a",
-        "selection source identifier parsing changed"
-    )
-    try expect(
-        NodeSelectionCoordinator.sourceIdentifier(from: "plain-node") == nil,
-        "plain node unexpectedly produced a source identifier"
-    )
-}))
-
-if ProcessInfo.processInfo.environment["NEKOPILOT_VALIDATE_EXISTING_DATA"] == "1" {
-    checks.append(("existing user data compiles with native core", {
-        let sourceRoot = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/dev.nekopilot.desktop", isDirectory: true)
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("NekoPilot-Existing-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        for name in ["data.db", "settings.json"] {
-            let source = sourceRoot.appendingPathComponent(name)
-            if FileManager.default.fileExists(atPath: source.path) {
-                try FileManager.default.copyItem(at: source, to: directory.appendingPathComponent(name))
-            }
-        }
-        let paths = AppPaths(applicationSupport: directory, logs: directory.appendingPathComponent("logs"))
-        let settings = try SettingsStore(fileURL: paths.settings)
-        let repository = try SubscriptionRepository(databaseURL: paths.database)
-        let nodes = try await repository.nodes()
-        try expect(!nodes.isEmpty, "existing database has no usable nodes")
-        let selected = (await settings.string(SettingsStore.Key.selectedNode)).isEmpty
-            ? nodes.first?.runtimeTag
-            : await settings.string(SettingsStore.Key.selectedNode)
-        let compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
-        let configuration = try await compiler.compile(selectedNode: selected)
-        try await SingBoxValidator.validate(configuration: configuration)
-    }))
+func importedTestNode(repository: SubscriptionRepository) async throws -> ProxyNode {
+    guard let raw = ProcessInfo.processInfo.environment["NEKOPILOT_TEST_NODE_URL"]?
+        .trimmingCharacters(in: .whitespacesAndNewlines),
+        !raw.isEmpty else {
+        throw CheckFailure(description: "NEKOPILOT_TEST_NODE_URL is required for live validation")
+    }
+    let importer = SubscriptionImporter(repository: repository)
+    let identifier = try await importer.importInput(raw, name: "Runtime Test")
+    guard let node = try await repository.nodes().first(where: { $0.sourceIdentifier == identifier }) else {
+        throw CheckFailure(description: "the supplied test source produced no usable node")
+    }
+    return node
 }
 
 if ProcessInfo.processInfo.environment["NEKOPILOT_VALIDATE_REAL_EGRESS"] == "1" {
     checks.append(("offline URL Test reaches the internet", {
-        let sourceRoot = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/dev.nekopilot.desktop", isDirectory: true)
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("NekoPilot-Egress-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        for name in ["data.db", "settings.json"] {
-            try FileManager.default.copyItem(
-                at: sourceRoot.appendingPathComponent(name),
-                to: directory.appendingPathComponent(name)
-            )
-        }
         let paths = AppPaths(applicationSupport: directory, logs: directory.appendingPathComponent("logs"))
         let settings = try SettingsStore(fileURL: paths.settings)
         let repository = try SubscriptionRepository(databaseURL: paths.database)
         let compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
         let clash = ClashAPIClient(settings: settings)
         let tester = URLTester(compiler: compiler, clashAPI: clash)
-        let nodes = try await repository.nodes()
-        guard let node = nodes.first else { throw CheckFailure(description: "no node available for URL Test") }
+        let node = try await importedTestNode(repository: repository)
         let result = await tester.test(nodes: [node], engineRunning: false)
-        try expect(result[node.runtimeTag]?.delay != nil, "offline URL Test failed for the first stored node")
+        try expect(result[node.runtimeTag]?.delay != nil, "offline URL Test failed for the supplied node")
     }))
 }
 
 if ProcessInfo.processInfo.environment["NEKOPILOT_VALIDATE_ENGINE"] == "1" {
     checks.append(("native supervisor starts and stops sing-box", {
-        let sourceRoot = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/dev.nekopilot.desktop", isDirectory: true)
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("NekoPilot-Engine-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        for name in ["data.db", "settings.json"] {
-            try FileManager.default.copyItem(
-                at: sourceRoot.appendingPathComponent(name),
-                to: directory.appendingPathComponent(name)
-            )
-        }
         let paths = AppPaths(applicationSupport: directory, logs: directory.appendingPathComponent("logs"))
         AppLogger.shared.configure(destination: paths.logFile)
         let settings = try SettingsStore(fileURL: paths.settings)
@@ -188,8 +154,7 @@ if ProcessInfo.processInfo.environment["NEKOPILOT_VALIDATE_ENGINE"] == "1" {
         let clash = ClashAPIClient(settings: settings)
         let proxy = SystemProxyManager(markerURL: paths.proxyOwnership)
         let engine = EngineSupervisor(settings: settings, compiler: compiler, systemProxy: proxy, clashAPI: clash)
-        let nodes = try await repository.nodes()
-        guard let selected = nodes.first?.runtimeTag else { throw CheckFailure(description: "no node available") }
+        let selected = try await importedTestNode(repository: repository).runtimeTag
         do {
             try await engine.start(selectedNode: selected)
             let runningStatus = await engine.currentStatus()

@@ -1,0 +1,8 @@
+#!/bin/bash
+set -euo pipefail
+
+ROOT=$(git rev-parse --show-toplevel)
+cd "$ROOT"
+
+native/scripts/check-release-policy.sh
+swift build --package-path native

@@ -38,6 +38,7 @@ final class AppModel: ObservableObject {
     @Published var isInitialized = false
     @Published var pendingDeepLink: PendingDeepLink?
     @Published var pendingLANEnable = false
+    @Published var availableUpdate: GitHubReleaseUpdate?
 
     let paths: AppPaths
     let settings: SettingsStore
@@ -51,6 +52,7 @@ final class AppModel: ObservableObject {
     let selection: NodeSelectionCoordinator
     let automaticSelection: AutoNodeSelectionService
     let ruleSetUpdater: RuleSetUpdater
+    let releaseChecker: GitHubReleaseChecker
     let networkReadiness = NetworkReadiness()
 
     private var statusTask: Task<Void, Never>?
@@ -60,6 +62,7 @@ final class AppModel: ObservableObject {
     private var urlTestTask: Task<Void, Never>?
     private var wakeTask: Task<Void, Never>?
     private var ruleUpdateTask: Task<Void, Never>?
+    private var releaseCheckTask: Task<Void, Never>?
     private var selectionGeneration = 0
     private var sleepStartedAt: Date?
     private var wasRunningBeforeSleep = false
@@ -86,8 +89,9 @@ final class AppModel: ObservableObject {
                 let recovery = FileManager.default.temporaryDirectory
                     .appendingPathComponent("NekoPilot-Recovery-\(UUID().uuidString)", isDirectory: true)
                 try FileManager.default.createDirectory(at: recovery, withIntermediateDirectories: true)
-                candidateSettings = try SettingsStore(fileURL: recovery.appendingPathComponent("settings.json"))
-                candidateRepository = try SubscriptionRepository(databaseURL: recovery.appendingPathComponent("data.db"))
+                let recoveryPaths = AppPaths(applicationSupport: recovery, logs: recovery.appendingPathComponent("logs"))
+                candidateSettings = try SettingsStore(fileURL: recoveryPaths.settings)
+                candidateRepository = try SubscriptionRepository(databaseURL: recoveryPaths.database)
                 storageAvailable = false
                 bootstrapError = L10n.text(
                     "本地数据无法读取，应用已进入安全恢复模式；原文件没有被覆盖。\n\(error.localizedDescription)",
@@ -143,6 +147,7 @@ final class AppModel: ObservableObject {
             selection: selection
         )
         ruleSetUpdater = RuleSetUpdater(paths: paths)
+        releaseChecker = GitHubReleaseChecker(settings: settings)
         AppLogger.shared.configure(destination: paths.logFile)
     }
 
@@ -154,6 +159,7 @@ final class AppModel: ObservableObject {
         urlTestTask?.cancel()
         wakeTask?.cancel()
         ruleUpdateTask?.cancel()
+        releaseCheckTask?.cancel()
     }
 
     func initialize() {
@@ -203,6 +209,7 @@ final class AppModel: ObservableObject {
             await loadSettings()
             await refreshData()
             await automaticSelection.start()
+            scheduleReleaseCheck()
         }
     }
 
@@ -213,10 +220,18 @@ final class AppModel: ObservableObject {
             async let loadedSources = repository.subscriptions()
             nodes = try await loadedNodes
             subscriptions = try await loadedSources
+            let availableTags = Set(nodes.map(\.runtimeTag))
+            let currentHistory = delayHistory.filter { availableTags.contains($0.key) }
+            if currentHistory.count != delayHistory.count {
+                delayHistory = currentHistory
+                try await settings.replaceDelayHistory(currentHistory)
+            }
             if selectedNode == nil || !nodes.contains(where: { $0.runtimeTag == selectedNode }) {
                 selectedNode = nodes.first?.runtimeTag
                 if let selectedNode {
                     try await settings.set(.string(selectedNode), for: SettingsStore.Key.selectedNode)
+                } else {
+                    try await settings.set(nil, for: SettingsStore.Key.selectedNode)
                 }
             }
             rebuildSortedNodes()
@@ -331,20 +346,24 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func edit(_ subscription: NekoPilotCore.Subscription, name: String, input: String) async -> Bool {
+        guard storageAvailable, !isShuttingDown else { return false }
+        do {
+            try await importer.replace(identifier: subscription.identifier, rawInput: input, name: name)
+            await refreshData()
+            if status.isRunning { try await reloadRunningEngine(selectedNode: selectedNode) }
+            return true
+        } catch {
+            show(error)
+            return false
+        }
+    }
+
     func delete(_ subscription: NekoPilotCore.Subscription) async {
         do {
             try await repository.delete(identifier: subscription.identifier)
             await refreshData()
             if status.isRunning { try await reloadRunningEngine(selectedNode: selectedNode) }
-        } catch {
-            show(error)
-        }
-    }
-
-    func rename(_ subscription: NekoPilotCore.Subscription, name: String) async {
-        do {
-            try await repository.rename(identifier: subscription.identifier, name: name)
-            await refreshData()
         } catch {
             show(error)
         }
@@ -426,6 +445,16 @@ final class AppModel: ObservableObject {
 
     func cancelAllowLAN() {
         pendingLANEnable = false
+    }
+
+    func openAvailableUpdate() {
+        guard let update = availableUpdate else { return }
+        availableUpdate = nil
+        NSWorkspace.shared.open(update.url)
+    }
+
+    func dismissAvailableUpdate() {
+        availableUpdate = nil
     }
 
     private func applyAllowLAN(_ value: Bool) async {
@@ -573,6 +602,8 @@ final class AppModel: ObservableObject {
         let updatingRules = ruleUpdateTask
         updatingRules?.cancel()
         ruleUpdateTask = nil
+        releaseCheckTask?.cancel()
+        releaseCheckTask = nil
         await automaticSelection.stop()
         await testing?.value
         await updatingRules?.value
@@ -580,21 +611,11 @@ final class AppModel: ObservableObject {
     }
 
     private func rebuildSortedNodes() {
-        sortedNodes = nodes.sorted { lhs, rhs in
-            let left = delayHistory[lhs.runtimeTag]?.delay
-            let right = delayHistory[rhs.runtimeTag]?.delay
-            switch (left, right) {
-            case let (l?, r?): return l == r ? lhs.originalTag.localizedStandardCompare(rhs.originalTag) == .orderedAscending : l < r
-            case (_?, nil): return true
-            case (nil, _?): return false
-            case (nil, nil): return lhs.originalTag.localizedStandardCompare(rhs.originalTag) == .orderedAscending
-            }
-        }
+        sortedNodes = NodeListPresentation.sorted(nodes, using: delayHistory)
     }
 
     func displayName(for node: ProxyNode) -> String {
-        let prefix = "\(node.protocolName.uppercased()) · "
-        return node.originalTag.hasPrefix(prefix) ? String(node.originalTag.dropFirst(prefix.count)) : node.originalTag
+        NodeListPresentation.displayName(for: node)
     }
 
     private func loadSettings() async {
@@ -603,7 +624,13 @@ final class AppModel: ObservableObject {
         allowLAN = await settings.bool(SettingsStore.Key.allowLAN)
         skipSystemProxy = await settings.bool(SettingsStore.Key.skipSystemProxy)
         proxyPort = await settings.proxyPort()
-        directDNS = await settings.string(SettingsStore.Key.directDNS, default: "223.5.5.5")
+        let storedDNS = await settings.string(SettingsStore.Key.directDNS)
+        if DNSResolverDetector.isUsableIPAddress(storedDNS) {
+            directDNS = storedDNS
+        } else {
+            directDNS = await DNSResolverDetector.detectSystemResolver() ?? DNSResolverDetector.fallback
+            try? await settings.set(.string(directDNS), for: SettingsStore.Key.directDNS)
+        }
         userAgent = await settings.string(SettingsStore.Key.userAgent, default: "sing-box 1.13.14")
         selectedNode = (await settings.string(SettingsStore.Key.selectedNode)).nilIfEmpty
         delayHistory = await settings.delayHistory()
@@ -680,6 +707,25 @@ final class AppModel: ObservableObject {
                 }
             }
             ruleUpdateTask = nil
+        }
+    }
+
+    private func scheduleReleaseCheck() {
+        guard releaseCheckTask == nil else { return }
+        releaseCheckTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 5_000_000_000)
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled, !isShuttingDown else { return }
+            guard let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+                  !version.isEmpty else {
+                releaseCheckTask = nil
+                return
+            }
+            availableUpdate = await releaseChecker.checkIfDue(currentVersion: version)
+            releaseCheckTask = nil
         }
     }
 
