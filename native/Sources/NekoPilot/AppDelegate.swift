@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard self.model == nil else { return }
         self.model = model
         statusItemController = StatusItemController(model: model)
+        presentMainWindow()
         // SwiftUI does not create its initial WindowGroup while the process is
         // already an accessory app on current macOS. Switch only after the
         // first native window has appeared so the Dock icon can still be
@@ -102,8 +103,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func showMainWindow() {
+        presentMainWindow()
+    }
+
+    private func presentMainWindow() {
         NSApp.activate(ignoringOtherApps: true)
         for window in NSApp.windows where window.canBecomeMain {
+            window.collectionBehavior.insert(.moveToActiveSpace)
             window.makeKeyAndOrderFront(nil)
             return
         }

@@ -79,7 +79,7 @@ public actor AutoNodeSelectionService {
               nodes.count > 1 else { return }
         let delays = await tester.test(nodes: nodes, engineRunning: true)
         do {
-            try await settings.replaceDelayHistory(delays)
+            try await repository.replaceDelayHistory(delays)
         } catch {
             AppLogger.shared.warning("automatic URL Test history could not be saved: \(error.localizedDescription)")
         }

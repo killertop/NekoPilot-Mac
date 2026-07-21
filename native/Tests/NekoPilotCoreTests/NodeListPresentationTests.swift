@@ -44,6 +44,21 @@ struct NodeListPresentationTests {
         ])
     }
 
+    @Test("Node counts are precomputed once per source")
+    func countsNodesBySource() {
+        let first = node("VLESS · A", protocolName: "vless")
+        let second = node("VLESS · B", protocolName: "vless")
+        let other = ProxyNode(
+            sourceIdentifier: "other",
+            sourceName: "Other",
+            originalTag: "VLESS · C",
+            runtimeTag: "@np:other:C",
+            protocolName: "vless",
+            outbound: [:]
+        )
+        #expect(NodeListPresentation.countsBySource([first, second, other]) == ["source": 2, "other": 1])
+    }
+
     private func node(_ name: String, protocolName: String) -> ProxyNode {
         ProxyNode(
             sourceIdentifier: "source",

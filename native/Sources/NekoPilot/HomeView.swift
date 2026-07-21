@@ -18,7 +18,7 @@ struct HomeView: View {
                     .padding(.top, 17)
 
                 if model.status.isRunning {
-                    trafficRow
+                    TrafficRow(state: model.trafficState)
                         .padding(.top, 14)
                 }
             }
@@ -138,9 +138,9 @@ struct HomeView: View {
                     )
                 } else {
                     LazyVStack(spacing: 0) {
-                        ForEach(Array(model.sortedNodes.enumerated()), id: \.element.id) { index, node in
+                        ForEach(model.sortedNodes) { node in
                             nodeRow(node)
-                            if index < model.sortedNodes.count - 1 { AppDivider() }
+                            if node.id != model.sortedNodes.last?.id { AppDivider() }
                         }
                     }
                 }
@@ -204,11 +204,16 @@ struct HomeView: View {
         }
     }
 
-    private var trafficRow: some View {
+}
+
+private struct TrafficRow: View {
+    @ObservedObject var state: TrafficState
+
+    var body: some View {
         HStack(spacing: 14) {
-            Text("↑ \(formattedBytesPerSecond(model.traffic.upload))")
+            Text("↑ \(formattedBytesPerSecond(state.snapshot.upload))")
                 .frame(width: 96, alignment: .trailing)
-            Text("↓ \(formattedBytesPerSecond(model.traffic.download))")
+            Text("↓ \(formattedBytesPerSecond(state.snapshot.download))")
                 .frame(width: 96, alignment: .leading)
         }
         .font(.system(size: 12, weight: .regular, design: .monospaced))

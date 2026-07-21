@@ -23,9 +23,9 @@ struct NodeManagementView: View {
                 } else {
                     AppCard {
                         LazyVStack(spacing: 0) {
-                            ForEach(Array(model.subscriptions.enumerated()), id: \.element.id) { index, subscription in
+                            ForEach(model.subscriptions) { subscription in
                                 sourceRow(subscription)
-                                if index < model.subscriptions.count - 1 { AppDivider() }
+                                if subscription.id != model.subscriptions.last?.id { AppDivider() }
                             }
                         }
                     }
@@ -175,15 +175,19 @@ struct NodeManagementView: View {
     }
 
     private func sourceSubtitle(_ subscription: NekoPilotCore.Subscription) -> String {
-        let count = model.nodes.filter { $0.sourceIdentifier == subscription.identifier }.count
+        let count = model.nodeCountsBySource[subscription.identifier, default: 0]
         if subscription.sourceType == .localLink {
             return L10n.text("本地节点，不自动更新", "Local node, no automatic updates")
         }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .short
-        let time = formatter.localizedString(for: subscription.lastUpdateTime, relativeTo: Date())
+        let time = Self.relativeDateFormatter.localizedString(for: subscription.lastUpdateTime, relativeTo: Date())
         return L10n.text("\(count) 个节点 · 更新于 \(time)", "\(count) node(s) · updated \(time)")
     }
+
+    private static let relativeDateFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter
+    }()
 }
 
 private struct AddNodeSheet: View {

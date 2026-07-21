@@ -16,14 +16,19 @@ struct PendingDeepLink: Identifiable, Equatable {
 }
 
 @MainActor
+final class TrafficState: ObservableObject {
+    @Published var snapshot: TrafficSnapshot = .zero
+}
+
+@MainActor
 final class AppModel: ObservableObject {
     @Published var status: EngineStatus = .stopped
     @Published var nodes: [ProxyNode] = []
     @Published private(set) var sortedNodes: [ProxyNode] = []
+    @Published private(set) var nodeCountsBySource: [String: Int] = [:]
     @Published var subscriptions: [NekoPilotCore.Subscription] = []
     @Published var selectedNode: String?
     @Published var delayHistory: [String: DelayRecord] = [:]
-    @Published var traffic: TrafficSnapshot = .zero
     @Published var isURLTesting = false
     @Published var selectedTab: MainTab = .home
     @Published var errorMessage: String?
@@ -54,6 +59,7 @@ final class AppModel: ObservableObject {
     let ruleSetUpdater: RuleSetUpdater
     let releaseChecker: GitHubReleaseChecker
     let networkReadiness = NetworkReadiness()
+    let trafficState = TrafficState()
 
     private var statusTask: Task<Void, Never>?
     private var selectionTask: Task<Void, Never>?
@@ -220,11 +226,12 @@ final class AppModel: ObservableObject {
             async let loadedSources = repository.subscriptions()
             nodes = try await loadedNodes
             subscriptions = try await loadedSources
+            rebuildNodeCounts()
             let availableTags = Set(nodes.map(\.runtimeTag))
             let currentHistory = delayHistory.filter { availableTags.contains($0.key) }
             if currentHistory.count != delayHistory.count {
                 delayHistory = currentHistory
-                try await settings.replaceDelayHistory(currentHistory)
+                try await repository.replaceDelayHistory(currentHistory)
             }
             if selectedNode == nil || !nodes.contains(where: { $0.runtimeTag == selectedNode }) {
                 selectedNode = nodes.first?.runtimeTag
@@ -291,7 +298,7 @@ final class AppModel: ObservableObject {
             delayHistory = results
             rebuildSortedNodes()
             do {
-                try await settings.replaceDelayHistory(results)
+                try await repository.replaceDelayHistory(results)
             } catch {
                 show(error)
             }
@@ -333,11 +340,38 @@ final class AppModel: ObservableObject {
     }
 
     func refreshAllSubscriptions() async {
-        for subscription in subscriptions where subscription.sourceType == .subscription {
-            do {
-                try await importer.refresh(identifier: subscription.identifier)
-            } catch {
-                AppLogger.shared.warning("refresh failed for \(subscription.identifier): \(error.localizedDescription)")
+        let candidates = subscriptions.filter { $0.sourceType == .subscription }
+        await withTaskGroup(of: (String, String?).self) { group in
+            var nextIndex = 0
+            let limit = min(3, candidates.count)
+            for _ in 0 ..< limit {
+                let subscription = candidates[nextIndex]
+                nextIndex += 1
+                group.addTask { [importer] in
+                    do {
+                        try await importer.refresh(identifier: subscription.identifier)
+                        return (subscription.identifier, nil)
+                    } catch {
+                        return (subscription.identifier, error.localizedDescription)
+                    }
+                }
+            }
+            while let (identifier, errorMessage) = await group.next() {
+                if let errorMessage {
+                    AppLogger.shared.warning("refresh failed for \(identifier): \(errorMessage)")
+                }
+                if nextIndex < candidates.count {
+                    let subscription = candidates[nextIndex]
+                    nextIndex += 1
+                    group.addTask { [importer] in
+                        do {
+                            try await importer.refresh(identifier: subscription.identifier)
+                            return (subscription.identifier, nil)
+                        } catch {
+                            return (subscription.identifier, error.localizedDescription)
+                        }
+                    }
+                }
             }
         }
         await refreshData()
@@ -617,6 +651,10 @@ final class AppModel: ObservableObject {
         sortedNodes = NodeListPresentation.sorted(nodes, using: delayHistory)
     }
 
+    private func rebuildNodeCounts() {
+        nodeCountsBySource = NodeListPresentation.countsBySource(nodes)
+    }
+
     func displayName(for node: ProxyNode) -> String {
         NodeListPresentation.displayName(for: node)
     }
@@ -636,7 +674,14 @@ final class AppModel: ObservableObject {
         }
         userAgent = await settings.string(SettingsStore.Key.userAgent, default: "sing-box 1.13.14")
         selectedNode = (await settings.string(SettingsStore.Key.selectedNode)).nilIfEmpty
-        delayHistory = await settings.delayHistory()
+        let storedHistory = (try? await repository.delayHistory()) ?? [:]
+        let legacyHistory = (try? await settings.takeLegacyDelayHistory()) ?? [:]
+        if storedHistory.isEmpty, !legacyHistory.isEmpty {
+            try? await repository.replaceDelayHistory(legacyHistory)
+            delayHistory = legacyHistory
+        } else {
+            delayHistory = storedHistory
+        }
         rules = await settings.rules()
         rebuildSortedNodes()
     }
@@ -681,7 +726,7 @@ final class AppModel: ObservableObject {
                 let stream = await clashAPI.trafficStream()
                 for try await sample in stream {
                     guard !Task.isCancelled else { return }
-                    traffic = sample
+                    trafficState.snapshot = sample
                 }
             } catch {
                 if !Task.isCancelled { AppLogger.shared.warning("traffic stream ended: \(error.localizedDescription)") }
@@ -693,7 +738,7 @@ final class AppModel: ObservableObject {
     private func stopTrafficStream() {
         trafficTask?.cancel()
         trafficTask = nil
-        traffic = .zero
+        trafficState.snapshot = .zero
     }
 
     private func scheduleRuleSetRefresh() {

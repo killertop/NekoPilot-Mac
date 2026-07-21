@@ -112,6 +112,23 @@ struct SubscriptionRepositoryTests {
         #expect(Set(try await repository.nodes().map(\.originalTag)) == Set(["one", "two"]))
     }
 
+    @Test("Delay history persists independently in SQLite")
+    func delayHistoryPersistsInSQLite() async throws {
+        let location = try temporaryDatabaseLocation()
+        defer { try? FileManager.default.removeItem(at: location.directory) }
+        let repository = try SubscriptionRepository(databaseURL: location.database)
+        try await repository.replaceDelayHistory([
+            "fast": DelayRecord(delay: 72, measuredAt: Date(timeIntervalSince1970: 1_000)),
+            "timeout": DelayRecord(delay: nil, measuredAt: Date(timeIntervalSince1970: 2_000)),
+        ])
+
+        let reopened = try SubscriptionRepository(databaseURL: location.database)
+        let history = try await reopened.delayHistory()
+        #expect(history["fast"]?.delay == 72)
+        #expect(history["timeout"]?.delay == nil)
+        #expect(history["timeout"] != nil)
+    }
+
     private func configuration(tag: String) -> [String: JSONValue] {
         [
             "outbounds": .array([.object([

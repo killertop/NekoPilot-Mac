@@ -1,4 +1,5 @@
 import AppKit
+import NekoPilotCore
 import SwiftUI
 
 struct SettingsView: View {
@@ -128,12 +129,13 @@ struct SettingsView: View {
                     settingRow(
                         icon: "wrench.and.screwdriver",
                         iconColor: .purple,
-                        title: "User Agent",
-                        subtitle: L10n.text("打开 UA 设置", "Open User Agent settings"),
+                        title: L10n.text("User Agent 设置", "User Agent Settings"),
+                        subtitle: SubscriptionUserAgentPreset.summary(for: model.userAgent),
                         chevron: true
                     )
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(L10n.text("User Agent 设置", "User Agent Settings"))
                 AppDivider(leading: 52)
                 toggleRow(
                     icon: "network",
@@ -348,52 +350,122 @@ private struct DirectDNSSheet: View {
 }
 
 private struct UserAgentSheet: View {
+    @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var model: AppModel
     @Binding var isPresented: Bool
-    @State private var value: String
+    @State private var selected: SubscriptionUserAgentPreset
+    @State private var customValue: String
     @State private var saving = false
 
     init(model: AppModel, isPresented: Binding<Bool>) {
         self.model = model
         _isPresented = isPresented
-        _value = State(initialValue: model.userAgent)
+        let preset = SubscriptionUserAgentPreset.matching(model.userAgent)
+        _selected = State(initialValue: preset)
+        _customValue = State(initialValue: preset == .custom ? model.userAgent : "")
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("User Agent")
-                    .font(.system(size: 20, weight: .semibold))
-                Spacer()
-                Button { isPresented = false } label: {
-                    Image(systemName: "xmark.circle.fill")
+        ZStack {
+            AppVisual.background(colorScheme).ignoresSafeArea()
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    Text(L10n.text("User Agent 设置", "User Agent Settings"))
+                        .font(.system(size: 19, weight: .semibold))
+                    Spacer()
+                    Button { isPresented = false } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 18))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel(L10n.text("关闭", "Close"))
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-            }
-            Text(L10n.text("用于获取机场订阅的请求标识", "Request identifier used when fetching subscriptions"))
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-            TextField("sing-box 1.13.14", text: $value)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 13, design: .monospaced))
-            HStack {
-                Spacer()
-                Button(L10n.text("取消", "Cancel")) { isPresented = false }
-                    .keyboardShortcut(.cancelAction)
-                Button(L10n.text("保存", "Save")) {
-                    Task {
-                        saving = true
-                        let success = await model.setUserAgent(value)
-                        saving = false
-                        if success { isPresented = false }
+
+                AppCard {
+                    VStack(spacing: 0) {
+                        ForEach(SubscriptionUserAgentPreset.allCases) { preset in
+                            Button { selected = preset } label: {
+                                HStack(spacing: 11) {
+                                    Image(systemName: selected == preset ? "checkmark.circle.fill" : "circle")
+                                        .font(.system(size: 17, weight: .regular))
+                                        .foregroundStyle(selected == preset ? Color.accentColor : AppVisual.tertiaryLabel(colorScheme))
+                                        .frame(width: 22)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(preset.title)
+                                            .font(.system(size: 13.5, weight: .medium))
+                                            .foregroundStyle(.primary)
+                                        if let detail = preset.detail {
+                                            Text(detail)
+                                                .font(.system(size: 10.5, design: .monospaced))
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(2)
+                                        }
+                                    }
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(.horizontal, 14)
+                                .frame(minHeight: preset.detail == nil ? 44 : 54)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(preset.title)
+                            if preset != SubscriptionUserAgentPreset.allCases.last { AppDivider(leading: 48) }
+                        }
                     }
                 }
-                .keyboardShortcut(.defaultAction)
-                .disabled(saving || value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                if selected == .custom {
+                    TextField(L10n.text("输入自定义 User Agent", "Enter a custom User Agent"), text: $customValue)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12.5, design: .monospaced))
+                        .accessibilityLabel(L10n.text("输入自定义 User Agent", "Enter a custom User Agent"))
+                }
+
+                Text(L10n.text(
+                    "仅用于获取机场订阅；部分服务会根据客户端标识返回不同格式。",
+                    "Used only for subscription requests. Some providers return different formats based on this identifier."
+                ))
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+
+                HStack {
+                    Spacer()
+                    Button(L10n.text("取消", "Cancel")) { isPresented = false }
+                        .keyboardShortcut(.cancelAction)
+                    Button {
+                        Task {
+                            saving = true
+                            let success = await model.setUserAgent(selected.resolvedValue(custom: customValue))
+                            saving = false
+                            if success { isPresented = false }
+                        }
+                    } label: {
+                        if saving { ProgressView().controlSize(.small) } else { Text(L10n.text("保存", "Save")) }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(saving || (selected == .custom && customValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+                }
             }
+            .padding(22)
         }
-        .padding(22)
-        .frame(width: 360)
+        .frame(width: 430)
+    }
+}
+
+private extension SubscriptionUserAgentPreset {
+    var title: String {
+        switch self {
+        case .standard: L10n.text("默认（sing-box）", "Default (sing-box)")
+        case .sfm: "SFM 1.12"
+        case .sfa: "SFA 1.12"
+        case .sfi: "SFI 1.12"
+        case .custom: L10n.text("自定义", "Custom")
+        }
+    }
+
+    static func summary(for value: String) -> String {
+        let preset = matching(value)
+        return preset == .custom ? L10n.text("自定义标识", "Custom identifier") : preset.title
     }
 }

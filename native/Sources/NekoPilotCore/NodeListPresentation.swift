@@ -4,6 +4,12 @@ import Foundation
 /// Keeping these rules outside the views makes sorting and naming regressions
 /// testable without launching a second application process.
 public enum NodeListPresentation {
+    public static func countsBySource(_ nodes: [ProxyNode]) -> [String: Int] {
+        nodes.reduce(into: [:]) { counts, node in
+            counts[node.sourceIdentifier, default: 0] += 1
+        }
+    }
+
     public static func displayName(for node: ProxyNode) -> String {
         let prefix = "\(node.protocolName.uppercased()) · "
         return node.originalTag.hasPrefix(prefix)

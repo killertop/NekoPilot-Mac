@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 
 public actor SubscriptionRepository {
     private let database: SQLiteDatabase
@@ -59,6 +60,40 @@ public actor SubscriptionRepository {
             let identifier = SQLiteDatabase.text(row, 0) ?? ""
             let data = Data((SQLiteDatabase.text(row, 1) ?? "{}").utf8)
             return (identifier, try JSONValue.decodeObject(from: data))
+        }
+    }
+
+    public func delayHistory() throws -> [String: DelayRecord] {
+        let rows: [(String, Int?, Int64)] = try database.query(
+            "SELECT runtime_tag, delay_ms, measured_at FROM node_delay_history ORDER BY measured_at DESC LIMIT 2000"
+        ) { row in
+            let delay = sqlite3_column_type(row, 1) == SQLITE_NULL
+                ? nil
+                : Int(SQLiteDatabase.integer(row, 1))
+            return (
+                SQLiteDatabase.text(row, 0) ?? "",
+                delay,
+                SQLiteDatabase.integer(row, 2)
+            )
+        }
+        return Dictionary(uniqueKeysWithValues: rows.map { tag, delay, measuredAt in
+            (tag, DelayRecord(delay: delay, measuredAt: Date(timeIntervalSince1970: TimeInterval(measuredAt))))
+        })
+    }
+
+    public func replaceDelayHistory(_ history: [String: DelayRecord]) throws {
+        try database.transaction {
+            try database.execute("DELETE FROM node_delay_history")
+            for (tag, record) in history.prefix(2_000) {
+                try database.execute(
+                    "INSERT INTO node_delay_history(runtime_tag, delay_ms, measured_at) VALUES (?, ?, ?)",
+                    bindings: [
+                        .text(tag),
+                        record.delay.map { .integer(Int64($0)) } ?? .null,
+                        .integer(Int64(record.measuredAt.timeIntervalSince1970)),
+                    ]
+                )
+            }
         }
     }
 
@@ -192,6 +227,15 @@ public actor SubscriptionRepository {
                 identifier TEXT PRIMARY KEY,
                 config_content TEXT NOT NULL,
                 FOREIGN KEY (identifier) REFERENCES subscriptions(identifier) ON DELETE CASCADE
+            )
+            """
+        )
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS node_delay_history (
+                runtime_tag TEXT PRIMARY KEY,
+                delay_ms INTEGER,
+                measured_at INTEGER NOT NULL
             )
             """
         )

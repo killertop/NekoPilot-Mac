@@ -78,7 +78,7 @@ public actor SettingsStore {
         return secret
     }
 
-    public func delayHistory() -> [String: DelayRecord] {
+    func delayHistory() -> [String: DelayRecord] {
         guard let history = values[Key.delayHistory]?.objectValue else { return [:] }
         var result: [String: DelayRecord] = [:]
         for (node, raw) in history.prefix(2_000) {
@@ -100,7 +100,7 @@ public actor SettingsStore {
         return result
     }
 
-    public func replaceDelayHistory(_ history: [String: DelayRecord]) throws {
+    func replaceDelayHistory(_ history: [String: DelayRecord]) throws {
         let entries = history.prefix(2_000).reduce(into: [String: JSONValue]()) { output, item in
             output[item.key] = .object([
                 "delay": item.value.delay.map { .number(Double($0)) } ?? .string("-"),
@@ -108,6 +108,15 @@ public actor SettingsStore {
             ])
         }
         try commit { values[Key.delayHistory] = .object(entries) }
+    }
+
+    /// One-time migration bridge from the old preferences-backed history.
+    /// New writes belong in SQLite through SubscriptionRepository.
+    public func takeLegacyDelayHistory() throws -> [String: DelayRecord] {
+        let history = delayHistory()
+        guard values[Key.delayHistory] != nil else { return history }
+        try commit { values.removeValue(forKey: Key.delayHistory) }
+        return history
     }
 
     public func rules() -> [RoutingRule] {

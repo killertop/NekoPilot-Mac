@@ -50,6 +50,12 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 done
 [[ "${WINDOW_COUNT:-0}" == "1" ]] || fail "Expected one visible packaged-app window, found ${WINDOW_COUNT:-0}"
 
+# A background executable launch can leave an accessory app on another Space.
+# Reopening the bundle activates the existing locked instance and moves its
+# main window onto the runner's active Space before accessibility navigation.
+open "$APP_BUNDLE"
+sleep 1
+
 set +e
 swift "$SCRIPT_DIR/ui-smoke.swift" "$APP_PID"
 UI_SMOKE_STATUS=$?

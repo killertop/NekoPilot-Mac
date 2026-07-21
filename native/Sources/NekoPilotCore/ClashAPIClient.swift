@@ -7,17 +7,32 @@ public struct ClashSelector: Sendable, Equatable {
 
 public actor ClashAPIClient {
     private let session: URLSession
-    private let settings: SettingsStore
+    private let settings: SettingsStore?
+    private let controllerPort: Int
+    private let fixedSecret: String?
 
     public init(settings: SettingsStore) {
         self.settings = settings
+        controllerPort = SettingsStore.clashAPIPort
+        fixedSecret = nil
+        session = Self.makeSession()
+    }
+
+    public init(controllerPort: Int, secret: String) {
+        settings = nil
+        self.controllerPort = controllerPort
+        fixedSecret = secret
+        session = Self.makeSession()
+    }
+
+    private static func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 8
         configuration.timeoutIntervalForResource = 15
         configuration.urlCache = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         configuration.connectionProxyDictionary = [:]
-        session = URLSession(configuration: configuration)
+        return URLSession(configuration: configuration)
     }
 
     public func isReady() async -> Bool {
@@ -121,8 +136,8 @@ public actor ClashAPIClient {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let secret = try await settings.clashSecret()
-                    let url = URL(string: "http://127.0.0.1:\(SettingsStore.clashAPIPort)/traffic")!
+                    let secret = try await controllerSecret()
+                    let url = URL(string: "http://127.0.0.1:\(controllerPort)/traffic")!
                     var request = URLRequest(url: url)
                     request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
                     let (bytes, response) = try await session.bytes(for: request)
@@ -153,8 +168,8 @@ public actor ClashAPIClient {
         method: String = "GET",
         body: Data? = nil
     ) async throws -> (Data, HTTPURLResponse) {
-        let secret = try await settings.clashSecret()
-        guard let url = URL(string: "http://127.0.0.1:\(SettingsStore.clashAPIPort)\(path)") else {
+        let secret = try await controllerSecret()
+        guard let url = URL(string: "http://127.0.0.1:\(controllerPort)\(path)") else {
             throw NekoPilotError.processFailed("控制接口地址无效")
         }
         var request = URLRequest(url: url)
@@ -168,5 +183,11 @@ public actor ClashAPIClient {
             throw NekoPilotError.processFailed("控制接口响应无效")
         }
         return (data, response)
+    }
+
+    private func controllerSecret() async throws -> String {
+        if let fixedSecret { return fixedSecret }
+        guard let settings else { throw NekoPilotError.invalidSetting(SettingsStore.Key.clashSecret) }
+        return try await settings.clashSecret()
     }
 }

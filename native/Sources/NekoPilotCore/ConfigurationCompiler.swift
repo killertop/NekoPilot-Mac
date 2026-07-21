@@ -35,11 +35,20 @@ public actor ConfigurationCompiler {
         return paths.runtimeConfig
     }
 
-    public func makeOfflineTestConfiguration(selectedNode: String?) async throws -> URL {
+    public func makeOfflineTestConfiguration(
+        selectedNode: String?,
+        controllerPort: Int,
+        secret: String
+    ) async throws -> URL {
         _ = try await compile(selectedNode: selectedNode)
         var config = try JSONValue.decodeObject(from: Data(contentsOf: paths.runtimeConfig))
         config.removeValue(forKey: "inbounds")
-        config.removeValue(forKey: "experimental")
+        config["experimental"] = .object([
+            "clash_api": .object([
+                "external_controller": .string("127.0.0.1:\(controllerPort)"),
+                "secret": .string(secret),
+            ]),
+        ])
         if var log = config["log"]?.objectValue {
             log["disabled"] = .bool(true)
             config["log"] = .object(log)

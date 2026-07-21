@@ -51,19 +51,15 @@ checks.append(("settings persistence", {
     let settings = try SettingsStore(fileURL: file)
     try await settings.set(.number(17_777), for: SettingsStore.Key.proxyPort)
     try await settings.set(.bool(true), for: SettingsStore.Key.showProtocol)
-    let history = ["@np:source:node": DelayRecord(delay: 88, measuredAt: Date(timeIntervalSince1970: 1_000))]
-    try await settings.replaceDelayHistory(history)
     try await settings.replaceRules([
         RoutingRule(action: .direct, kind: .domainSuffix, value: ".example.local"),
     ])
     let reopened = try SettingsStore(fileURL: file)
     let reopenedPort = await reopened.proxyPort()
     let reopenedProtocol = await reopened.bool(SettingsStore.Key.showProtocol)
-    let reopenedHistory = await reopened.delayHistory()
     let reopenedRules = await reopened.rules()
     try expect(reopenedPort == 17_777, "proxy port did not persist")
     try expect(reopenedProtocol, "protocol setting did not persist")
-    try expect(reopenedHistory["@np:source:node"]?.delay == 88, "delay history did not persist")
     try expect(
         reopenedRules.contains { $0.action == .direct && $0.kind == .domainSuffix && $0.value == ".example.local" },
         "routing rules did not persist"
@@ -78,6 +74,11 @@ checks.append(("repository and config compiler", {
     let settings = try SettingsStore(fileURL: paths.settings)
     try await settings.set(.number(17_777), for: SettingsStore.Key.proxyPort)
     let repository = try SubscriptionRepository(databaseURL: paths.database)
+    let history = ["@np:source:node": DelayRecord(delay: 88, measuredAt: Date(timeIntervalSince1970: 1_000))]
+    try await repository.replaceDelayHistory(history)
+    let reopenedRepository = try SubscriptionRepository(databaseURL: paths.database)
+    let reopenedHistory = try await reopenedRepository.delayHistory()
+    try expect(reopenedHistory["@np:source:node"]?.delay == 88, "delay history did not persist in SQLite")
     let imported = try ProxyLinkParser.parse(
         "vless://00000000-0000-0000-0000-000000000001@example.com:443?security=tls#Native"
     )
@@ -103,6 +104,23 @@ checks.append(("repository and config compiler", {
     try expect(
         selector?["outbounds"]?.arrayValue?.first?.stringValue == nodes[0].runtimeTag,
         "compiler did not select stable runtime node"
+    )
+    let offlineConfigURL = try await compiler.makeOfflineTestConfiguration(
+        selectedNode: nodes[0].runtimeTag,
+        controllerPort: 20_001,
+        secret: "offline-test-secret"
+    )
+    defer { try? FileManager.default.removeItem(at: offlineConfigURL.deletingLastPathComponent()) }
+    let offlineConfig = try JSONValue.decodeObject(from: Data(contentsOf: offlineConfigURL))
+    try expect(offlineConfig["inbounds"] == nil, "offline URL Test config unexpectedly exposed a proxy inbound")
+    let offlineClashAPI = offlineConfig["experimental"]?.objectValue?["clash_api"]?.objectValue
+    try expect(
+        offlineClashAPI?["external_controller"]?.stringValue == "127.0.0.1:20001",
+        "offline URL Test config did not isolate its controller port"
+    )
+    try expect(
+        offlineClashAPI?["secret"]?.stringValue == "offline-test-secret",
+        "offline URL Test config did not isolate its API secret"
     )
 }))
 
