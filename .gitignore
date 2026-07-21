@@ -40,6 +40,11 @@ src-tauri/*.db
 src-tauri/examples
 target
 
+# Swift Package Manager build state and machine-local metadata.
+native/.build/
+native/.swiftpm/
+native/dist/
+
 # tsc -b incremental build cache + accidental emit from `vite.config.ts`
 *.tsbuildinfo
 vite.config.js

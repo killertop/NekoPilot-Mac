@@ -22,4 +22,4 @@ If the issue involves a real subscription or node, remove the URL and replace se
 - Treat imported configuration content as untrusted input.
 - Keep local logs and exported configurations out of Issues and Pull Requests unless they have been sanitized.
 - Verify the ad-hoc signature of macOS release packages and clearly disclose the required first-launch Gatekeeper approval before distributing them.
-- Keep the pinned archive and executable SHA-256 sets in `scripts/download-binaries.ts` synchronized with the reviewed sing-box version; never package an unverified download.
+- Keep the upstream commit, source-archive SHA-256, exact Go version, release tags, and macOS deployment target in `native/scripts/build-sing-box-macos-arm64.sh` synchronized with the reviewed sing-box version. Native Releases must build from that verified source; never substitute a downloaded executable.

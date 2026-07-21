@@ -1,115 +1,107 @@
-# Release Guide
+# Native macOS Release Guide
 
-## Release types
+## Distribution boundary
 
-There are three useful package levels:
+NekoPilot is distributed through GitHub Releases only. Packages use an ad-hoc signature and are not Apple-notarized, so no Apple Developer certificate is required. Users may need to right-click **Open** once or approve the app in **System Settings → Privacy & Security**.
 
-1. Development run — deno task tauri dev; debug app, not a distributable package.
-2. Local Release bundle — deno task tauri build; optimized local package, normally ad-hoc signed.
-3. GitHub Release package — GitHub Actions output ad-hoc signed macOS packages and uploads them to GitHub Releases.
+Only Apple Silicon macOS assets are built or published. Windows, Linux, Intel macOS, and Tauri packages are never Release assets. The previous Tauri source is retained only as a rollback/reference baseline.
 
-NekoPilot is distributed from GitHub only. Apple Developer ID signing and notarization are deliberately not part of this release path. An ad-hoc signature lets Apple Silicon run a downloaded bundle, but users may still need to approve the app once in macOS Privacy & Security.
+The minimum supported system is macOS 13. The workflow rejects both the Swift executable and sing-box sidecar if `vtool` reports a newer minimum version.
+
+## Version source
+
+`native/VERSION` is the sole Release version source. A strict `x.y.z` change on these branches starts the corresponding channel:
+
+- `feature/dev` → rolling `dev` prerelease;
+- `feature/beta` → rolling `beta` prerelease;
+- `main` → immutable `v<version>` stable release.
+
+Manual dispatch also supports a rolling `manual` channel. A stable tag can never be replaced; bump `native/VERSION` for another stable package. The repository version helper may mirror the native version into legacy metadata for rollback consistency, but the Release workflow never reads Tauri, Cargo, or package metadata to choose its version.
+
+## Reproducible core inputs
+
+`native/scripts/build-sing-box-macos-arm64.sh` pins all release-critical core inputs:
+
+- upstream SagerNet/sing-box version and commit;
+- GitHub source-archive SHA-256;
+- exact Go toolchain;
+- exact macOS SDK selected through the pinned Xcode installation;
+- upstream release build tags;
+- `CGO_ENABLED=1`, `GOOS=darwin`, `GOARCH=arm64`;
+- `MACOSX_DEPLOYMENT_TARGET=13.0`;
+- trimmed source paths and an empty Go build ID.
+
+The GitHub build runs this compile twice and requires identical output hashes. This proves repeatability on the pinned runner/toolchain; package hashes themselves can still differ because DMG filesystem metadata is created at packaging time.
 
 ## Local preflight
 
-Before starting a release, run:
+Run on Apple Silicon before changing a Release version:
 
 ```bash
 git diff --check
-deno install --frozen
-deno audit --lock=deno.lock
-deno task check:versions
-deno task test
-cargo test --manifest-path src-tauri/Cargo.toml --lib
-deno task build
-deno task tauri build
+swift build --package-path native
+swift test --package-path native
+swift run --package-path native NekoPilotCoreChecks
+NEKOPILOT_VERIFY_REPRODUCIBLE=1 \
+  native/scripts/build-sing-box-macos-arm64.sh
+native/scripts/package-macos.sh
 ```
 
-Then manually test the local Release bundle on macOS. Confirm import, selection, connection, stop, reconnect, routing mode, and system proxy restoration.
+Then launch `native/dist/NekoPilot.app` and complete the manual acceptance list in [DEVELOPMENT.md](DEVELOPMENT.md). A successful compile or signature check is not evidence of real node connectivity or system-proxy restoration.
 
-## GitHub Actions release
+## GitHub Actions
 
-The release workflow is `.github/workflows/release.yml`. It builds and publishes macOS arm64 and x86_64 packages. Linux packages remain secondary, best-effort artifacts. Windows packages are deliberately not built, copied between release channels, or published; macOS remains the required acceptance platform for this repository.
+`.github/workflows/test.yml` is the non-publishing hard gate. On an Apple Silicon `macos-26` runner with Xcode 26.2 and Go 1.26.5 it builds the pinned sing-box source twice, runs native tests, packages the actual bundle, mounts/extracts the artifacts, and validates architecture, `minos`, resources, version, signature, real initial-window creation, single-instance behavior, and normal quit. A separate policy check prevents publication scope from drifting.
 
-The normal automation is version-based: a push that changes `src-tauri/tauri.conf.json` on `feature/dev`, `feature/beta`, or `main` starts the corresponding channel. A `main` build is the stable release and is tagged `v<version>`. This prevents ordinary source commits from repeatedly overwriting the same formal release version.
+`.github/workflows/release.yml` repeats the complete native build rather than trusting an artifact from another run. GitHub content write permission exists only in the final publish job, after all package checks pass. Rolling releases are deleted only after a replacement has been built and verified.
 
-To rerun the current committed stable version, manually dispatch the same workflow from `main`:
+The exact Release asset allow-list is:
 
-~~~bash
-gh workflow run release.yml --repo killertop/NekoPilot-Mac --ref main -f channel=stable
-~~~
+```text
+NekoPilot_<version>_aarch64.dmg
+NekoPilot_<version>_aarch64.app.tar.gz
+SHA256SUMS
+```
 
-The selected channel is restricted to its canonical branch (`dev` to `feature/dev`, `beta` to `feature/beta`, and `stable` to `main`). The `manual` rolling channel may run from another selected ref. A stable `v<version>` tag is immutable: rerunning the same commit is allowed, but publishing a different commit under an existing version is rejected.
+No updater metadata, prebuilt Tauri sidecar, universal binary, Intel archive, or secondary-platform package is uploaded.
 
-Before any rolling tag is deleted or package is published, the workflow repeats the release-critical preflight: synchronized versions, locked frontend install and audit, production frontend build and tests, sidecar checksum verification, Rust formatting, Clippy, and Rust tests. This is intentional because the independent Test workflow starts in parallel and cannot gate a direct version push by itself.
-
-The workflow must finish successfully before the GitHub Release is considered complete. macOS jobs use the Tauri ad-hoc signing identity (`-`), so they do not require Apple certificates, notarization credentials, or GitHub Actions secrets beyond the built-in `GITHUB_TOKEN`.
-
-## GitHub synchronization through the VPS
-
-Source publication uses a VPS bare repository as the network boundary:
-
-~~~text
-local origin → us:/opt/git/NekoPilot-Mac.git → GitHub killertop/NekoPilot-Mac
-~~~
-
-The VPS bare repository has a post-receive hook at /opt/git/NekoPilot-Mac.git/hooks/post-receive. It forwards branch and tag updates to the GitHub remote, configured as https://github.com/killertop/NekoPilot-Mac.git.
-
-One-time local setup:
-
-~~~bash
-git remote set-url origin us:/opt/git/NekoPilot-Mac.git
-git remote set-url --push origin us:/opt/git/NekoPilot-Mac.git
-~~~
-
-After the one-time VPS setup, publish normally from the repository root:
-
-~~~bash
-git push origin main
-~~~
-
-The local origin intentionally points to us:/opt/git/NekoPilot-Mac.git; the Mac does not push directly to GitHub. The VPS uses its own gh/Git HTTPS credential setup for killertop, so no GitHub token is stored in this repository.
-
-The hook is versioned at scripts/post-receive-github-sync.sh. If the VPS hook changes, keep the repository copy and the installed VPS copy identical, then verify both the VPS bare ref and the GitHub ref.
-
-The intended stable flow is:
-
-1. Finish and review the code and documentation.
-2. Run `make bump` to increment the synchronized version in `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and the NekoPilot entry in `src-tauri/Cargo.lock`.
-3. Update the relevant CHANGELOG.MD entry.
-4. Run the local preflight checks.
-5. Push the version change to the stable branch through the VPS route above.
-6. Wait for the release workflow to finish.
-7. Download the DMG and app.tar.gz assets from the resulting GitHub Release.
-
-`make bump` only updates those four version files. It never stages or commits files. Update `CHANGELOG.MD`, inspect the complete diff, run the preflight, and create the release commit explicitly.
-
-The workflow also supports dev, beta, stable, and manual channels through GitHub Actions manual dispatch. Stable and beta reuse upstream artifacts only when both the application version and the Git object fingerprint of every build input match. Any source, configuration, lockfile, resource, changelog, or build-script difference forces a fresh build.
-
-## Package verification
-
-After downloading the macOS package, verify the application bundle:
+To dispatch a stable release from `main`:
 
 ```bash
-codesign -dv --verbose=4 NekoPilot.app
-codesign --verify --deep --strict --verbose=2 NekoPilot.app
-spctl -a -vv NekoPilot.app || true
+gh workflow run release.yml \
+  --repo killertop/NekoPilot-Mac \
+  --ref main \
+  -f channel=stable
 ```
 
-Expected results:
+## VPS synchronization
 
-- `codesign --verify` succeeds and the signature is ad-hoc.
-- `spctl` may reject the bundle because it has no Apple notarization ticket; this is expected for this GitHub-only release path.
-- On first launch after downloading, users may need to right-click the app and choose **Open**, or approve it in **System Settings → Privacy & Security**.
+Source publication continues through the VPS bare repository:
 
-## Release artifacts
+```text
+local origin → us:/opt/git/NekoPilot-Mac.git → GitHub killertop/NekoPilot-Mac
+```
 
-The macOS release is expected to contain:
+The post-receive hook is versioned at `scripts/post-receive-github-sync.sh`. Keep it identical to `/opt/git/NekoPilot-Mac.git/hooks/post-receive`, then verify the local, VPS, and public GitHub refs after a push. No GitHub token belongs in this repository.
 
-- Apple Silicon DMG and `.app.tar.gz` archive.
-- Intel DMG and `.app.tar.gz` archive.
-- No updater signatures or `latest.json`: the Tauri updater is not enabled in this project.
+## Download verification
 
-The workflow may additionally produce Linux DEB, RPM, or AppImage packages. It must never publish Windows EXE, MSI, or NSIS installers. These secondary Linux artifacts passing CI is not a substitute for platform-specific runtime acceptance.
+Verify the checksum first:
 
-Record the Git commit, version, workflow run URL, artifact checksums, and manual QA result alongside each production release.
+```bash
+shasum -a 256 -c SHA256SUMS
+```
+
+After extracting the archive, verify the bundle:
+
+```bash
+codesign --verify --deep --strict --verbose=2 NekoPilot.app
+lipo -archs NekoPilot.app/Contents/MacOS/NekoPilot
+lipo -archs NekoPilot.app/Contents/MacOS/sing-box
+vtool -show-build NekoPilot.app/Contents/MacOS/NekoPilot
+vtool -show-build NekoPilot.app/Contents/MacOS/sing-box
+```
+
+Expected: both architectures are exactly `arm64`, both minimum versions are no newer than 13.0, and strict code-sign verification succeeds. `spctl` may reject the app because ad-hoc signing does not include a notarization ticket; that is expected for this GitHub-only path.
+
+Record the Git commit, version, workflow URL, downloaded checksums, packaged-app launch result, real egress test, and system-proxy cleanup result for every production release.

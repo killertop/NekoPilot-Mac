@@ -1,97 +1,85 @@
 # Development Guide
 
-## 1. Environment
+## 1. Supported environment
 
-NekoPilot for Mac is developed and manually accepted on macOS 10.15 or later.
+NekoPilot production development and acceptance run on an Apple Silicon Mac with macOS 13 or newer.
 
 Required tools:
 
-- Deno 2.x
-- Rust stable and Cargo
-- Xcode Command Line Tools
+- Xcode 26.2 and Swift 6.
+- Go 1.26.5 exactly.
+- GitHub CLI (`gh`) for downloading the pinned upstream sing-box archive.
+- Standard macOS packaging tools: `codesign`, `hdiutil`, `lipo`, and `vtool`.
 
-Install dependencies from the repository root:
+SwiftUI + AppKit are the application shell. Original Go sing-box is a separate executable and the sole implementation of protocols, routing, DNS, and URL Test.
 
-```bash
-deno install --frozen
-deno task prepare
-```
+## 2. Build the proxy core
 
-## 2. Run the app
+From the repository root:
 
 ```bash
-deno task tauri dev
+native/scripts/build-sing-box-macos-arm64.sh
 ```
 
-The development app uses the Vite dev server and a debug Rust process. Use it for UI iteration, command wiring, and fast feedback. It is not the same artifact as the Release bundle used for package-level QA.
+The script verifies the pinned upstream commit archive before compiling it. It sets `MACOSX_DEPLOYMENT_TARGET=13.0`, produces arm64 only, and rejects a Mach-O minimum version newer than macOS 13.
 
-For a local Release build:
+For a release-equivalent reproducibility check:
 
 ```bash
-deno task tauri build
+NEKOPILOT_VERIFY_REPRODUCIBLE=1 \
+  native/scripts/build-sing-box-macos-arm64.sh
 ```
 
-The output is under:
-
-```text
-src-tauri/target/release/bundle/
-```
-
-The local macOS bundle may be ad-hoc signed because the repository deliberately does not require a signing identity for local development.
-
-## 3. Tests and checks
-
-Frontend tests:
+## 3. Run the native app
 
 ```bash
-deno task test
+NEKOPILOT_SING_BOX="$PWD/native/.build/sidecar/sing-box" \
+  swift run --package-path native NekoPilot
 ```
 
-Rust library tests:
+The SwiftPM executable is useful for iteration, but it is not package acceptance. `Info.plist`, app resources, agent activation behavior, signatures, the DMG, and the menu-bar template exist only in the real bundle.
 
-```bash
-cargo test --manifest-path src-tauri/Cargo.toml --lib
-```
-
-Formatting and production build checks:
+## 4. Checks and package build
 
 ```bash
 git diff --check
-deno audit --lock=deno.lock
-deno task check:versions
-deno task build
+swift build --package-path native
+swift test --package-path native
+swift run --package-path native NekoPilotCoreChecks
+native/scripts/package-macos.sh
 ```
 
-The Rust test command and frontend test command are independent. Passing them does not prove that an ad-hoc-signed macOS application can start, pass its required first-launch Gatekeeper approval, control the system proxy, or launch sing-box.
+The package script performs these hard checks:
 
-## 4. Manual QA boundary
+- application and sing-box are arm64-only;
+- both Mach-O files require macOS 13.0 or older;
+- bundle identifier and version match `native/VERSION`;
+- `LSUIElement` is absent so SwiftUI can create the first window before AppDelegate switches the process to accessory mode;
+- menu-bar artwork and offline rule resources are present;
+- sing-box reports the pinned version, Go version, release tags, and CGO state;
+- the app has a valid strict ad-hoc signature;
+- both the mounted DMG and extracted app archive pass the same bundle checks;
+- `SHA256SUMS` contains exactly the DMG and archive.
+- the real packaged executable creates exactly one visible initial window, rejects a second instance, and completes a normal quit handshake.
 
-Manual QA is required for behavior that depends on macOS or a real network:
+Passing these checks still does not prove real proxy egress.
 
-- Launching and closing the packaged app.
-- Importing a subscription and a standalone node link.
-- Selecting a group and a node.
-- Connecting, stopping, reconnecting, and switching nodes.
-- System Proxy mode and restoration after exit.
-- Rule and Global routing behavior.
-- Delay testing and failure messages.
-- Upgrade behavior and local data preservation.
+## 5. Manual QA boundary
 
-When reporting a failure, record the app version, package path, macOS version, node protocol, routing mode, and the relevant application log excerpt.
+Run the packaged `.app`, not just `swift run`, and confirm:
 
-## 5. Configuration and generated files
+- the first window appears and only one menu-bar item exists;
+- closing, reopening from the menu bar, and quitting release all owned resources;
+- a second launch activates the existing instance instead of creating another;
+- subscription and standalone-node import persist across restart;
+- URL Test works while disconnected and connected, retains old results until the next test, and sorts nodes by delay;
+- selected-node connection, stop, reconnect, and node switch use the displayed node;
+- system proxy is applied only after sing-box is ready and is restored after stop, failure, sleep, and quit;
+- custom rules and bundled LAN/China direct rules are compiled into the active sing-box configuration;
+- wake/network-change recovery uses bounded retry and cannot leave an orphan sing-box process.
 
-The file src/config/templates/generated.ts is a versioned local build input. Validate it explicitly with:
+Record the app version, package path, macOS version, node protocol, test URL, real egress result, and relevant log excerpt.
 
-```bash
-deno task sync-templates
-```
+## 6. Legacy boundary
 
-The release workflow validates the committed snapshot and does not fetch or delete it. Do not commit personal subscription data or generated local databases.
-
-## 6. Product behavior principles
-
-- The user selects a node and connects to that node.
-- A local node link is standalone configuration, not an updateable subscription.
-- Connection state should represent the real execution lifecycle.
-- System-level changes must be restored when the app stops or loses the relevant network state.
+`src/` and `src-tauri/` are the previous Tauri implementation. They remain only for rollback and behavior comparison. Do not add new production behavior there, do not make them a Release dependency, and never run legacy and native builds against the same live database simultaneously.

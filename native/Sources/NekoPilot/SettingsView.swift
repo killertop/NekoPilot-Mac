@@ -1,0 +1,399 @@
+import AppKit
+import SwiftUI
+
+struct SettingsView: View {
+    @ObservedObject var model: AppModel
+    @StateObject private var login = LaunchAtLoginController()
+    @State private var showingPort = false
+    @State private var showingDirectDNS = false
+    @State private var showingUserAgent = false
+
+    var body: some View {
+        ScrollView(showsIndicators: false) {
+            LazyVStack(spacing: 16) {
+                primaryCard
+                secondaryCard
+                aboutCard
+
+                VStack(spacing: 2) {
+                    Text("\(L10n.text("版本", "Version")) \(version)")
+                    Text("© 2026 NekoPilot")
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
+                .padding(.top, 6)
+                .padding(.bottom, 2)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
+            .padding(.bottom, 20)
+            .frame(maxWidth: 448)
+            .frame(maxWidth: .infinity)
+        }
+        .sheet(isPresented: $showingPort) {
+            ProxyPortSheet(model: model, isPresented: $showingPort)
+        }
+        .sheet(isPresented: $showingDirectDNS) {
+            DirectDNSSheet(model: model, isPresented: $showingDirectDNS)
+        }
+        .sheet(isPresented: $showingUserAgent) {
+            UserAgentSheet(model: model, isPresented: $showingUserAgent)
+        }
+        .alert(
+            L10n.text("无法修改开机启动", "Unable to Change Login Item"),
+            isPresented: Binding(
+                get: { login.errorMessage != nil },
+                set: { if !$0 { login.errorMessage = nil } }
+            )
+        ) {
+            Button(L10n.text("知道了", "OK"), role: .cancel) { login.errorMessage = nil }
+        } message: {
+            Text(login.errorMessage ?? "")
+        }
+    }
+
+    private var primaryCard: some View {
+        AppCard {
+            VStack(spacing: 0) {
+                toggleRow(
+                    icon: "gauge.with.dots.needle.50percent",
+                    iconColor: .accentColor,
+                    title: L10n.text("自动选择节点", "Automatic Node Selection"),
+                    subtitle: L10n.text("每 10 分钟测速并自动切换", "Test every 10 minutes and switch automatically"),
+                    value: Binding(
+                        get: { model.autoSelect },
+                        set: { value in Task { await model.setAutoSelect(value) } }
+                    )
+                )
+                AppDivider(leading: 52)
+                toggleRow(
+                    icon: "power",
+                    iconColor: .orange,
+                    title: L10n.text("开机启动", "Launch at Login"),
+                    value: Binding(get: { login.enabled }, set: { login.setEnabled($0) })
+                )
+                AppDivider(leading: 52)
+                toggleRow(
+                    icon: "wifi.router",
+                    iconColor: .purple,
+                    title: L10n.text("局域网连接", "LAN Connections"),
+                    subtitle: L10n.text("让同一局域网设备使用本机代理", "Let LAN devices use this proxy"),
+                    value: Binding(
+                        get: { model.allowLAN },
+                        set: { value in Task { await model.setAllowLAN(value) } }
+                    )
+                )
+                AppDivider(leading: 52)
+                Button { showingPort = true } label: {
+                    settingRow(
+                        icon: "cable.connector",
+                        iconColor: .orange,
+                        title: L10n.text("代理端口", "Proxy Port"),
+                        subtitle: L10n.text("HTTP/SOCKS 混合入站端口", "Mixed HTTP/SOCKS inbound port"),
+                        trailing: "\(model.proxyPort)",
+                        chevron: true
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var secondaryCard: some View {
+        AppCard {
+            VStack(spacing: 0) {
+                Button { showingDirectDNS = true } label: {
+                    settingRow(
+                        icon: "server.rack",
+                        iconColor: .teal,
+                        title: L10n.text("直连 DNS", "Direct DNS"),
+                        subtitle: L10n.text("打开直连 DNS 设置", "Open direct DNS settings"),
+                        chevron: true
+                    )
+                }
+                .buttonStyle(.plain)
+                AppDivider(leading: 52)
+                toggleRow(
+                    icon: "tag",
+                    iconColor: .purple,
+                    title: L10n.text("显示协议类型", "Show Protocol Type"),
+                    subtitle: L10n.text("在节点列表中显示每个节点的协议类型", "Show protocol labels in the node list"),
+                    value: Binding(
+                        get: { model.showProtocol },
+                        set: { value in Task { await model.setShowProtocol(value) } }
+                    )
+                )
+                AppDivider(leading: 52)
+                Button { showingUserAgent = true } label: {
+                    settingRow(
+                        icon: "wrench.and.screwdriver",
+                        iconColor: .purple,
+                        title: "User Agent",
+                        subtitle: L10n.text("打开 UA 设置", "Open User Agent settings"),
+                        chevron: true
+                    )
+                }
+                .buttonStyle(.plain)
+                AppDivider(leading: 52)
+                toggleRow(
+                    icon: "network",
+                    iconColor: .teal,
+                    title: L10n.text("自动设置系统代理", "Set System Proxy Automatically"),
+                    subtitle: L10n.text("连接时接管 HTTP、HTTPS 和 SOCKS", "Manage HTTP, HTTPS, and SOCKS while connected"),
+                    value: Binding(
+                        get: { !model.skipSystemProxy },
+                        set: { value in Task { await model.setSkipSystemProxy(!value) } }
+                    )
+                )
+            }
+        }
+    }
+
+    private var aboutCard: some View {
+        AppCard {
+            VStack(spacing: 0) {
+                Button {
+                    NSWorkspace.shared.open(URL(string: "https://github.com/killertop/NekoPilot-Mac")!)
+                } label: {
+                    settingRow(
+                        icon: "chevron.left.forwardslash.chevron.right",
+                        iconColor: .accentColor,
+                        title: "GitHub",
+                        subtitle: L10n.text("源码、问题反馈与版本更新", "Source, issues, and releases"),
+                        chevron: true
+                    )
+                }
+                .buttonStyle(.plain)
+                AppDivider(leading: 52)
+                settingRow(
+                    icon: "info.circle",
+                    iconColor: .secondary,
+                    title: L10n.text("版本", "Version"),
+                    subtitle: "NekoPilot for macOS",
+                    trailing: version
+                )
+            }
+        }
+    }
+
+    private var version: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.7"
+    }
+
+    private func toggleRow(
+        icon: String,
+        iconColor: Color,
+        title: String,
+        subtitle: String? = nil,
+        value: Binding<Bool>
+    ) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 20, weight: .regular))
+                .foregroundStyle(iconColor)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 15, weight: .medium))
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 8)
+            Toggle("", isOn: value)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+        }
+        .padding(.horizontal, 16)
+        .frame(minHeight: subtitle == nil ? 52 : 64)
+        .contentShape(Rectangle())
+    }
+
+    private func settingRow(
+        icon: String,
+        iconColor: Color,
+        title: String,
+        subtitle: String,
+        trailing: String? = nil,
+        chevron: Bool = false
+    ) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 20, weight: .regular))
+                .foregroundStyle(iconColor)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.primary)
+                Text(subtitle)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            if let trailing {
+                Text(trailing)
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(.secondary)
+            }
+            if chevron {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(minHeight: 64)
+        .contentShape(Rectangle())
+    }
+}
+
+private struct ProxyPortSheet: View {
+    @ObservedObject var model: AppModel
+    @Binding var isPresented: Bool
+    @State private var port: String
+    @State private var saving = false
+
+    init(model: AppModel, isPresented: Binding<Bool>) {
+        self.model = model
+        _isPresented = isPresented
+        _port = State(initialValue: String(model.proxyPort))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text(L10n.text("代理端口", "Proxy Port")).font(.title2.bold())
+            Text(L10n.text("HTTP/SOCKS 混合入站端口", "Mixed HTTP/SOCKS inbound port"))
+                .font(.subheadline).foregroundStyle(.secondary)
+            TextField("16789", text: $port)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 18, design: .monospaced))
+            HStack {
+                Spacer()
+                Button(L10n.text("取消", "Cancel")) { isPresented = false }
+                Button {
+                    guard let value = Int(port) else { return }
+                    Task {
+                        saving = true
+                        let success = await model.setProxyPort(value)
+                        saving = false
+                        if success { isPresented = false }
+                    }
+                } label: {
+                    if saving { ProgressView().controlSize(.small) } else { Text(L10n.text("保存", "Save")) }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(saving || Int(port).map { !(1 ... 65_535).contains($0) } ?? true)
+            }
+        }
+        .padding(22)
+        .frame(width: 360)
+    }
+}
+
+private struct DirectDNSSheet: View {
+    @ObservedObject var model: AppModel
+    @Binding var isPresented: Bool
+    @State private var value: String
+    @State private var saving = false
+
+    init(model: AppModel, isPresented: Binding<Bool>) {
+        self.model = model
+        _isPresented = isPresented
+        _value = State(initialValue: model.directDNS)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text(L10n.text("直连 DNS", "Direct DNS"))
+                    .font(.system(size: 20, weight: .semibold))
+                Spacer()
+                Button { isPresented = false } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+            Text(L10n.text("用于直连域名解析的 DNS 服务器地址", "DNS server used to resolve direct connections"))
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+            TextField("223.5.5.5", text: $value)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 14, design: .monospaced))
+            HStack {
+                Spacer()
+                Button(L10n.text("取消", "Cancel")) { isPresented = false }
+                    .keyboardShortcut(.cancelAction)
+                Button(L10n.text("保存", "Save")) {
+                    Task {
+                        saving = true
+                        let success = await model.setDirectDNS(value)
+                        saving = false
+                        if success { isPresented = false }
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(saving || value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(22)
+        .frame(width: 360)
+    }
+}
+
+private struct UserAgentSheet: View {
+    @ObservedObject var model: AppModel
+    @Binding var isPresented: Bool
+    @State private var value: String
+    @State private var saving = false
+
+    init(model: AppModel, isPresented: Binding<Bool>) {
+        self.model = model
+        _isPresented = isPresented
+        _value = State(initialValue: model.userAgent)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("User Agent")
+                    .font(.system(size: 20, weight: .semibold))
+                Spacer()
+                Button { isPresented = false } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+            Text(L10n.text("用于获取机场订阅的请求标识", "Request identifier used when fetching subscriptions"))
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+            TextField("sing-box 1.13.14", text: $value)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 13, design: .monospaced))
+            HStack {
+                Spacer()
+                Button(L10n.text("取消", "Cancel")) { isPresented = false }
+                    .keyboardShortcut(.cancelAction)
+                Button(L10n.text("保存", "Save")) {
+                    Task {
+                        saving = true
+                        let success = await model.setUserAgent(value)
+                        saving = false
+                        if success { isPresented = false }
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(saving || value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(22)
+        .frame(width: 360)
+    }
+}

@@ -25,14 +25,14 @@
 
 ```bash
 git diff --check
-deno install --frozen
-deno audit --lock=deno.lock
-deno task test
-cargo test --manifest-path src-tauri/Cargo.toml --lib
-deno task build
+swift build --package-path native
+swift test --package-path native
+swift run --package-path native NekoPilotCoreChecks
+NEKOPILOT_VERIFY_REPRODUCIBLE=1 native/scripts/build-sing-box-macos-arm64.sh
+native/scripts/package-macos.sh
 ```
 
-涉及 Tauri、macOS 系统代理、sing-box 生命周期或打包资源时，还应在 macOS 上运行一次实际 Release 包，并记录测试环境、版本和复现步骤。仅通过单元测试不能替代系统行为验收。
+涉及 SwiftUI/AppKit、macOS 系统代理、sing-box 生命周期或打包资源时，还应在 Apple Silicon Mac 上运行一次实际 `.app`，并记录测试环境、版本和复现步骤。只通过编译、检查或签名验证不能替代真实网络与系统行为验收。旧 Tauri 代码仅用于回滚和对照，不接受新的正式功能实现。
 
 ## Pull Request 要求
 

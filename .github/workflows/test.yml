@@ -1,134 +1,57 @@
-name: "Test"
+name: "Test Native macOS"
 
 on:
   push:
   pull_request:
 
-# Cancel any in-progress test run on the same ref when a new push
-# arrives. Test runs are pure regression — the latest commit's result
-# is what matters, older runs become wasted minutes as soon as they
-# are superseded.
 concurrency:
-  group: test-${{ github.workflow }}-${{ github.ref }}
+  group: native-test-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  # Frontend unit tests (vitest). Lightweight — no Rust toolchain, no
-  # Linux system deps. Runs in parallel with the cargo job below.
-  frontend:
-    runs-on: ubuntu-24.04
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  native-package:
+    name: Native Apple Silicon hard gate
+    runs-on: macos-26
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Set Up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - name: Select the pinned Xcode toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(uname -m)" == "arm64" ]] || { echo "::error::Test runner is not Apple Silicon"; exit 1; }
+          test -d /Applications/Xcode_26.2.app
+          sudo xcode-select -s /Applications/Xcode_26.2.app/Contents/Developer
+          xcodebuild -version | grep -Fx "Xcode 26.2"
+          [[ "$(xcrun --sdk macosx --show-sdk-version)" == "26.2" ]]
+
+      - name: Set up pinned Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          node-version: 24.18.0
+          go-version: "1.26.5"
+          check-latest: false
+          cache: false
 
-      - name: Set Up Deno
-        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
-        with:
-          deno-version: v2.9.3
+      - name: Build reproducible sing-box sidecar
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GOPROXY: https://proxy.golang.org,direct
+          NEKOPILOT_VERIFY_REPRODUCIBLE: "1"
+        run: native/scripts/build-sing-box-macos-arm64.sh
 
-      - name: Install locked dependencies
-        run: deno install --frozen
+      - name: Build and verify the complete native package
+        env:
+          NEKOPILOT_SING_BOX_SOURCE: ${{ github.workspace }}/native/.build/sidecar/sing-box
+        run: native/scripts/package-macos.sh "$RUNNER_TEMP/native-test"
 
-      - name: Audit dependencies
-        run: deno audit --lock=deno.lock
-
-      - name: Build production frontend
-        run: deno task build
-
-      - name: Run Frontend Tests
-        run: deno task test
-
-  # Rust unit tests (cargo test) — compiles the tauri lib crate, so the
-  # same apt prereqs as a Linux release build are required to satisfy
-  # webkit2gtk / appindicator dependencies at link time. The tauri build
-  # script also validates every `externalBin` in tauri.conf.json exists
-  # on disk, so we pre-stage the sing-box sidecar via the same script
-  # release.yml uses — otherwise `cargo test` fails at build-script time
-  # with "resource path binaries/sing-box-... doesn't exist".
-  rust:
+  release-policy:
+    name: Publication policy
     runs-on: ubuntu-24.04
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-      # crates.io downloads over HTTP/2 intermittently abort with
-      # `curl failed — [16] Error in the HTTP2 framing layer`, failing the
-      # job on a pure network flake (same SHA passes on a re-run). Forcing
-      # HTTP/1.1 removes the multiplexing path that produces the framing
-      # error; the high net.retry handles the residual blips.
-      CARGO_HTTP_MULTIPLEXING: "false"
-      CARGO_NET_RETRY: "10"
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - name: Install Linux Dependencies
-        run: |
-          sudo apt update
-          sudo apt install libwebkit2gtk-4.1-dev \
-            build-essential \
-            curl \
-            wget \
-            file \
-            libxdo-dev \
-            libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev
-
-      - name: Set Up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 24.18.0
-
-      - name: Set Up Deno
-        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
-        with:
-          deno-version: v2.9.3
-
-      - name: Install Frontend Dependencies
-        run: deno install --frozen
-
-      - name: Download Sidecar Binaries
-        run: deno task download-binaries
-
-      - name: Set Up Rust Toolchain
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable action
-        with:
-          toolchain: 1.97.1
-          components: rustfmt, clippy
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # pinned v2 branch commit
-        with:
-          workspaces: './src-tauri -> target'
-
-      # Isolate the only network-bound part of the job (registry update +
-      # crate download) into its own retried step, so a transient crates.io
-      # blip self-heals instead of failing the run. `cargo test` below then
-      # runs `--offline`, guaranteeing the test step itself never touches the
-      # network — a red there is always a real test failure, never a flake,
-      # and never wastes minutes retrying a genuine failure.
-      - name: Fetch Rust Dependencies
-        run: |
-          for attempt in 1 2 3; do
-            cargo fetch --manifest-path src-tauri/Cargo.toml --locked && exit 0
-            echo "::warning::cargo fetch attempt ${attempt} failed (transient crates.io network error); retrying..."
-            sleep $((attempt * 5))
-          done
-          echo "::error::cargo fetch failed after 3 attempts"
-          exit 1
-
-      - name: Check Rust formatting
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
-
-      - name: Lint Rust workspace
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --all-targets --locked --offline -- -D warnings
-
-      - name: Run Rust Tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --workspace --locked --offline
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Enforce native-only release policy
+        run: native/scripts/check-release-policy.sh

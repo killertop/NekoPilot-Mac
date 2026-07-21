@@ -10,6 +10,7 @@ const paths = {
   tauriConfig: resolve(root, "src-tauri/tauri.conf.json"),
   cargoToml: resolve(root, "src-tauri/Cargo.toml"),
   cargoLock: resolve(root, "src-tauri/Cargo.lock"),
+  nativeVersion: resolve(root, "native/VERSION"),
 };
 
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
@@ -18,6 +19,14 @@ function readJsonVersion(path: string, label: string): string {
   const value = JSON.parse(readFileSync(path, "utf8")).version;
   if (typeof value !== "string" || !SEMVER.test(value)) {
     throw new Error(`${label} has an invalid version: ${String(value)}`);
+  }
+  return value;
+}
+
+function readTextVersion(path: string, label: string): string {
+  const value = readFileSync(path, "utf8").trim();
+  if (!SEMVER.test(value)) {
+    throw new Error(`${label} has an invalid version: ${value}`);
   }
   return value;
 }
@@ -67,6 +76,7 @@ function readVersions() {
     tauriConfig: readJsonVersion(paths.tauriConfig, "tauri.conf.json"),
     cargoToml: readCargoTomlVersion(cargoToml),
     cargoLock: readCargoLockVersion(cargoLock),
+    nativeVersion: readTextVersion(paths.nativeVersion, "native/VERSION"),
     cargoTomlSource: cargoToml,
     cargoLockSource: cargoLock,
   };
@@ -181,12 +191,13 @@ function main(): void {
     [paths.tauriConfig, updateJson(paths.tauriConfig, next)],
     [paths.cargoToml, updateCargoToml(versions.cargoTomlSource, current, next)],
     [paths.cargoLock, updateCargoLock(versions.cargoLockSource, current, next)],
+    [paths.nativeVersion, `${next}\n`],
   ]);
 
   for (const [path, content] of outputs) writeAtomically(path, content);
   console.log(`[version-sync] ${current} -> ${next}`);
   console.log(
-    "Update CHANGELOG.MD, run the release preflight, then commit the four version files together.",
+    "Update CHANGELOG.MD, run the release preflight, then commit all synchronized version files together.",
   );
 }
 

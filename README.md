@@ -4,103 +4,73 @@
   <img src="./src/assets/nekopilot-logo.png" alt="NekoPilot" width="128">
 </p>
 
-NekoPilot for Mac is a macOS-first desktop proxy client built with Tauri, React, TypeScript, Rust, and sing-box. It focuses on a clear everyday workflow: import a subscription or a standalone node link, select a node, connect to that node, and inspect the connection result.
+NekoPilot is a native Apple Silicon proxy client for macOS. Its application shell is SwiftUI + AppKit; the unmodified upstream Go sing-box executable is the only proxy engine.
 
-> This repository is under active development. The local Release build is suitable for development and QA; the distributable package must be produced by the ad-hoc-signed GitHub release workflow described in [docs/RELEASE.md](docs/RELEASE.md).
+Swift owns the menu bar, window lifecycle, sleep/wake handling, system proxy, persistence, and native interaction. Go sing-box owns protocols, routing, DNS, and URL Test. NekoPilot does not reimplement proxy protocols in Swift.
 
-## Current scope
+## Supported release target
 
-- Subscription import, update, deletion, and metadata display.
-- Standalone `vless://`, `trojan://`, `vmess://`, `ss://`, and `anytls://` node links.
-- Explicit group and node selection. NekoPilot does not automatically switch nodes for the user.
-- System Proxy mode backed by a bundled sing-box process.
-- Rule and Global routing modes.
-- Persistent connection feedback such as connecting, connected, testing, and failed with a reason.
-- macOS deep-link scheme: `nekopilot://`.
+- Apple Silicon (`arm64`) only.
+- macOS 13 or newer.
+- GitHub Releases with an ad-hoc signature; Apple Developer ID and notarization are not required by this distribution path.
+- No Windows, Linux, or Intel macOS packages.
 
-The current product and acceptance target is macOS. Linux configuration remains in the Tauri baseline and may produce best-effort packages. Windows source remains for compatibility work only; GitHub Releases do not build or publish Windows installers.
+The previous Tauri/React/Rust implementation remains in `src/` and `src-tauri/` only as a rollback and behavior-reference baseline. It is not a production build input and is never published.
+
+## Product scope
+
+- Import and update subscriptions.
+- Import standalone `vless://`, `trojan://`, `vmess://`, `ss://`, and `anytls://` links.
+- Present all imported nodes in one delay-sorted list.
+- Manual URL Test while disconnected or connected, with persisted historical delay results.
+- Connect to the selected node through System Proxy mode.
+- Custom direct/proxy routing rules and bundled China/LAN direct rules.
+- A single native menu-bar item with running and stopped states.
 
 ## Technology
 
-- Tauri 2
-- React 19 and TypeScript
-- Rust 2021
-- Deno 2 task runner
-- Vite and Vitest
-- sing-box
-
-## Prerequisites
-
-- macOS 10.15 or later for the macOS target.
-- Deno 2.x.
-- Rust stable toolchain and Cargo.
-- Xcode Command Line Tools.
-
-Install frontend dependencies and prepare the local hooks:
-
-```bash
-deno install --frozen
-deno task prepare
-```
+- Swift 6, SwiftUI, and AppKit for the native application.
+- Original Go sing-box for protocols, routing, DNS, and URL Test.
+- SQLite for local data.
+- Shell and GitHub Actions for reproducible Apple Silicon packaging.
 
 ## Development
 
-Start the Tauri development application:
+Requirements: Apple Silicon Mac, macOS 13+, Xcode 26.2, Go 1.26.5, and GitHub CLI.
 
 ```bash
-deno task tauri dev
+native/scripts/build-sing-box-macos-arm64.sh
+NEKOPILOT_SING_BOX="$PWD/native/.build/sidecar/sing-box" \
+  swift run --package-path native NekoPilot
 ```
 
-The development command runs the Vite frontend and the Rust backend with development diagnostics enabled. It is intended for implementation work, not for validating the final distributable package.
-
-## Verification
-
-Run the frontend unit tests:
+Run native checks:
 
 ```bash
-deno task test
+swift build --package-path native
+swift test --package-path native
+swift run --package-path native NekoPilotCoreChecks
 ```
 
-Run the Rust library tests:
+Build and verify the actual application, DMG, archive, signature, architecture, resources, and minimum macOS version:
 
 ```bash
-cargo test --manifest-path src-tauri/Cargo.toml --lib
+native/scripts/package-macos.sh
 ```
 
-Run the production frontend build:
-
-```bash
-deno task build
-```
-
-Build a local Release application and macOS bundle:
-
-```bash
-deno task tauri build
-```
-
-The local bundle is written below `src-tauri/target/release/bundle/`. macOS builds use an ad-hoc signature for the GitHub-only release path; see [docs/RELEASE.md](docs/RELEASE.md) for first-launch and verification notes.
+Artifacts are written to `native/dist/`. The package script copies the pinned menu-bar template, offline rule baseline, and source-built sing-box into the app before ad-hoc signing it.
 
 ## Project layout
 
 ```text
-src/                 React UI, state, configuration, and frontend tests
-src-tauri/src/       Rust commands, database, engine, and lifecycle code
-src-tauri/            Tauri configuration, icons, resources, and Cargo workspace
-scripts/              Build, binary download, and template synchronization tools
-docs/                 Development, release, audit, and implementation notes
+native/Sources/NekoPilot/       SwiftUI/AppKit application shell
+native/Sources/NekoPilotCore/   native lifecycle, persistence, compiler, and engine supervision
+native/scripts/                 pinned sing-box build and macOS package verification
+.github/workflows/              native Apple Silicon tests and release
+src/, src-tauri/                legacy rollback/reference implementation only
+docs/                           development and release guides
 ```
 
-## Documentation
+See [中文说明](README_CN.md), [Development Guide](docs/DEVELOPMENT.md), and [Release Guide](docs/RELEASE.md).
 
-- [中文说明](README_CN.md)
-- [Development Guide](docs/DEVELOPMENT.md)
-- [Release Guide](docs/RELEASE.md)
-- [Security Policy](SECURITY.md)
-- [Contributing Guide](CONTRIBUTING.md)
-
-Source publication is routed through the VPS bare repository with [scripts/post-receive-github-sync.sh](scripts/post-receive-github-sync.sh), then pushed by the VPS to the project's GitHub repository.
-
-## License and source notices
-
-This repository is maintained at [killertop/NekoPilot-Mac](https://github.com/killertop/NekoPilot-Mac). It retains the Apache-2.0 `LICENSE` and `NOTICE` files required for source attribution. NekoPilot for Mac uses its own product name, iconography, bundle identifier, and user-facing branding. See [LICENSE](LICENSE) and [NOTICE](NOTICE) for the applicable notices.
+Source publication is routed through the VPS bare repository described in the release guide. The maintained repository is [killertop/NekoPilot-Mac](https://github.com/killertop/NekoPilot-Mac). See [LICENSE](LICENSE) and [NOTICE](NOTICE).

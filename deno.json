@@ -3,6 +3,7 @@
   "tasks": {
     "sync-templates": "deno run -A scripts/sync-templates.ts",
     "download-binaries": "deno run -A scripts/download-binaries.ts",
+    "download-native-binary": "deno run -A scripts/download-binaries.ts --target=darwin-arm64",
     "build:tun-service": "deno run -A scripts/build-tun-service.ts",
     "check:versions": "deno run -A scripts/version-sync.ts --check",
     "version:bump": "deno run -A scripts/version-sync.ts --bump-patch",

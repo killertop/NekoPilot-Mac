@@ -323,13 +323,36 @@ async function main(): Promise<void> {
     );
   }
 
+  const requestedKeys = Deno.args
+    .filter((argument) => argument.startsWith("--target="))
+    .map((argument) => argument.slice("--target=".length));
+  const availableKeys = new Set(
+    TARGETS.map((target) => `${target.platform}-${target.arch}`),
+  );
+  for (const key of requestedKeys) {
+    if (!availableKeys.has(key)) {
+      throw new Error(
+        `Unknown sidecar target "${key}"; expected one of ${
+          [...availableKeys].join(", ")
+        }`,
+      );
+    }
+  }
+  const selectedTargets = requestedKeys.length === 0
+    ? TARGETS
+    : TARGETS.filter((target) =>
+      requestedKeys.includes(`${target.platform}-${target.arch}`)
+    );
+
   const startedAt = Date.now();
   // GitHub/CDN connections are markedly less reliable when all five large
   // archives compete through the same corporate/VPS proxy. Sequential
   // downloads trade a few seconds of ideal-path speed for deterministic CI.
-  for (const target of TARGETS) await stageTarget(target);
+  for (const target of selectedTargets) await stageTarget(target);
   const elapsed = ((Date.now() - startedAt) / 1_000).toFixed(2);
-  console.log(`All sidecars downloaded and verified (${elapsed}s)`);
+  console.log(
+    `${selectedTargets.length} sidecar target(s) downloaded and verified (${elapsed}s)`,
+  );
 }
 
 try {

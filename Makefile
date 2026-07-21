@@ -1,4 +1,4 @@
-.PHONY: update dev build bump check-versions linux-check proxy-info help
+.PHONY: update sidecar dev build bump check-versions linux-check proxy-info help legacy-dev legacy-build
 
 PROXY_HOST ?= 127.0.0.1
 PORT ?=
@@ -12,14 +12,15 @@ endif
 
 help:
 	@echo "Available targets:"
-	@echo "  update       Update JS and Rust dependencies"
+	@echo "  sidecar      Build pinned upstream sing-box for Apple Silicon"
+	@echo "  dev          Start the native SwiftUI/AppKit application"
+	@echo "  build        Build and verify the native Apple Silicon package"
+	@echo "  update       Update legacy Tauri dependencies (rollback baseline only)"
 	@echo "               Optional: make update PORT=7890 [PROXY_HOST=127.0.0.1]"
-	@echo "  dev          Start Tauri dev server"
-	@echo "  build        Build the unsigned Tauri application"
 	@echo "  bump         Bump the synchronized application patch version (no commit)"
 	@echo "  check-versions  Verify package, Tauri, and Cargo versions match"
 	@echo "  proxy-info   Print Makefile and inherited proxy environment"
-	@echo "  linux-check  Run cargo check on the Linux VM with local WIP patched"
+	@echo "  legacy-dev / legacy-build / linux-check  Legacy rollback tools"
 
 bump:
 	@deno task version:bump
@@ -44,10 +45,19 @@ proxy-info:
 	@echo "  Inherited environment:"
 	@env | grep -E '^(HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|http_proxy|https_proxy|all_proxy|NO_PROXY|no_proxy)=' || echo "    <none>"
 
-dev:
+sidecar:
+	native/scripts/build-sing-box-macos-arm64.sh
+
+dev: sidecar
+	NEKOPILOT_SING_BOX="$(CURDIR)/native/.build/sidecar/sing-box" swift run --package-path native NekoPilot
+
+build: sidecar
+	native/scripts/package-macos.sh
+
+legacy-dev:
 	deno task tauri dev
 
-build:
+legacy-build:
 	deno task tauri build
 
 # Sync the Linux VM to local HEAD, apply any WIP as a patch, and run
