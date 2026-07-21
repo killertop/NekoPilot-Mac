@@ -3,14 +3,13 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 NATIVE_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
-REPOSITORY_ROOT=$(cd "$NATIVE_DIR/.." && pwd)
 VERSION=$(tr -d '[:space:]' < "$NATIVE_DIR/VERSION")
 OUTPUT_DIR=${1:-"$NATIVE_DIR/dist"}
 APP_NAME="NekoPilot.app"
 APP_BUNDLE="$OUTPUT_DIR/$APP_NAME"
 SING_BOX_SOURCE=${NEKOPILOT_SING_BOX_SOURCE:-"$NATIVE_DIR/.build/sidecar/sing-box"}
-ICON_SOURCE="$REPOSITORY_ROOT/src-tauri/icons/icon.icns"
-MENU_ICON_SOURCE="$REPOSITORY_ROOT/src-tauri/icons/menu-bar-template.png"
+ICON_SOURCE="$NATIVE_DIR/Resources/AppIcon.icns"
+MENU_ICON_SOURCE="$NATIVE_DIR/Resources/menu-bar-template.png"
 
 fail() {
   echo "[native-package] $*" >&2

@@ -78,8 +78,8 @@ public actor SubscriptionRepository {
         identifier requestedIdentifier: String? = nil
     ) throws -> String {
         let identifier = try existingIdentifier(for: url) ?? requestedIdentifier ?? UUID().uuidString.lowercased()
-        // Keep the shared OneBox/Tauri database contract in milliseconds so a
-        // user can safely launch either implementation during migration.
+        // Keep timestamps in milliseconds for compatibility with existing
+        // NekoPilot installations that already use this database contract.
         let now = Int64(Date().timeIntervalSince1970 * 1_000)
         let configData = try JSONValue.encodeObject(config)
         guard let configText = String(data: configData, encoding: .utf8) else {

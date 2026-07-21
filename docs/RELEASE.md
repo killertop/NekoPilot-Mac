@@ -4,7 +4,7 @@
 
 NekoPilot is distributed through GitHub Releases only. Packages use an ad-hoc signature and are not Apple-notarized, so no Apple Developer certificate is required. Users may need to right-click **Open** once or approve the app in **System Settings → Privacy & Security**.
 
-Only Apple Silicon macOS assets are built or published. Windows, Linux, Intel macOS, and Tauri packages are never Release assets. The previous Tauri source is retained only as a rollback/reference baseline.
+Only Apple Silicon macOS assets are built or published. Windows, Linux, Intel macOS, Rust/Tauri, and WebView packages are never Release assets or active source targets.
 
 The minimum supported system is macOS 13. The workflow rejects both the Swift executable and sing-box sidecar if `vtool` reports a newer minimum version.
 
@@ -16,7 +16,7 @@ The minimum supported system is macOS 13. The workflow rejects both the Swift ex
 - `feature/beta` → rolling `beta` prerelease;
 - `main` → immutable `v<version>` stable release.
 
-Manual dispatch also supports a rolling `manual` channel. A stable tag can never be replaced; bump `native/VERSION` for another stable package. The repository version helper may mirror the native version into legacy metadata for rollback consistency, but the Release workflow never reads Tauri, Cargo, or package metadata to choose its version.
+Manual dispatch also supports a rolling `manual` channel. A stable tag can never be replaced; bump `native/VERSION` for another stable package. `native/VERSION` is the only application-version source read by the Release workflow.
 
 ## Reproducible core inputs
 
@@ -39,6 +39,7 @@ Run on Apple Silicon before changing a Release version:
 
 ```bash
 git diff --check
+native/scripts/check-release-policy.sh
 swift build --package-path native
 swift test --package-path native
 swift run --package-path native NekoPilotCoreChecks
@@ -63,7 +64,7 @@ NekoPilot_<version>_aarch64.app.tar.gz
 SHA256SUMS
 ```
 
-No updater metadata, prebuilt Tauri sidecar, universal binary, Intel archive, or secondary-platform package is uploaded.
+No updater metadata, prebuilt sidecar, universal binary, Intel archive, or secondary-platform package is uploaded.
 
 To dispatch a stable release from `main`:
 

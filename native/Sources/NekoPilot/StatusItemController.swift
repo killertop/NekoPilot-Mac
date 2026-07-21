@@ -82,9 +82,9 @@ final class StatusItemController: NSObject {
         let candidates = [
             Bundle.main.url(forResource: "menu-bar-template", withExtension: "png"),
             URL(fileURLWithPath: fileManager.currentDirectoryPath)
-                .appendingPathComponent("../src-tauri/icons/menu-bar-template.png"),
+                .appendingPathComponent("native/Resources/menu-bar-template.png"),
             URL(fileURLWithPath: fileManager.currentDirectoryPath)
-                .appendingPathComponent("src-tauri/icons/menu-bar-template.png"),
+                .appendingPathComponent("Resources/menu-bar-template.png"),
         ].compactMap { $0 }
         guard let source = candidates.first(where: { fileManager.fileExists(atPath: $0.path) }),
               let image = NSImage(contentsOf: source) else {

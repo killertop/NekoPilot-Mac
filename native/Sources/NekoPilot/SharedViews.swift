@@ -2,9 +2,9 @@ import AppKit
 import NekoPilotCore
 import SwiftUI
 
-/// Visual tokens copied from the final Tauri UI.  Keeping these explicit is
-/// intentional: macOS' default `windowBackgroundColor` and materials are much
-/// darker and blurrier than the flat iOS-style grouped surface used by the app.
+/// Product visual tokens are explicit because macOS' default
+/// `windowBackgroundColor` and materials are darker and blurrier than the
+/// compact grouped surface used by NekoPilot.
 enum AppVisual {
     static func background(_ scheme: ColorScheme) -> Color {
         scheme == .dark ? .black : Color(red: 247 / 255, green: 247 / 255, blue: 247 / 255)

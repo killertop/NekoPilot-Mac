@@ -25,7 +25,7 @@ swift run --package-path native NekoPilotCoreChecks
 
 `scripts/build-sing-box-macos-arm64.sh` downloads the archive for the pinned upstream commit, verifies the archive SHA-256, requires the exact Go and macOS SDK versions, builds upstream `./cmd/sing-box` with the upstream release tags in isolated Go caches, and rejects any binary whose `LC_BUILD_VERSION` requires newer than macOS 13.0.
 
-CI builds the core twice from the same inputs and requires identical hashes. No forked Go proxy implementation or prebuilt Tauri sidecar is accepted as a native Release input.
+CI builds the core twice from the same inputs and requires identical hashes. No forked Go proxy implementation or prebuilt sidecar is accepted as a Release input.
 
 ```bash
 native/scripts/build-sing-box-macos-arm64.sh
@@ -41,4 +41,4 @@ native/scripts/package-macos.sh
 
 The script creates and verifies an ad-hoc-signed `.app`, `.dmg`, `.app.tar.gz`, and `SHA256SUMS` under `native/dist`. Both executable files must be arm64-only and compatible with macOS 13. The packaged DMG and archive are mounted/extracted and checked independently.
 
-The legacy Tauri implementation remains in the repository only as a rollback and behavior-reference baseline. It must not be shipped or run against the same database at the same time.
+The repository contains one production architecture only: a SwiftUI/AppKit shell plus the pinned upstream Go sing-box executable. Rust, WebView, Windows, Linux, and Intel application targets are rejected by the repository policy check.

@@ -43,6 +43,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Enforce Swift and upstream-Go architecture
+        run: native/scripts/check-release-policy.sh
+
       - name: Resolve version and channel
         id: release
         shell: bash

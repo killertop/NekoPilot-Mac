@@ -25,6 +25,7 @@
 
 ```bash
 git diff --check
+native/scripts/check-release-policy.sh
 swift build --package-path native
 swift test --package-path native
 swift run --package-path native NekoPilotCoreChecks
@@ -32,7 +33,7 @@ NEKOPILOT_VERIFY_REPRODUCIBLE=1 native/scripts/build-sing-box-macos-arm64.sh
 native/scripts/package-macos.sh
 ```
 
-涉及 SwiftUI/AppKit、macOS 系统代理、sing-box 生命周期或打包资源时，还应在 Apple Silicon Mac 上运行一次实际 `.app`，并记录测试环境、版本和复现步骤。只通过编译、检查或签名验证不能替代真实网络与系统行为验收。旧 Tauri 代码仅用于回滚和对照，不接受新的正式功能实现。
+涉及 SwiftUI/AppKit、macOS 系统代理、sing-box 生命周期或打包资源时，还应在 Apple Silicon Mac 上运行一次实际 `.app`，并记录测试环境、版本和复现步骤。只通过编译、检查或签名验证不能替代真实网络与系统行为验收。仓库只接受 SwiftUI/AppKit 应用壳与上游 Go sing-box 的 macOS ARM64 实现，不接受 Rust、WebView 或其他平台运行链路。
 
 ## Pull Request 要求
 

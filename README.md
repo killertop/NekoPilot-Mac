@@ -1,7 +1,7 @@
 # NekoPilot for Mac
 
 <p align="center">
-  <img src="./src/assets/nekopilot-logo.png" alt="NekoPilot" width="128">
+  <img src="./native/Resources/NekoPilotLogo.png" alt="NekoPilot" width="128">
 </p>
 
 NekoPilot is a native Apple Silicon proxy client for macOS. Its application shell is SwiftUI + AppKit; the unmodified upstream Go sing-box executable is the only proxy engine.
@@ -15,7 +15,7 @@ Swift owns the menu bar, window lifecycle, sleep/wake handling, system proxy, pe
 - GitHub Releases with an ad-hoc signature; Apple Developer ID and notarization are not required by this distribution path.
 - No Windows, Linux, or Intel macOS packages.
 
-The previous Tauri/React/Rust implementation remains in `src/` and `src-tauri/` only as a rollback and behavior-reference baseline. It is not a production build input and is never published.
+The repository no longer contains a Rust, Tauri, React, or cross-platform application implementation. Git history remains available for old-version archaeology.
 
 ## Product scope
 
@@ -47,6 +47,7 @@ NEKOPILOT_SING_BOX="$PWD/native/.build/sidecar/sing-box" \
 Run native checks:
 
 ```bash
+native/scripts/check-release-policy.sh
 swift build --package-path native
 swift test --package-path native
 swift run --package-path native NekoPilotCoreChecks
@@ -65,12 +66,12 @@ Artifacts are written to `native/dist/`. The package script copies the pinned me
 ```text
 native/Sources/NekoPilot/       SwiftUI/AppKit application shell
 native/Sources/NekoPilotCore/   native lifecycle, persistence, compiler, and engine supervision
+native/Resources/               source artwork for the macOS app and menu bar
 native/scripts/                 pinned sing-box build and macOS package verification
 .github/workflows/              native Apple Silicon tests and release
-src/, src-tauri/                legacy rollback/reference implementation only
 docs/                           development and release guides
 ```
 
-See [中文说明](README_CN.md), [Development Guide](docs/DEVELOPMENT.md), and [Release Guide](docs/RELEASE.md).
+See [Architecture](docs/ARCHITECTURE.md), [中文说明](README_CN.md), [Development Guide](docs/DEVELOPMENT.md), and [Release Guide](docs/RELEASE.md).
 
 Source publication is routed through the VPS bare repository described in the release guide. The maintained repository is [killertop/NekoPilot-Mac](https://github.com/killertop/NekoPilot-Mac). See [LICENSE](LICENSE) and [NOTICE](NOTICE).

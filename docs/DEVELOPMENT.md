@@ -43,6 +43,7 @@ The SwiftPM executable is useful for iteration, but it is not package acceptance
 
 ```bash
 git diff --check
+native/scripts/check-release-policy.sh
 swift build --package-path native
 swift test --package-path native
 swift run --package-path native NekoPilotCoreChecks
@@ -82,4 +83,4 @@ Record the app version, package path, macOS version, node protocol, test URL, re
 
 ## 6. Legacy boundary
 
-`src/` and `src-tauri/` are the previous Tauri implementation. They remain only for rollback and behavior comparison. Do not add new production behavior there, do not make them a Release dependency, and never run legacy and native builds against the same live database simultaneously.
+The repository intentionally contains no legacy application implementation. Use Git history when an old behavior needs investigation; do not restore Rust, Tauri, React/WebView, Windows, Linux, or Intel application targets to the active tree.

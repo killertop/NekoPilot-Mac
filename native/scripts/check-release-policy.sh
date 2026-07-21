@@ -8,6 +8,9 @@ TEST="$ROOT/.github/workflows/test.yml"
 GUIDE="$ROOT/docs/RELEASE.md"
 CORE_BUILD="$ROOT/native/scripts/build-sing-box-macos-arm64.sh"
 PACKAGE="$ROOT/native/scripts/package-macos.sh"
+APP_ICON="$ROOT/native/Resources/AppIcon.icns"
+MENU_ICON="$ROOT/native/Resources/menu-bar-template.png"
+LOGO="$ROOT/native/Resources/NekoPilotLogo.png"
 
 fail() {
   echo "[release-policy] $*" >&2
@@ -63,13 +66,43 @@ require_text "$CORE_BUILD" './cmd/sing-box'
 reject_pattern "$CORE_BUILD" 'src-tauri/binaries'
 
 require_text "$PACKAGE" 'menu-bar-template.png'
+require_text "$PACKAGE" '$NATIVE_DIR/Resources/AppIcon.icns'
+require_text "$PACKAGE" '$NATIVE_DIR/Resources/menu-bar-template.png'
 require_text "$PACKAGE" 'LSMultipleInstancesProhibited'
 require_text "$PACKAGE" 'swift test --package-path'
 require_text "$PACKAGE" 'verify-macos-artifacts.sh'
 require_text "$PACKAGE" 'smoke-test-macos-app.sh'
 
 require_text "$GUIDE" "Only Apple Silicon macOS assets are built or published"
-require_text "$GUIDE" "Windows, Linux, Intel macOS, and Tauri packages are never Release assets"
+require_text "$GUIDE" "Windows, Linux, Intel macOS, Rust/Tauri, and WebView packages are never Release assets or active source targets"
 require_text "$GUIDE" 'native/VERSION'
+
+for resource in "$APP_ICON" "$MENU_ICON" "$LOGO"; do
+  [[ -f "$resource" ]] || fail "Missing native source resource: $resource"
+done
+
+TRACKED=$(git -C "$ROOT" ls-files)
+if grep -Eq '(^|/)(Cargo\.toml|Cargo\.lock|[^/]+\.rs)$' <<<"$TRACKED"; then
+  fail "Tracked Rust or Cargo source is forbidden"
+fi
+if grep -Eq '(^|/)(go\.mod|go\.sum|[^/]+\.go)$' <<<"$TRACKED"; then
+  fail "Vendored or forked Go core source is forbidden; build the pinned upstream sing-box source"
+fi
+if grep -Eq '^(src-tauri|src|public)/|^(package\.json|deno\.json|deno\.lock|index\.html|vite\.config\.ts|vitest\.config\.ts|tsconfig[^/]*\.json)$' <<<"$TRACKED"; then
+  fail "Tracked legacy Tauri/React application source is forbidden"
+fi
+
+for forbidden_source in \
+  'src-tauri/' \
+  '@tauri-apps/' \
+  'cargo tauri' \
+  'deno task tauri'; do
+  if git -C "$ROOT" grep -Fq -- "$forbidden_source" -- \
+    ':!CHANGELOG.MD' \
+    ':!docs/design-reference/**' \
+    ':!native/scripts/check-release-policy.sh'; then
+    fail "Active source still references retired runtime: $forbidden_source"
+  fi
+done
 
 echo "[release-policy] Native Apple Silicon publication policy passed"

@@ -14,8 +14,8 @@ public enum SingBoxLocator {
             candidates.append(resources.appendingPathComponent("sing-box"))
         }
         let current = URL(fileURLWithPath: fileManager.currentDirectoryPath)
-        candidates.append(current.appendingPathComponent("src-tauri/binaries/sing-box-aarch64-apple-darwin"))
-        candidates.append(current.appendingPathComponent("../src-tauri/binaries/sing-box-aarch64-apple-darwin"))
+        candidates.append(current.appendingPathComponent("native/.build/sidecar/sing-box"))
+        candidates.append(current.appendingPathComponent(".build/sidecar/sing-box"))
         for candidate in candidates where fileManager.isExecutableFile(atPath: candidate.path) {
             return candidate.standardizedFileURL
         }

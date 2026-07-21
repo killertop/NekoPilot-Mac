@@ -22,7 +22,7 @@ and other non-code assets associated with this project:
    reproduce, modify, distribute, or display the product name "OneBox", any
    confusingly similar name, or any logos, icons, or branding elements associated
    with this project (including but not limited to the icons located in the
-   'src-tauri/icons' directory) in any manner that implies endorsement,
+   'native/Resources' directory) in any manner that implies endorsement,
    affiliation, or sponsorship by OneOh Cloud LLC.
 
 2. Naming Restrictions for Redistributed Versions
