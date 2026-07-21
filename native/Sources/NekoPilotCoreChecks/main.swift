@@ -105,6 +105,7 @@ checks.append(("repository and config compiler", {
         "compiler did not select stable runtime node"
     )
     try await SingBoxValidator.validate(configuration: output)
+    let runtimeConfigurationBeforeOfflineTest = try Data(contentsOf: output)
     let offlineAPI = try LocalAPIEndpoint.make()
     let offlineConfigURL = try await compiler.makeOfflineTestConfiguration(
         selectedNode: nodes[0].runtimeTag,
@@ -119,6 +120,11 @@ checks.append(("repository and config compiler", {
     )
     let experimentalKeys = Set(offlineConfig["experimental"]?.objectValue.map { Array($0.keys) } ?? [])
     try expect(experimentalKeys == Set(["cache_file"]), "offline URL Test config contains an unexpected experimental service")
+    let runtimeConfigurationAfterOfflineTest = try Data(contentsOf: output)
+    try expect(
+        runtimeConfigurationAfterOfflineTest == runtimeConfigurationBeforeOfflineTest,
+        "offline URL Test unexpectedly modified the live runtime configuration"
+    )
 }))
 
 func importedTestNode(repository: SubscriptionRepository, requiresExternalNode: Bool = false) async throws -> ProxyNode {

@@ -19,7 +19,6 @@ public actor URLTester {
     public func test(
         nodes: [ProxyNode],
         engineRunning: Bool,
-        maximumConcurrency _: Int = 3,
         onResult: URLTestProgressHandler? = nil
     ) async -> [String: DelayRecord] {
         guard !nodes.isEmpty else { return [:] }
@@ -42,27 +41,40 @@ public actor URLTester {
         process.arguments = ["run", "-c", config.path, "--disable-color"]
         process.currentDirectoryURL = temporaryDirectory
         process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
+        let standardError = Pipe()
+        process.standardError = standardError
+        standardError.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            AppLogger.shared.warning("[sing-box URL Test] \(String(decoding: data, as: UTF8.self))")
+        }
         do {
             try process.run()
+            try? standardError.fileHandleForWriting.close()
             _ = setpgid(process.processIdentifier, process.processIdentifier)
         } catch {
+            standardError.fileHandleForReading.readabilityHandler = nil
+            try? standardError.fileHandleForReading.close()
             try? FileManager.default.removeItem(at: temporaryDirectory)
             return unavailable(nodes)
         }
 
         defer {
             Self.stop(process)
-            Task { await client.disconnect() }
+            standardError.fileHandleForReading.readabilityHandler = nil
+            try? standardError.fileHandleForReading.close()
             if ProcessInfo.processInfo.environment["NEKOPILOT_KEEP_VALIDATION"] != "1" {
                 try? FileManager.default.removeItem(at: temporaryDirectory)
             }
         }
         guard await Self.waitUntilReady(client: client, process: process) else {
             AppLogger.shared.warning("offline URL Test core did not become ready")
+            await client.disconnect()
             return unavailable(nodes)
         }
-        return await test(client: client, nodes: nodes, onResult: onResult)
+        let results = await test(client: client, nodes: nodes, onResult: onResult)
+        await client.disconnect()
+        return results
     }
 
     private func test(

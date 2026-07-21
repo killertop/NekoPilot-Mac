@@ -17,6 +17,42 @@ public actor ConfigurationCompiler {
         selectedNode: String?,
         apiEndpoint: LocalAPIEndpoint? = nil
     ) async throws -> URL {
+        let config = try await makeConfiguration(
+            selectedNode: selectedNode,
+            apiEndpoint: apiEndpoint
+        )
+        try AtomicFile.write(try JSONValue.encodeObject(config, pretty: true), to: paths.runtimeConfig)
+        return paths.runtimeConfig
+    }
+
+    public func makeOfflineTestConfiguration(
+        selectedNode: String?,
+        apiEndpoint: LocalAPIEndpoint
+    ) async throws -> URL {
+        // Do not call compile here. An offline URL Test must not overwrite the
+        // live runtime configuration with its short-lived API credentials or
+        // race a subsequent Connect request.
+        var config = try await makeConfiguration(
+            selectedNode: selectedNode,
+            apiEndpoint: apiEndpoint
+        )
+        config.removeValue(forKey: "inbounds")
+        if var log = config["log"]?.objectValue {
+            log["disabled"] = .bool(true)
+            config["log"] = .object(log)
+        }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NekoPilot-URLTest-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("config.json")
+        try AtomicFile.write(try JSONValue.encodeObject(config), to: file)
+        return file
+    }
+
+    private func makeConfiguration(
+        selectedNode: String?,
+        apiEndpoint: LocalAPIEndpoint?
+    ) async throws -> [String: JSONValue] {
         var config = try Self.loadTemplate()
         let port = await settings.proxyPort()
         let allowLAN = await settings.bool(SettingsStore.Key.allowLAN)
@@ -33,27 +69,7 @@ public actor ConfigurationCompiler {
         injectRules(rules, into: &config)
         let sources = try await repository.configObjects()
         try merge(sources: sources, selectedNode: selectedNode, into: &config)
-        try AtomicFile.write(try JSONValue.encodeObject(config, pretty: true), to: paths.runtimeConfig)
-        return paths.runtimeConfig
-    }
-
-    public func makeOfflineTestConfiguration(
-        selectedNode: String?,
-        apiEndpoint: LocalAPIEndpoint
-    ) async throws -> URL {
-        _ = try await compile(selectedNode: selectedNode, apiEndpoint: apiEndpoint)
-        var config = try JSONValue.decodeObject(from: Data(contentsOf: paths.runtimeConfig))
-        config.removeValue(forKey: "inbounds")
-        if var log = config["log"]?.objectValue {
-            log["disabled"] = .bool(true)
-            config["log"] = .object(log)
-        }
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("NekoPilot-URLTest-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let file = directory.appendingPathComponent("config.json")
-        try AtomicFile.write(try JSONValue.encodeObject(config), to: file)
-        return file
+        return config
     }
 
     private static func loadTemplate() throws -> [String: JSONValue] {

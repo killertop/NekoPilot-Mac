@@ -3,7 +3,8 @@ import Foundation
 import Security
 
 /// Ephemeral, loopback-only credentials for the official sing-box 1.14 API.
-/// The value exists only for a running core session and is never persisted.
+/// A fresh value is generated for every core session. It is only usable while
+/// that session runs and is written solely to its owner-only runtime config.
 public struct LocalAPIEndpoint: Sendable, Equatable {
     public let host: String
     public let port: Int
