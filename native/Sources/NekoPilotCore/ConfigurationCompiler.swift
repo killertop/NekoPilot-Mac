@@ -13,7 +13,10 @@ public actor ConfigurationCompiler {
     }
 
     @discardableResult
-    public func compile(selectedNode: String?) async throws -> URL {
+    public func compile(
+        selectedNode: String?,
+        apiEndpoint: LocalAPIEndpoint? = nil
+    ) async throws -> URL {
         var config = try Self.loadTemplate()
         let port = await settings.proxyPort()
         let allowLAN = await settings.bool(SettingsStore.Key.allowLAN)
@@ -24,7 +27,8 @@ public actor ConfigurationCompiler {
             config: &config,
             proxyPort: port,
             allowLAN: allowLAN,
-            directDNS: dns
+            directDNS: dns,
+            apiEndpoint: apiEndpoint
         )
         injectRules(rules, into: &config)
         let sources = try await repository.configObjects()
@@ -34,9 +38,10 @@ public actor ConfigurationCompiler {
     }
 
     public func makeOfflineTestConfiguration(
-        selectedNode: String?
+        selectedNode: String?,
+        apiEndpoint: LocalAPIEndpoint
     ) async throws -> URL {
-        _ = try await compile(selectedNode: selectedNode)
+        _ = try await compile(selectedNode: selectedNode, apiEndpoint: apiEndpoint)
         var config = try JSONValue.decodeObject(from: Data(contentsOf: paths.runtimeConfig))
         config.removeValue(forKey: "inbounds")
         if var log = config["log"]?.objectValue {
@@ -62,7 +67,8 @@ public actor ConfigurationCompiler {
         config: inout [String: JSONValue],
         proxyPort: Int,
         allowLAN: Bool,
-        directDNS: String
+        directDNS: String,
+        apiEndpoint: LocalAPIEndpoint?
     ) {
         config["log"] = .object([
             // Connection-level INFO output is extremely chatty and duplicates
@@ -78,6 +84,21 @@ public actor ConfigurationCompiler {
             "path": .string(paths.cacheDatabase.path),
         ])
         config["experimental"] = .object(experimental)
+
+        if let apiEndpoint {
+            // No dashboard, remote API, HTTP controller, or Clash service is
+            // configured. Swift connects directly to the official sing-box
+            // gRPC API over an ephemeral loopback endpoint for this process.
+            config["services"] = .array([.object([
+                "type": .string("api"),
+                "tag": .string("nekopilot-local-api"),
+                "listen": .string(apiEndpoint.host),
+                "listen_port": .number(Double(apiEndpoint.port)),
+                "secret": .string(apiEndpoint.secret),
+            ])])
+        } else {
+            config.removeValue(forKey: "services")
+        }
 
         if var inbounds = config["inbounds"]?.arrayValue {
             inbounds = inbounds.map { value in

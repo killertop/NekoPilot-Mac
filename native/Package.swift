@@ -19,14 +19,22 @@ private let needsCommandLineToolsTestingPackage = selectedDeveloperDirectory.map
     URL(fileURLWithPath: $0).lastPathComponent == "CommandLineTools"
 } ?? false
 
-private let packageDependencies: [Package.Dependency] = needsCommandLineToolsTestingPackage
-    ? [
+private var packageDependencies: [Package.Dependency] = [
+    // sing-box 1.14 exposes its local control surface as official gRPC. Keep
+    // this client on the mature v1 transport so the app remains macOS 13
+    // compatible (gRPC Swift v2 requires macOS 15).
+    .package(url: "https://github.com/grpc/grpc-swift.git", exact: "1.21.0"),
+    .package(url: "https://github.com/apple/swift-protobuf.git", exact: "1.38.1"),
+]
+
+if needsCommandLineToolsTestingPackage {
+    packageDependencies.append(
         .package(
             url: "https://github.com/swiftlang/swift-testing",
             revision: "5ee435b15ad40ec1f644b5eb9d247f263ccd2170"
-        ),
-    ]
-    : []
+        )
+    )
+}
 
 private let testDependencies: [Target.Dependency] = needsCommandLineToolsTestingPackage
     ? ["NekoPilotCore", .product(name: "Testing", package: "swift-testing")]
@@ -47,6 +55,10 @@ let package = Package(
     targets: [
         .target(
             name: "NekoPilotCore",
+            dependencies: [
+                .product(name: "GRPC", package: "grpc-swift"),
+                .product(name: "SwiftProtobuf", package: "swift-protobuf"),
+            ],
             exclude: ["Resources"],
             swiftSettings: [
                 .swiftLanguageMode(.v5),

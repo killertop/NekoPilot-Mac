@@ -139,7 +139,7 @@ public actor SubscriptionImporter {
             throw NekoPilotError.invalidLink
         }
         let configuredUserAgent = await settings?.string(SettingsStore.Key.userAgent)
-        let userAgent = Self.validUserAgent(configuredUserAgent) ?? "sing-box 1.14.0-alpha.26"
+        let userAgent = Self.validUserAgent(configuredUserAgent) ?? "sing-box 1.14.0-alpha.48"
         let data = try await PinnedHTTPClient.fetch(
             url: url,
             maximumBodyBytes: Self.maximumResponseBytes,

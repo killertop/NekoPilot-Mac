@@ -34,7 +34,7 @@ final class AppModel: ObservableObject {
     @Published var skipSystemProxy = false
     @Published var proxyPort = SettingsStore.defaultProxyPort
     @Published var directDNS = "223.5.5.5"
-    @Published var userAgent = "sing-box 1.14.0-alpha.26"
+    @Published var userAgent = "sing-box 1.14.0-alpha.48"
     @Published var isInitialized = false
     @Published var pendingDeepLink: PendingDeepLink?
     @Published var pendingLANEnable = false
@@ -83,7 +83,7 @@ final class AppModel: ObservableObject {
         bootstrapError = storage.recoveryMessage
         importer = SubscriptionImporter(repository: repository, settings: settings)
         compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
-        nativeAPI = NativeControlClient(paths: paths)
+        nativeAPI = NativeControlClient()
         systemProxy = SystemProxyManager(markerURL: paths.proxyOwnership)
         engine = EngineSupervisor(
             settings: settings,
@@ -702,7 +702,7 @@ final class AppModel: ObservableObject {
             directDNS = await DNSResolverDetector.detectSystemResolver() ?? DNSResolverDetector.fallback
             try? await settings.set(.string(directDNS), for: SettingsStore.Key.directDNS)
         }
-        userAgent = await settings.string(SettingsStore.Key.userAgent, default: "sing-box 1.14.0-alpha.26")
+        userAgent = await settings.string(SettingsStore.Key.userAgent, default: "sing-box 1.14.0-alpha.48")
         selectedNode = (await settings.string(SettingsStore.Key.selectedNode)).nilIfEmpty
         let storedHistory = (try? await repository.delayHistory()) ?? [:]
         let legacyHistory = (try? await settings.takeLegacyDelayHistory()) ?? [:]

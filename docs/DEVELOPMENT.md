@@ -13,6 +13,8 @@ Required tools:
 
 SwiftUI + AppKit are the application shell. Original Go sing-box is a separate executable and the sole implementation of protocols, routing, DNS, and URL Test.
 
+NekoPilot contains no custom Go source. Swift connects directly to sing-box 1.14's official gRPC API using a process-local loopback port and in-memory session secret; no Clash API, Dashboard, or remote control endpoint is enabled.
+
 ## 2. Build the proxy core
 
 From the repository root:

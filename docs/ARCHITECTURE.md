@@ -10,8 +10,8 @@ The application is split into a native control plane and an upstream proxy data 
 SwiftUI views
     ↓ user intent and observable state
 AppKit + Swift control plane
-    ↓ generated configuration, process lifecycle, private Unix gRPC
-upstream Go sing-box plus a thin NekoPilot gRPC host
+    ↓ generated configuration, process lifecycle, official local gRPC
+unmodified upstream Go sing-box
     ↓
 network protocols, routing, DNS, URL Test
 ```
@@ -47,7 +47,7 @@ sing-box exclusively owns:
 - DNS resolution and DNS routing;
 - URL Test execution and runtime state.
 
-NekoPilot communicates with sing-box through generated JSON configuration and the official `StartedService` gRPC interface over a per-user Unix socket (mode `0600`). There is no HTTP controller, controller port, API secret, or Clash service. The small Go host only exposes the required upstream lifecycle, selector, and URL Test calls; it does not implement any proxy protocol or routing logic.
+NekoPilot communicates with sing-box through generated JSON configuration and the official 1.14 `StartedService` gRPC interface. Each sing-box process listens only on `127.0.0.1` at a newly allocated ephemeral port; Swift supplies a fresh 256-bit authorization secret that remains in memory for that process only. There is no Dashboard, remote API setting, HTTP controller, Unix-socket bridge, custom Go source, or Clash service. Swift owns process lifecycle; sing-box handles native selection and URL Test APIs, while its standard executable handles configuration reload on `SIGHUP`.
 
 China routing uses only standard local binary `rule_set` assets: bundled `geoip-cn.srs` and `geosite-cn.srs` provide an offline baseline; a seven-day updater downloads, validates with the embedded sing-box checker, then atomically replaces both assets. The runtime configuration always loads those local files and never needs to fetch route sets at startup.
 

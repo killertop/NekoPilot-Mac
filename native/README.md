@@ -23,7 +23,7 @@ swift run --package-path native NekoPilotCoreChecks
 
 ## Pinned sing-box core
 
-`scripts/build-sing-box-macos-arm64.sh` downloads the archive for the pinned upstream commit, verifies the archive SHA-256, requires the exact Go and macOS SDK versions, builds the upstream core with NekoPilot's minimal `StartedService` gRPC host, and rejects any binary whose `LC_BUILD_VERSION` requires newer than macOS 13.0. The host exposes official sing-box gRPC on a user-private Unix socket; it is not an HTTP Clash controller and contains no proxy implementation.
+`scripts/build-sing-box-macos-arm64.sh` downloads the archive for the pinned upstream commit, verifies the archive SHA-256, requires the exact Go and macOS SDK versions, and builds the unmodified upstream `cmd/sing-box` target. Swift communicates directly with sing-box 1.14's official `StartedService` gRPC API through a per-process `127.0.0.1` port and a 256-bit in-memory session secret. It does not start a Dashboard, remote API, HTTP controller, Unix-socket bridge, or Clash service.
 
 CI builds the core twice from the same inputs and requires identical hashes. No forked Go proxy implementation or prebuilt sidecar is accepted as a Release input.
 

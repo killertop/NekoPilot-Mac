@@ -6,19 +6,17 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 NATIVE_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 
-SING_BOX_VERSION="1.14.0-alpha.26"
-SING_BOX_COMMIT="b6c416b0482a2d2391470d70ce518abff3ba51f8"
-SING_BOX_ARCHIVE_SHA256="5fd02d129c587ae656a29363789bdeb60f5f201cfa02a5ec00ba147089576bcf"
+SING_BOX_VERSION="1.14.0-alpha.48"
+SING_BOX_COMMIT="fa36eb769a200e9558c414a36eb16da9a2446ea9"
+SING_BOX_ARCHIVE_SHA256="f823c45154065b8707c85a02213dd1df9daee5ccb1c5f625de4cae67974d1d1e"
 GO_VERSION="1.26.5"
 MACOS_DEPLOYMENT_TARGET="13.0"
 MACOS_SDK_VERSION="26.2"
 SOURCE_DATE_EPOCH="1779788717"
-# StartedService's official gRPC implementation links the optional upstream
-# Clash component at build time. NekoPilot emits no Clash configuration and
-# starts no HTTP listener, controller, secret, or Clash service.
-BUILD_TAGS="with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_tailscale,with_ccm,with_ocm,with_cloudflared,with_naive_outbound,with_clash_api,badlinkname,tfogo_checklinkname0"
+# Clash is deliberately absent: NekoPilot uses only the native sing-box 1.14
+# API service, bound to loopback with an ephemeral secret by Swift.
+BUILD_TAGS="with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_tailscale,with_ccm,with_ocm,with_cloudflared,with_naive_outbound,badlinkname,tfogo_checklinkname0"
 LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=${SING_BOX_VERSION} -X internal/godebug.defaultGODEBUG=multipathtcp=0 -checklinkname=0 -buildid="
-CORE_LDFLAGS="$LDFLAGS -X main.version=${SING_BOX_VERSION} -X main.buildTags=${BUILD_TAGS}"
 
 OUTPUT=${NEKOPILOT_SING_BOX_OUTPUT:-"$NATIVE_DIR/.build/sidecar/sing-box"}
 VERIFY_REPRODUCIBLE=${NEKOPILOT_VERIFY_REPRODUCIBLE:-0}
@@ -116,9 +114,6 @@ tar -xzf "$ARCHIVE" -C "$SOURCE_PARENT"
 SOURCE_ROOT=$(find "$SOURCE_PARENT" -mindepth 1 -maxdepth 1 -type d -print -quit)
 [[ -n "$SOURCE_ROOT" && -f "$SOURCE_ROOT/go.mod" ]] || fail "Downloaded archive has no sing-box source root"
 grep -Fxq "module github.com/sagernet/sing-box" "$SOURCE_ROOT/go.mod" || fail "Unexpected Go module in source archive"
-mkdir -p "$SOURCE_ROOT/cmd/nekopilot-core"
-install -m 0644 "$NATIVE_DIR/CoreCommand/main.go" "$SOURCE_ROOT/cmd/nekopilot-core/main.go"
-
 build_once() {
   local destination=$1
   local build_cache=$2
@@ -154,9 +149,9 @@ build_once() {
       -buildvcs=false \
       -trimpath \
       -tags "$BUILD_TAGS" \
-      -ldflags "$CORE_LDFLAGS" \
+      -ldflags "$LDFLAGS" \
       -o "$destination" \
-      ./cmd/nekopilot-core
+      ./cmd/sing-box
   )
   chmod 0755 "$destination"
   validate_binary "$destination"

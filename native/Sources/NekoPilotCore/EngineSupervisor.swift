@@ -79,7 +79,9 @@ public actor EngineSupervisor {
         var appliedProxySession: UUID?
         setStatus(.starting)
         do {
-            let config = try await compiler.compile(selectedNode: selectedNode)
+            let apiEndpoint = try LocalAPIEndpoint.make()
+            await nativeAPI.configure(endpoint: apiEndpoint)
+            let config = try await compiler.compile(selectedNode: selectedNode, apiEndpoint: apiEndpoint)
             try await SingBoxValidator.validate(configuration: config)
             try ensureCurrent(startEpoch)
 
@@ -93,8 +95,7 @@ public actor EngineSupervisor {
                 executable: executable,
                 config: config,
                 session: session,
-                mixedPort: mixedPort,
-                apiSocket: nativeAPI.socketPath
+                mixedPort: mixedPort
             )
             startedSession = session
             process = child
@@ -122,6 +123,7 @@ public actor EngineSupervisor {
             AppLogger.shared.info("sing-box running pid=\(child.processIdentifier) session=\(session)")
         } catch is CancellationError {
             if let startedSession { _ = await stopProcessOnly(expectedSession: startedSession) }
+            await nativeAPI.disconnect()
             if let appliedProxySession {
                 try? await systemProxy.removeOwnedProxy(expectedSession: appliedProxySession)
             }
@@ -133,6 +135,7 @@ public actor EngineSupervisor {
             if let appliedProxySession {
                 try? await systemProxy.removeOwnedProxy(expectedSession: appliedProxySession)
             }
+            await nativeAPI.disconnect()
             if epoch == startEpoch { setStatus(.failed(error.localizedDescription)) }
             throw error
         }
@@ -149,6 +152,7 @@ public actor EngineSupervisor {
         // comparatively slow, and neither a normal disconnect nor app exit
         // may leave sing-box alive while that work is in progress.
         let didStop = await stopProcessOnly(expectedSession: stoppingSession)
+        await nativeAPI.disconnect()
         do {
             try await systemProxy.removeOwnedProxy(expectedSession: stoppingProxySession)
             if proxySessionID == stoppingProxySession { proxySessionID = nil }
@@ -187,7 +191,12 @@ public actor EngineSupervisor {
             try await SingBoxValidator.validate(configuration: config)
             let reloadEpoch = epoch
             let expectedNodes = try expectedSelectorNodes(in: config)
-            try await nativeAPI.reload()
+            // The standard sing-box executable reloads atomically on SIGHUP.
+            // This preserves native rule-set refresh without reintroducing a
+            // private Go control host.
+            guard kill(child.processIdentifier, SIGHUP) == 0 else {
+                throw NekoPilotError.processFailed("无法请求 sing-box 重新加载")
+            }
 
             for _ in 0 ..< 50 {
                 try ensureCurrent(reloadEpoch)
@@ -233,6 +242,7 @@ public actor EngineSupervisor {
         setStatus(.stopping)
         AppLogger.shared.info("shutdown: terminating sing-box child")
         let didStop = await stopProcessOnly(expectedSession: stoppingSession)
+        await nativeAPI.disconnect()
         AppLogger.shared.info("shutdown: sing-box child terminated=\(didStop)")
         do {
             AppLogger.shared.info("shutdown: restoring system proxy")
@@ -249,14 +259,13 @@ public actor EngineSupervisor {
         executable: URL,
         config: URL,
         session: UUID,
-        mixedPort: Int,
-        apiSocket: URL
+        mixedPort: Int
     ) throws -> Process {
         let child = Process()
         let standardOutput = Pipe()
         let standardError = Pipe()
         child.executableURL = executable
-        child.arguments = ["run", "-c", config.path, "--api-socket", apiSocket.path, "--disable-color"]
+        child.arguments = ["run", "-c", config.path, "--disable-color"]
         child.currentDirectoryURL = config.deletingLastPathComponent()
         child.standardOutput = standardOutput
         child.standardError = standardError

@@ -27,16 +27,19 @@ public actor URLTester {
             return await test(client: nativeAPI, nodes: nodes, onResult: onResult)
         }
 
-        guard let config = try? await compiler.makeOfflineTestConfiguration(selectedNode: nodes.first?.runtimeTag),
+        guard let endpoint = try? LocalAPIEndpoint.make(),
+              let config = try? await compiler.makeOfflineTestConfiguration(
+                  selectedNode: nodes.first?.runtimeTag,
+                  apiEndpoint: endpoint
+              ),
               let executable = try? SingBoxLocator.executable() else {
             return unavailable(nodes)
         }
         let temporaryDirectory = config.deletingLastPathComponent()
-        let temporaryPaths = AppPaths(applicationSupport: temporaryDirectory, logs: temporaryDirectory)
-        let client = NativeControlClient(paths: temporaryPaths)
+        let client = NativeControlClient(endpoint: endpoint)
         let process = Process()
         process.executableURL = executable
-        process.arguments = ["run", "-c", config.path, "--api-socket", temporaryPaths.nativeAPISocket.path, "--disable-color"]
+        process.arguments = ["run", "-c", config.path, "--disable-color"]
         process.currentDirectoryURL = temporaryDirectory
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
@@ -50,6 +53,7 @@ public actor URLTester {
 
         defer {
             Self.stop(process)
+            Task { await client.disconnect() }
             if ProcessInfo.processInfo.environment["NEKOPILOT_KEEP_VALIDATION"] != "1" {
                 try? FileManager.default.removeItem(at: temporaryDirectory)
             }
@@ -67,9 +71,16 @@ public actor URLTester {
         onResult: URLTestProgressHandler?
     ) async -> [String: DelayRecord] {
         let startedAt = Date()
-        guard (try? await client.runURLTest()) != nil else { return unavailable(nodes) }
+        do {
+            try await client.runURLTest()
+        } catch {
+            AppLogger.shared.warning("native URL Test request failed: \(error.localizedDescription)")
+            return unavailable(nodes)
+        }
         var results: [String: DelayRecord] = [:]
-        for _ in 0 ..< 35 where !Task.isCancelled {
+        // sing-box's native URL Test has a 10 s TCP timeout; allow DNS and
+        // connection teardown to complete before declaring a node timed out.
+        for _ in 0 ..< 80 where !Task.isCancelled {
             do {
                 let current = try await client.delayResults(nodes: nodes.map(\.runtimeTag))
                 for node in nodes {

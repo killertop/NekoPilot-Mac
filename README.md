@@ -30,7 +30,7 @@ The repository no longer contains a Rust, Tauri, React, or cross-platform applic
 ## Technology
 
 - Swift 6, SwiftUI, and AppKit for the native application.
-- Original Go sing-box for protocols, routing, DNS, and URL Test.
+- Original Go sing-box for protocols, routing, DNS, and URL Test; Swift communicates directly with its official 1.14 gRPC API.
 - SQLite for local data.
 - Shell and GitHub Actions for reproducible Apple Silicon packaging.
 

@@ -38,10 +38,6 @@ public struct AppPaths: Sendable {
     public var cacheDatabase: URL { applicationSupport.appendingPathComponent("sing-box-cache.sqlite3") }
     public var proxyOwnership: URL { applicationSupport.appendingPathComponent("system-proxy-owner.json") }
     public var engineOwnership: URL { applicationSupport.appendingPathComponent("sing-box-owner.json") }
-    // Darwin limits Unix-domain socket paths to 104 bytes. Application Support
-    // and especially test paths can exceed it, so keep the private control
-    // socket short while the Go core enforces mode 0600 on creation.
-    public var nativeAPISocket: URL { URL(fileURLWithPath: "/tmp/nekopilot-\(getuid()).sock") }
     public var ruleSets: URL { applicationSupport.appendingPathComponent("rule-sets", isDirectory: true) }
     public var logFile: URL { logs.appendingPathComponent("NekoPilot.log") }
 

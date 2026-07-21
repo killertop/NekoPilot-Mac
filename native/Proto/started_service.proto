@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+// Wire-compatible subset of sing-box daemon/started_service.proto.
+//
+// NekoPilot deliberately generates only the messages it consumes while using
+// the official public gRPC method paths. The authoritative schema is pinned
+// with the sing-box source revision in scripts/build-sing-box-macos-arm64.sh.
+package nekopilot.api;
+
+message ServiceStatus {
+  int32 status = 1;
+  string error_message = 2;
+}
+
+message GroupItem {
+  string tag = 1;
+  string type = 2;
+  int64 url_test_time = 3;
+  int32 url_test_delay = 4;
+}
+
+message Group {
+  string tag = 1;
+  string type = 2;
+  bool selectable = 3;
+  string selected = 4;
+  bool is_expand = 5;
+  repeated GroupItem items = 6;
+}
+
+message Groups {
+  repeated Group group = 1;
+}
+
+message URLTestRequest {
+  string outbound_tag = 1;
+}
+
+message SelectOutboundRequest {
+  string group_tag = 1;
+  string outbound_tag = 2;
+}
+
+message OutboundList {
+  repeated GroupItem outbounds = 1;
+}

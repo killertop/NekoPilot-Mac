@@ -105,10 +105,18 @@ checks.append(("repository and config compiler", {
         "compiler did not select stable runtime node"
     )
     try await SingBoxValidator.validate(configuration: output)
-    let offlineConfigURL = try await compiler.makeOfflineTestConfiguration(selectedNode: nodes[0].runtimeTag)
+    let offlineAPI = try LocalAPIEndpoint.make()
+    let offlineConfigURL = try await compiler.makeOfflineTestConfiguration(
+        selectedNode: nodes[0].runtimeTag,
+        apiEndpoint: offlineAPI
+    )
     defer { try? FileManager.default.removeItem(at: offlineConfigURL.deletingLastPathComponent()) }
     let offlineConfig = try JSONValue.decodeObject(from: Data(contentsOf: offlineConfigURL))
     try expect(offlineConfig["inbounds"] == nil, "offline URL Test config unexpectedly exposed a proxy inbound")
+    try expect(
+        offlineConfig["services"]?.arrayValue?.first?.objectValue?["listen_port"]?.numberValue == Double(offlineAPI.port),
+        "offline URL Test config did not expose the local sing-box API"
+    )
     let experimentalKeys = Set(offlineConfig["experimental"]?.objectValue.map { Array($0.keys) } ?? [])
     try expect(experimentalKeys == Set(["cache_file"]), "offline URL Test config contains an unexpected experimental service")
 }))
@@ -140,7 +148,17 @@ func importedStoredTestNode(repository: SubscriptionRepository) async throws -> 
         throw CheckFailure(description: "NEKOPILOT_TEST_APP_DATABASE is required for stored-node validation")
     }
     let sourceRepository = try SubscriptionRepository(databaseURL: URL(fileURLWithPath: databasePath))
-    guard let sourceNode = try await sourceRepository.nodes().first else {
+    let sourceHistory = try await sourceRepository.delayHistory()
+    guard let sourceNode = try await sourceRepository.nodes().sorted(by: { lhs, rhs in
+        let leftDelay = sourceHistory[lhs.runtimeTag]?.delay
+        let rightDelay = sourceHistory[rhs.runtimeTag]?.delay
+        switch (leftDelay, rightDelay) {
+        case let (left?, right?): return left < right
+        case (.some, nil): return true
+        case (nil, .some): return false
+        case (nil, nil): return lhs.runtimeTag.localizedStandardCompare(rhs.runtimeTag) == .orderedAscending
+        }
+    }).first else {
         throw CheckFailure(description: "the selected application database has no usable nodes")
     }
     let identifier = try await repository.upsert(
@@ -172,7 +190,7 @@ if ProcessInfo.processInfo.environment["NEKOPILOT_VALIDATE_REAL_EGRESS"] == "1" 
         let settings = try SettingsStore(fileURL: paths.settings)
         let repository = try SubscriptionRepository(databaseURL: paths.database)
         let compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
-        let nativeAPI = NativeControlClient(paths: paths)
+        let nativeAPI = NativeControlClient()
         let tester = URLTester(compiler: compiler, nativeAPI: nativeAPI, paths: paths)
         let node: ProxyNode
         if ProcessInfo.processInfo.environment["NEKOPILOT_TEST_APP_DATABASE"] != nil {
@@ -208,7 +226,7 @@ if ProcessInfo.processInfo.environment["NEKOPILOT_VALIDATE_ENGINE"] == "1" {
         try await settings.set(.number(17_689), for: SettingsStore.Key.proxyPort)
         let repository = try SubscriptionRepository(databaseURL: paths.database)
         let compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
-        let nativeAPI = NativeControlClient(paths: paths)
+        let nativeAPI = NativeControlClient()
         let proxy = SystemProxyManager(markerURL: paths.proxyOwnership)
         let engine = EngineSupervisor(settings: settings, compiler: compiler, systemProxy: proxy, nativeAPI: nativeAPI)
         let node: ProxyNode

@@ -56,13 +56,13 @@ reject_pattern "$TEST" 'contents:[[:space:]]*write'
 reject_pattern "$TEST" 'gh release'
 reject_pattern "$TEST" 'actions/upload-artifact'
 
-require_text "$CORE_BUILD" 'SING_BOX_COMMIT="b6c416b0482a2d2391470d70ce518abff3ba51f8"'
+require_text "$CORE_BUILD" 'SING_BOX_COMMIT="fa36eb769a200e9558c414a36eb16da9a2446ea9"'
 require_text "$CORE_BUILD" 'GO_VERSION="1.26.5"'
 require_text "$CORE_BUILD" 'MACOS_DEPLOYMENT_TARGET="13.0"'
 require_text "$CORE_BUILD" 'MACOS_SDK_VERSION="26.2"'
 require_text "$CORE_BUILD" 'SING_BOX_ARCHIVE_SHA256='
 require_text "$CORE_BUILD" 'vtool -show-build'
-require_text "$CORE_BUILD" './cmd/nekopilot-core'
+require_text "$CORE_BUILD" './cmd/sing-box'
 reject_pattern "$CORE_BUILD" 'src-tauri/binaries'
 
 require_text "$PACKAGE" 'menu-bar-template.png'
@@ -85,11 +85,9 @@ TRACKED=$(git -C "$ROOT" ls-files)
 if grep -Eq '(^|/)(Cargo\.toml|Cargo\.lock|[^/]+\.rs)$' <<<"$TRACKED"; then
   fail "Tracked Rust or Cargo source is forbidden"
 fi
-while IFS= read -r go_source; do
-  [[ -z "$go_source" ]] && continue
-  [[ "$go_source" == "native/CoreCommand/main.go" ]] || \
-    fail "Vendored or forked Go core source is forbidden; only the gRPC host entrypoint is allowed"
-done < <(grep -E '(^|/)(go\.mod|go\.sum|[^/]+\.go)$' <<<"$TRACKED" || true)
+if grep -Eq '(^|/)(go\.mod|go\.sum|[^/]+\.go)$' <<<"$TRACKED"; then
+  fail "NekoPilot must not ship custom Go source; the upstream sing-box binary is built from its pinned source archive"
+fi
 if grep -Eq '^(src-tauri|src|public)/|^(package\.json|deno\.json|deno\.lock|index\.html|vite\.config\.ts|vitest\.config\.ts|tsconfig[^/]*\.json)$' <<<"$TRACKED"; then
   fail "Tracked legacy Tauri/React application source is forbidden"
 fi
