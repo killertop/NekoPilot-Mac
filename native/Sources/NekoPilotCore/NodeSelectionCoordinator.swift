@@ -6,15 +6,25 @@ public actor NodeSelectionCoordinator {
         let continuation: CheckedContinuation<Void, Error>
     }
 
-    private let engine: EngineSupervisor
-    private let settings: SettingsStore
+    private let applySelection: @Sendable (String) async throws -> Void
+    private let persistSelection: @Sendable (String) async throws -> Void
     private var pending: Request?
     private var processing = false
     private var continuations: [UUID: AsyncStream<String>.Continuation] = [:]
 
     public init(engine: EngineSupervisor, settings: SettingsStore) {
-        self.engine = engine
-        self.settings = settings
+        applySelection = { node in try await engine.select(node: node) }
+        persistSelection = { node in
+            try await settings.set(.string(node), for: SettingsStore.Key.selectedNode)
+        }
+    }
+
+    init(
+        applySelection: @escaping @Sendable (String) async throws -> Void,
+        persistSelection: @escaping @Sendable (String) async throws -> Void
+    ) {
+        self.applySelection = applySelection
+        self.persistSelection = persistSelection
     }
 
     public func submit(node: String) async throws {
@@ -43,8 +53,19 @@ public actor NodeSelectionCoordinator {
         while let request = pending {
             pending = nil
             do {
-                try await engine.select(node: request.node)
-                try await settings.set(.string(request.node), for: SettingsStore.Key.selectedNode)
+                try await applySelection(request.node)
+                // A newer tap may arrive while the engine call is suspended.
+                // Keep the optimistic UI on the newest request instead of
+                // publishing an already superseded intermediate selection.
+                if pending != nil {
+                    request.continuation.resume()
+                    continue
+                }
+                try await persistSelection(request.node)
+                if pending != nil {
+                    request.continuation.resume()
+                    continue
+                }
                 for continuation in continuations.values { continuation.yield(request.node) }
                 request.continuation.resume()
             } catch {
@@ -57,4 +78,8 @@ public actor NodeSelectionCoordinator {
     private func removeContinuation(_ identifier: UUID) {
         continuations.removeValue(forKey: identifier)
     }
+
+    #if DEBUG
+    var pendingNodeForTesting: String? { pending?.node }
+    #endif
 }

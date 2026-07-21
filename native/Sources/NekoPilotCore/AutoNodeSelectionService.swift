@@ -1,5 +1,25 @@
 import Foundation
 
+public struct AutoNodeSelectionUpdate: Sendable, Equatable {
+    public enum Outcome: Sendable, Equatable {
+        case kept(node: String, delay: Int)
+        case switched(node: String, delay: Int)
+        case deferredBusy
+        case unavailable
+        case failed
+    }
+
+    public let delays: [String: DelayRecord]
+    public let outcome: Outcome
+    public let measuredAt: Date
+
+    public init(delays: [String: DelayRecord], outcome: Outcome, measuredAt: Date = Date()) {
+        self.delays = delays
+        self.outcome = outcome
+        self.measuredAt = measuredAt
+    }
+}
+
 public actor AutoNodeSelectionService {
     public static let interval: TimeInterval = 10 * 60
 
@@ -11,7 +31,7 @@ public actor AutoNodeSelectionService {
     private let selection: NodeSelectionCoordinator
     private var timerTask: Task<Void, Never>?
     private var isStarted = false
-    private var updateContinuations: [UUID: AsyncStream<[String: DelayRecord]>.Continuation] = [:]
+    private var updateContinuations: [UUID: AsyncStream<AutoNodeSelectionUpdate>.Continuation] = [:]
 
     public init(
         engine: EngineSupervisor,
@@ -41,7 +61,7 @@ public actor AutoNodeSelectionService {
         timerTask = nil
     }
 
-    public func updates() -> AsyncStream<[String: DelayRecord]> {
+    public func updates() -> AsyncStream<AutoNodeSelectionUpdate> {
         let identifier = UUID()
         return AsyncStream { continuation in
             updateContinuations[identifier] = continuation
@@ -83,26 +103,38 @@ public actor AutoNodeSelectionService {
         } catch {
             AppLogger.shared.warning("automatic URL Test history could not be saved: \(error.localizedDescription)")
         }
-        for continuation in updateContinuations.values {
-            continuation.yield(delays)
-        }
         guard let fastest = delays
             .compactMap({ entry -> (String, Int)? in entry.value.delay.map { (entry.key, $0) } })
-            .min(by: { $0.1 < $1.1 }),
-              let selector = try? await clashAPI.selector(),
-              selector.current != fastest.0,
-              selector.nodes.contains(fastest.0) else { return }
+            .min(by: { $0.1 < $1.1 }) else {
+            publish(AutoNodeSelectionUpdate(delays: delays, outcome: .unavailable))
+            return
+        }
+        guard let selector = try? await clashAPI.selector(), selector.nodes.contains(fastest.0) else {
+            publish(AutoNodeSelectionUpdate(delays: delays, outcome: .failed))
+            return
+        }
+        if selector.current == fastest.0 {
+            publish(AutoNodeSelectionUpdate(delays: delays, outcome: .kept(node: fastest.0, delay: fastest.1)))
+            return
+        }
         guard let hasLongConnection = await clashAPI.hasLongLivedConnection(),
               !hasLongConnection else {
             AppLogger.shared.info("automatic node switch deferred because connection state is unavailable or busy")
+            publish(AutoNodeSelectionUpdate(delays: delays, outcome: .deferredBusy))
             return
         }
         do {
             try await selection.submit(node: fastest.0)
             AppLogger.shared.info("automatically selected fastest node delay=\(fastest.1)ms")
+            publish(AutoNodeSelectionUpdate(delays: delays, outcome: .switched(node: fastest.0, delay: fastest.1)))
         } catch {
             AppLogger.shared.warning("automatic node selection failed: \(error.localizedDescription)")
+            publish(AutoNodeSelectionUpdate(delays: delays, outcome: .failed))
         }
+    }
+
+    private func publish(_ update: AutoNodeSelectionUpdate) {
+        for continuation in updateContinuations.values { continuation.yield(update) }
     }
 
     private func removeUpdateContinuation(_ identifier: UUID) {

@@ -4,6 +4,7 @@ import SwiftUI
 struct HomeView: View {
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var model: AppModel
+    @State private var nodeSearch = ""
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -106,18 +107,23 @@ struct HomeView: View {
 
     private var nodesSection: some View {
         VStack(spacing: 6) {
-            SectionTitle(L10n.text("全部节点", "All Nodes")) {
+            SectionTitle(nodesSectionTitle) {
                 Button {
-                    model.runURLTest()
+                    if model.isURLTesting {
+                        model.cancelURLTest()
+                    } else {
+                        model.runURLTest()
+                    }
                 } label: {
                     HStack(spacing: 5) {
                         if model.isURLTesting {
-                            ProgressView().controlSize(.mini)
+                            Image(systemName: "xmark")
+                                .font(.system(size: 10, weight: .bold))
                         } else {
                             Image(systemName: "arrow.clockwise")
                                 .font(.system(size: 11, weight: .semibold))
                         }
-                        Text(model.isURLTesting ? L10n.text("测速中", "Testing") : L10n.text("测速", "Speed Test"))
+                        Text(model.isURLTesting ? L10n.text("停止", "Stop") : L10n.text("测速", "Speed Test"))
                     }
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Color.accentColor)
@@ -126,7 +132,15 @@ struct HomeView: View {
                     .background(Color.accentColor.opacity(0.08), in: Capsule())
                 }
                 .buttonStyle(.plain)
-                .disabled(model.isURLTesting || model.nodes.isEmpty)
+                .disabled(model.nodes.isEmpty)
+                .accessibilityLabel(model.isURLTesting ? L10n.text("停止测速", "Stop Speed Test") : L10n.text("开始测速", "Start Speed Test"))
+            }
+
+            if model.nodes.count > 12 {
+                TextField(L10n.text("搜索节点", "Search nodes"), text: $nodeSearch)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 13))
+                    .accessibilityLabel(L10n.text("搜索节点", "Search nodes"))
             }
 
             AppCard {
@@ -136,11 +150,17 @@ struct HomeView: View {
                         title: L10n.text("还没有节点", "No Nodes Yet"),
                         message: L10n.text("前往“节点”导入机场订阅或单节点", "Import a subscription or proxy link from Nodes")
                     )
+                } else if visibleNodes.isEmpty {
+                    Text(L10n.text("没有匹配的节点", "No matching nodes"))
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(18)
                 } else {
                     LazyVStack(spacing: 0) {
-                        ForEach(model.sortedNodes) { node in
+                        ForEach(visibleNodes) { node in
                             nodeRow(node)
-                            if node.id != model.sortedNodes.last?.id { AppDivider() }
+                            if node.id != visibleNodes.last?.id { AppDivider() }
                         }
                     }
                 }
@@ -150,6 +170,7 @@ struct HomeView: View {
 
     private func nodeRow(_ node: ProxyNode) -> some View {
         let selected = model.selectedNode == node.runtimeTag
+        let displayName = model.displayName(for: node)
         return Button {
             Task { await model.selectNode(node) }
         } label: {
@@ -163,11 +184,19 @@ struct HomeView: View {
                         .fixedSize()
                 }
 
-                Text(model.displayName(for: node))
+                Text(displayName)
                     .font(.system(size: 14, weight: .regular))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.tail)
+
+                if duplicateDisplayNames.contains(displayName.localizedLowercase) {
+                    Text("· \(model.sourceName(for: node))")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
 
                 Spacer(minLength: 4)
                 delayLabel(node)
@@ -185,6 +214,7 @@ struct HomeView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help("\(displayName) · \(model.sourceName(for: node))")
     }
 
     @ViewBuilder
@@ -192,7 +222,7 @@ struct HomeView: View {
         if let delay = model.delayHistory[node.runtimeTag]?.delay {
             Text("\(delay)ms")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.primary)
+                .foregroundStyle(isStale(node) ? Color.secondary : Color.primary)
         } else if model.delayHistory[node.runtimeTag] != nil {
             Text(L10n.text("超时", "Timeout"))
                 .font(.system(size: 12, weight: .medium))
@@ -203,6 +233,41 @@ struct HomeView: View {
                 .foregroundStyle(AppVisual.tertiaryLabel(colorScheme))
         }
     }
+
+    private var nodesSectionTitle: String {
+        let title = L10n.text("全部节点", "All Nodes")
+        guard let date = model.delayHistory.values.map(\.measuredAt).max() else { return title }
+        let relative = Self.relativeFormatter.localizedString(for: date, relativeTo: Date())
+        return "\(title) · \(relative)"
+    }
+
+    private var visibleNodes: [ProxyNode] {
+        let query = nodeSearch.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase
+        guard !query.isEmpty else { return model.sortedNodes }
+        return model.sortedNodes.filter { node in
+            model.displayName(for: node).localizedLowercase.contains(query) ||
+                node.protocolName.localizedLowercase.contains(query) ||
+                model.sourceName(for: node).localizedLowercase.contains(query)
+        }
+    }
+
+    private var duplicateDisplayNames: Set<String> {
+        let counts = model.sortedNodes.reduce(into: [String: Int]()) { result, node in
+            result[model.displayName(for: node).localizedLowercase, default: 0] += 1
+        }
+        return Set(counts.compactMap { $0.value > 1 ? $0.key : nil })
+    }
+
+    private func isStale(_ node: ProxyNode) -> Bool {
+        guard let measuredAt = model.delayHistory[node.runtimeTag]?.measuredAt else { return false }
+        return Date().timeIntervalSince(measuredAt) > 30 * 60
+    }
+
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter
+    }()
 
 }
 

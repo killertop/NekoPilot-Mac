@@ -44,6 +44,7 @@ final class AppModel: ObservableObject {
     @Published var pendingDeepLink: PendingDeepLink?
     @Published var pendingLANEnable = false
     @Published var availableUpdate: GitHubReleaseUpdate?
+    @Published private(set) var lastAutomaticSelectionUpdate: AutoNodeSelectionUpdate?
     @Published private(set) var refreshingSubscriptionIDs: Set<String> = []
     @Published private(set) var isRefreshingAllSubscriptions = false
 
@@ -156,9 +157,10 @@ final class AppModel: ObservableObject {
         automaticDelayTask = Task { [weak self] in
             guard let self else { return }
             let stream = await automaticSelection.updates()
-            for await delays in stream {
+            for await update in stream {
                 guard !Task.isCancelled else { return }
-                delayHistory = delays
+                delayHistory = update.delays
+                lastAutomaticSelectionUpdate = update
                 rebuildSortedNodes()
             }
         }
@@ -654,6 +656,32 @@ final class AppModel: ObservableObject {
 
     func displayName(for node: ProxyNode) -> String {
         NodeListPresentation.displayName(for: node)
+    }
+
+    func sourceName(for node: ProxyNode) -> String {
+        subscriptions.first(where: { $0.identifier == node.sourceIdentifier })?.name ?? node.sourceIdentifier
+    }
+
+    var automaticSelectionSummary: String {
+        guard let update = lastAutomaticSelectionUpdate else {
+            return L10n.text("每 10 分钟测速并自动切换", "Test every 10 minutes and switch automatically")
+        }
+        switch update.outcome {
+        case let .kept(node, delay):
+            return L10n.text("已是最快：\(displayName(forTag: node)) · \(delay)ms", "Already fastest: \(displayName(forTag: node)) · \(delay)ms")
+        case let .switched(node, delay):
+            return L10n.text("已切换：\(displayName(forTag: node)) · \(delay)ms", "Switched: \(displayName(forTag: node)) · \(delay)ms")
+        case .deferredBusy:
+            return L10n.text("测速完成 · 活跃连接中暂缓切换", "Tested · switch deferred for active connection")
+        case .unavailable:
+            return L10n.text("测速完成 · 暂无可用节点", "Tested · no reachable nodes")
+        case .failed:
+            return L10n.text("测速完成 · 自动切换失败", "Tested · automatic switch failed")
+        }
+    }
+
+    private func displayName(forTag tag: String) -> String {
+        nodes.first(where: { $0.runtimeTag == tag }).map(displayName(for:)) ?? tag
     }
 
     private func loadSettings() async {

@@ -2,7 +2,11 @@ import Darwin
 import Foundation
 
 public actor URLTester {
-    public static let testURL = "https://www.google.com/generate_204"
+    // Keep this probe aligned with NekoPilot Android so latency values remain
+    // comparable across devices. The result is an end-to-end URL Test RTT,
+    // not a raw TCP ping.
+    public static let testURL = "https://cp.cloudflare.com/"
+    public static let timeoutMilliseconds = 3_000
     private let compiler: ConfigurationCompiler
     private let clashAPI: ClashAPIClient
 
@@ -19,7 +23,11 @@ public actor URLTester {
         guard !nodes.isEmpty else { return [:] }
         if engineRunning {
             return await concurrentTest(nodes: nodes, maximumConcurrency: maximumConcurrency) { node in
-                await self.clashAPI.delay(node: node.runtimeTag)
+                await self.clashAPI.delay(
+                    node: node.runtimeTag,
+                    testURL: Self.testURL,
+                    timeoutMilliseconds: Self.timeoutMilliseconds
+                )
             }
         }
         guard let port = Self.availableLoopbackPort(),
@@ -58,7 +66,11 @@ public actor URLTester {
                 return Dictionary(uniqueKeysWithValues: nodes.map { ($0.runtimeTag, DelayRecord(delay: nil)) })
             }
             return await concurrentTest(nodes: nodes, maximumConcurrency: maximumConcurrency) { node in
-                await client.delay(node: node.runtimeTag)
+                await client.delay(
+                    node: node.runtimeTag,
+                    testURL: Self.testURL,
+                    timeoutMilliseconds: Self.timeoutMilliseconds
+                )
             }
         } onCancel: {
             Self.stop(process)

@@ -17,7 +17,13 @@ case "$MODE" in
     ;;
   --bump-patch)
     IFS=. read -r major minor patch <<<"$VERSION"
-    next="$major.$minor.$((patch + 1))"
+    if (( patch < 9 )); then
+      next="$major.$minor.$((patch + 1))"
+    elif (( minor < 9 )); then
+      next="$major.$((minor + 1)).0"
+    else
+      next="$((major + 1)).0.0"
+    fi
     printf '%s\n' "$next" > "$VERSION_FILE"
     echo "[version] $VERSION -> $next"
     ;;

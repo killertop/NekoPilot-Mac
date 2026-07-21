@@ -76,7 +76,10 @@ public actor ConfigurationCompiler {
         clashSecret: String
     ) {
         config["log"] = .object([
-            "disabled": .bool(false), "level": .string("info"), "timestamp": .bool(true),
+            // Connection-level INFO output is extremely chatty and duplicates
+            // the app's own lifecycle diagnostics. Keep production logs useful
+            // without writing every proxied socket to disk.
+            "disabled": .bool(false), "level": .string("warn"), "timestamp": .bool(true),
         ])
         var experimental = config["experimental"]?.objectValue ?? [:]
         experimental["clash_api"] = .object([

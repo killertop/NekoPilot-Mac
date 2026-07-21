@@ -3,6 +3,12 @@ import Testing
 
 @Suite("Clash API client")
 struct ClashAPIClientTests {
+    @Test("Default probe matches the Android URL Test baseline")
+    func defaultProbeBaseline() {
+        #expect(URLTester.testURL == "https://cp.cloudflare.com/")
+        #expect(URLTester.timeoutMilliseconds == 3_000)
+    }
+
     @Test("Delay endpoint encodes node as one path segment")
     func delayEndpointEncodesNodeAsSinglePathSegment() throws {
         let path = try #require(ClashAPIClient.delayRequestPath(

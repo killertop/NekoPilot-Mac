@@ -282,7 +282,12 @@ public actor EngineSupervisor {
         standardError.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             guard !data.isEmpty else { return }
-            AppLogger.shared.warning("[sing-box] \(String(decoding: data, as: UTF8.self))")
+            let message = "[sing-box] \(String(decoding: data, as: UTF8.self))"
+            if message.contains(" ERROR ") {
+                AppLogger.shared.error(message)
+            } else {
+                AppLogger.shared.warning(message)
+            }
         }
         child.terminationHandler = { process in
             standardOutput.fileHandleForReading.readabilityHandler = nil

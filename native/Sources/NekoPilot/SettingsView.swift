@@ -60,7 +60,7 @@ struct SettingsView: View {
                     icon: "gauge.with.dots.needle.50percent",
                     iconColor: .accentColor,
                     title: L10n.text("自动选择节点", "Automatic Node Selection"),
-                    subtitle: L10n.text("每 10 分钟测速并自动切换", "Test every 10 minutes and switch automatically"),
+                    subtitle: model.automaticSelectionSummary,
                     value: Binding(
                         get: { model.autoSelect },
                         set: { value in Task { await model.setAutoSelect(value) } }
@@ -179,7 +179,8 @@ struct SettingsView: View {
     }
 
     private var version: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.7"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+            ?? L10n.text("开发版", "Development")
     }
 
     private func toggleRow(

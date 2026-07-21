@@ -151,6 +151,11 @@ struct NodeManagementView: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
+            .accessibilityLabel(L10n.text(
+                "管理 \(subscription.name.isEmpty ? subscription.identifier : subscription.name)",
+                "Manage \(subscription.name.isEmpty ? subscription.identifier : subscription.name)"
+            ))
+            .help(L10n.text("管理节点来源", "Manage node source"))
         }
         .padding(.horizontal, 16)
         .frame(minHeight: 63)

@@ -65,8 +65,8 @@ public actor ClashAPIClient {
 
     public func delay(
         node: String,
-        testURL: String = "https://www.google.com/generate_204",
-        timeoutMilliseconds: Int = 5_000
+        testURL: String = URLTester.testURL,
+        timeoutMilliseconds: Int = URLTester.timeoutMilliseconds
     ) async -> Int? {
         guard let path = Self.delayRequestPath(
             node: node,
