@@ -11,7 +11,7 @@ struct NodeManagementView: View {
 
     var body: some View {
         ScrollView(showsIndicators: false) {
-            LazyVStack(spacing: 16) {
+            LazyVStack(spacing: 14) {
                 if model.subscriptions.isEmpty {
                     EmptyStateView(
                         icon: "tray",
@@ -20,41 +20,44 @@ struct NodeManagementView: View {
                     )
                     .padding(.vertical, 32)
                 } else {
-                    AppCard {
-                        LazyVStack(spacing: 0) {
-                            ForEach(model.subscriptions) { subscription in
-                                sourceRow(subscription)
-                                if subscription.id != model.subscriptions.last?.id { AppDivider() }
-                            }
-                        }
-                    }
-                }
-
-                AppCard {
-                    VStack(spacing: 0) {
+                    SectionTitle(L10n.text("节点来源", "Node Sources")) {
                         Button {
                             Task { await model.refreshAllSubscriptions() }
                         } label: {
-                            actionRow(
-                                title: model.isRefreshingAllSubscriptions ? L10n.text("正在更新", "Updating") : L10n.text("更新全部", "Update All"),
-                                icon: "arrow.clockwise",
-                                busy: model.isRefreshingAllSubscriptions
-                            )
+                            HStack(spacing: 5) {
+                                if model.isRefreshingAllSubscriptions {
+                                    ProgressView().controlSize(.mini)
+                                } else {
+                                    Image(systemName: "arrow.clockwise")
+                                }
+                                Text(model.isRefreshingAllSubscriptions ? L10n.text("正在更新", "Updating") : L10n.text("更新全部", "Update All"))
+                            }
+                            .font(.system(size: 13, weight: .medium))
                         }
                         .buttonStyle(.plain)
+                        .foregroundStyle(Color.accentColor)
                         .disabled(
                             model.isRefreshingAllSubscriptions ||
                                 !model.refreshingSubscriptionIDs.isEmpty ||
                                 !model.subscriptions.contains(where: { $0.sourceType == .subscription })
                         )
-
-                        AppDivider()
-
-                        Button { showingAdd = true } label: {
-                            actionRow(title: L10n.text("添加节点", "Add Node"), icon: "plus")
-                        }
-                        .buttonStyle(.plain)
                     }
+
+                    sourceList
+
+                    Button { showingAdd = true } label: {
+                        HStack(spacing: 9) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 16, weight: .medium))
+                            Text(L10n.text("添加节点", "Add Node"))
+                                .font(.system(size: 15, weight: .semibold))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                        .foregroundStyle(.white)
+                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal, 16)
@@ -84,26 +87,42 @@ struct NodeManagementView: View {
         }
     }
 
+    private var sourceList: some View {
+        LazyVStack(spacing: 0) {
+            ForEach(model.subscriptions) { subscription in
+                sourceRow(subscription)
+                if subscription.id != model.subscriptions.last?.id { AppDivider(leading: 64) }
+            }
+        }
+        .background(AppVisual.card(colorScheme))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(AppVisual.separator(colorScheme), lineWidth: 0.5)
+        }
+        .shadow(color: AppVisual.cardShadow(colorScheme), radius: 2, y: 1)
+    }
+
     private func sourceRow(_ subscription: NekoPilotCore.Subscription) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Button { detailTarget = subscription } label: {
                 HStack(spacing: 12) {
                     ZStack {
                         RoundedRectangle(cornerRadius: 11, style: .continuous)
                             .fill(AppVisual.fill(colorScheme))
                         Image(systemName: "globe.asia.australia.fill")
-                            .font(.system(size: 18, weight: .regular))
+                            .font(.system(size: 17, weight: .regular))
                             .foregroundStyle(AppVisual.tertiaryLabel(colorScheme))
                     }
-                    .frame(width: 36, height: 36)
+                    .frame(width: 40, height: 40)
 
                     VStack(alignment: .leading, spacing: 3) {
                         Text(subscription.name.isEmpty ? subscription.identifier : subscription.name)
-                            .font(.system(size: 14.5, weight: .medium))
+                            .font(.system(size: 15.5, weight: .medium))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
                         Text(sourceSubtitle(subscription))
-                            .font(.system(size: 12))
+                            .font(.system(size: 13))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
@@ -112,6 +131,25 @@ struct NodeManagementView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+
+            if subscription.sourceType == .subscription {
+                Button {
+                    Task { await model.refresh(subscription) }
+                } label: {
+                    Group {
+                        if model.refreshingSubscriptionIDs.contains(subscription.identifier) {
+                            ProgressView().controlSize(.mini)
+                        } else {
+                            Text(L10n.text("更新", "Update"))
+                        }
+                    }
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(minWidth: 36, minHeight: 28)
+                }
+                .buttonStyle(.plain)
+                .disabled(model.isRefreshingAllSubscriptions || model.refreshingSubscriptionIDs.contains(subscription.identifier))
+            }
 
             Menu {
                 Button {
@@ -142,10 +180,12 @@ struct NodeManagementView: View {
                     Label(L10n.text("删除", "Delete"), systemImage: "trash")
                 }
             } label: {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(AppVisual.tertiaryLabel(colorScheme))
-                    .frame(width: 24, height: 28)
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 30, height: 30)
+                    .background(AppVisual.card(colorScheme), in: Circle())
+                    .overlay { Circle().stroke(AppVisual.separator(colorScheme), lineWidth: 0.5) }
                     .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
@@ -157,29 +197,8 @@ struct NodeManagementView: View {
             ))
             .help(L10n.text("管理节点来源", "Manage node source"))
         }
-        .padding(.horizontal, 16)
-        .frame(minHeight: 63)
-    }
-
-    private func actionRow(title: String, icon: String, busy: Bool = false) -> some View {
-        HStack(spacing: 14) {
-            Group {
-                if busy {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Image(systemName: icon)
-                        .font(.system(size: 17, weight: .regular))
-                }
-            }
-            .frame(width: 28)
-            Text(title)
-                .font(.system(size: 15, weight: .medium))
-            Spacer()
-        }
-        .foregroundStyle(Color.accentColor)
-        .padding(.horizontal, 16)
-        .frame(height: 52)
-        .contentShape(Rectangle())
+        .padding(.horizontal, 14)
+        .frame(minHeight: 68)
     }
 
     private func sourceSubtitle(_ subscription: NekoPilotCore.Subscription) -> String {
