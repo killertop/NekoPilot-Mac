@@ -8,6 +8,7 @@ struct NodeManagementView: View {
     @State private var showingAdd = false
     @State private var editTarget: NekoPilotCore.Subscription?
     @State private var detailTarget: NekoPilotCore.Subscription?
+    @State private var refreshErrorTarget: NekoPilotCore.Subscription?
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -72,6 +73,16 @@ struct NodeManagementView: View {
                 isPresented: Binding(
                     get: { detailTarget != nil },
                     set: { if !$0 { detailTarget = nil } }
+                )
+            )
+        }
+        .sheet(item: $refreshErrorTarget) { target in
+            RefreshErrorSheet(
+                model: model,
+                subscription: target,
+                isPresented: Binding(
+                    get: { refreshErrorTarget != nil },
+                    set: { if !$0 { refreshErrorTarget = nil } }
                 )
             )
         }
@@ -168,6 +179,20 @@ struct NodeManagementView: View {
                 .disabled(model.isRefreshingAllSubscriptions || model.refreshingSubscriptionIDs.contains(subscription.identifier))
             }
 
+            if model.subscriptionRefreshErrors[subscription.identifier] != nil {
+                Button {
+                    refreshErrorTarget = subscription
+                } label: {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .font(.system(size: 16, weight: .regular))
+                        .foregroundStyle(.red)
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(L10n.text("查看更新失败原因", "View update failure reason"))
+                .help(L10n.text("查看更新失败原因", "View update failure reason"))
+            }
+
             Menu {
                 Button {
                     detailTarget = subscription
@@ -186,8 +211,8 @@ struct NodeManagementView: View {
                     Label(L10n.text("删除", "Delete"), systemImage: "trash")
                 }
             } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 13, weight: .semibold))
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.secondary)
                     .frame(width: 30, height: 30)
                     .background(AppVisual.card(colorScheme), in: Circle())
@@ -232,6 +257,75 @@ struct NodeManagementView: View {
         formatter.unitsStyle = .short
         return formatter
     }()
+}
+
+private struct RefreshErrorSheet: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @ObservedObject var model: AppModel
+    let subscription: NekoPilotCore.Subscription
+    @Binding var isPresented: Bool
+
+    private var errorMessage: String {
+        model.subscriptionRefreshErrors[subscription.identifier]
+            ?? L10n.text("未提供具体错误信息。", "No detailed error was provided.")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .font(.system(size: 21, weight: .regular))
+                    .foregroundStyle(.red)
+                Text(L10n.text("更新失败", "Update Failed"))
+                    .font(.system(size: 20, weight: .semibold))
+                Spacer()
+                Button { isPresented = false } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel(L10n.text("关闭", "Close"))
+            }
+
+            Text(subscription.name.isEmpty ? subscription.identifier : subscription.name)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+
+            Text(errorMessage)
+                .font(.system(size: 12.5))
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(AppVisual.fill(colorScheme), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            HStack {
+                Spacer()
+                Button(L10n.text("关闭", "Close")) { isPresented = false }
+                    .keyboardShortcut(.cancelAction)
+                Button {
+                    Task {
+                        await model.refresh(subscription)
+                        if model.subscriptionRefreshErrors[subscription.identifier] == nil {
+                            isPresented = false
+                        }
+                    }
+                } label: {
+                    if model.refreshingSubscriptionIDs.contains(subscription.identifier) {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text(L10n.text("重试", "Retry"))
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(model.refreshingSubscriptionIDs.contains(subscription.identifier) || model.isRefreshingAllSubscriptions)
+            }
+        }
+        .padding(AppVisual.sheetPadding)
+        .frame(width: AppVisual.sheetWidth)
+    }
 }
 
 private struct AddNodeSheet: View {
