@@ -15,6 +15,7 @@ public enum URLTestExecution: Sendable {
 public actor URLTester {
     private static let nativeBatchSize = 10
     private static let maximumOfflineWorkers = 4
+    private static let activeCoreMaximumWait: TimeInterval = 20
     private static let pollInterval: UInt64 = 200_000_000
     private let compiler: ConfigurationCompiler
     private let nativeAPI: NativeControlClient
@@ -35,7 +36,11 @@ public actor URLTester {
             return await Self.test(
                 client: nativeAPI,
                 nodes: nodes,
-                maximumWait: Self.maximumWait(for: nodes.count),
+                // The sing-box URL Test API starts one test for every member
+                // of ExitGateway together. Waiting once per ten nodes here
+                // made the 10-minute automatic selector appear stuck when a
+                // few dead nodes never returned a result.
+                maximumWait: Self.activeCoreMaximumWait,
                 onResult: onResult
             )
         }
@@ -71,7 +76,11 @@ public actor URLTester {
         var nextJobIndex = 0
         var merged: [String: DelayRecord] = [:]
         await withTaskGroup(of: [String: DelayRecord].self) { group in
-            while nextJobIndex < min(jobs.count, Self.maximumOfflineWorkers) {
+            let workerLimit = Self.offlineWorkerCount(
+                for: nodes.count,
+                processors: ProcessInfo.processInfo.activeProcessorCount
+            )
+            while nextJobIndex < min(jobs.count, workerLimit) {
                 let job = jobs[nextJobIndex]
                 nextJobIndex += 1
                 group.addTask {
@@ -192,9 +201,9 @@ public actor URLTester {
     }
 
     private static func offlineBatches(_ nodes: [ProxyNode]) -> [[ProxyNode]] {
-        let workerCount = min(
-            maximumOfflineWorkers,
-            max(1, Int(ceil(Double(nodes.count) / Double(nativeBatchSize))))
+        let workerCount = offlineWorkerCount(
+            for: nodes.count,
+            processors: ProcessInfo.processInfo.activeProcessorCount
         )
         let nodesPerWorker = Int(ceil(Double(nodes.count) / Double(workerCount)))
         return stride(from: 0, to: nodes.count, by: nodesPerWorker).map {
@@ -208,6 +217,22 @@ public actor URLTester {
         // scheduling allowance without prematurely turning later batches into
         // false timeouts.
         return TimeInterval(batches * 16)
+    }
+
+    /// Starting a disposable sing-box process costs more than testing a few
+    /// extra nodes in an existing process. Keep explicit tests responsive
+    /// without needlessly competing with the primary proxy for CPU and RAM.
+    /// This is intentionally deterministic so it can be verified without a
+    /// live network.
+    static func offlineWorkerCount(for nodeCount: Int, processors: Int) -> Int {
+        let batches = max(1, Int(ceil(Double(nodeCount) / Double(nativeBatchSize))))
+        let processorBudget: Int
+        switch processors {
+        case ..<7: processorBudget = 2
+        case 7...11: processorBudget = 3
+        default: processorBudget = maximumOfflineWorkers
+        }
+        return min(batches, processorBudget)
     }
 
     private static func waitUntilReady(endpoint: LocalAPIEndpoint, process: Process) async -> Bool {

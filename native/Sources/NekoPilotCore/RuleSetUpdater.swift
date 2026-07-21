@@ -109,6 +109,7 @@ public actor RuleSetUpdater {
             }
             try fileManager.moveItem(at: candidate, to: destination)
             try activateGeneration(destination, in: root)
+            pruneGenerations(in: generations, active: destination)
         } catch {
             try? fileManager.removeItem(at: candidate)
             throw error
@@ -124,6 +125,33 @@ public actor RuleSetUpdater {
             let message = String(cString: strerror(errno))
             try? fileManager.removeItem(at: pending)
             throw NekoPilotError.processFailed("无法切换规则库版本：\(message)")
+        }
+    }
+
+    /// Keep the active version plus one previous complete generation. The
+    /// active symlink is never removed, so a failed cleanup cannot affect
+    /// routing or the atomic replacement guarantee.
+    private static func pruneGenerations(in generations: URL, active: URL) {
+        let fileManager = FileManager.default
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .contentModificationDateKey]
+        guard let entries = try? fileManager.contentsOfDirectory(
+            at: generations,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsHiddenFiles]
+        ) else { return }
+        let activePath = active.standardizedFileURL.path
+        let archived = entries
+            .filter { entry in
+                let values = try? entry.resourceValues(forKeys: keys)
+                return values?.isDirectory == true && entry.standardizedFileURL.path != activePath
+            }
+            .sorted {
+                let left = (try? $0.resourceValues(forKeys: keys).contentModificationDate) ?? .distantPast
+                let right = (try? $1.resourceValues(forKeys: keys).contentModificationDate) ?? .distantPast
+                return left > right
+            }
+        for generation in archived.dropFirst() {
+            try? fileManager.removeItem(at: generation)
         }
     }
 

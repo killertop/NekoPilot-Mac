@@ -59,6 +59,23 @@ struct NodeListPresentationTests {
         #expect(NodeListPresentation.countsBySource([first, second, other]) == ["source": 2, "other": 1])
     }
 
+    @Test("Rows precompute source labels and duplicate names")
+    func rowsPrecomputeHomePresentation() {
+        let first = node("VLESS · Tokyo", protocolName: "vless")
+        let second = ProxyNode(
+            sourceIdentifier: "other",
+            sourceName: "Other source",
+            originalTag: "VLESS · Tokyo",
+            runtimeTag: "@np:other:Tokyo",
+            protocolName: "vless",
+            outbound: [:]
+        )
+        let rows = NodeListPresentation.rows([first, second], using: [:])
+        #expect(rows.map(\.displayName) == ["Tokyo", "Tokyo"])
+        #expect(rows.map(\.hasDuplicateDisplayName).allSatisfy { $0 })
+        #expect(rows[1].sourceName == "Other source")
+    }
+
     private func node(_ name: String, protocolName: String) -> ProxyNode {
         ProxyNode(
             sourceIdentifier: "source",

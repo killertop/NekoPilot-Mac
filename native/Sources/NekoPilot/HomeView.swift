@@ -140,9 +140,9 @@ struct HomeView: View {
                     )
                 } else {
                     LazyVStack(spacing: 0) {
-                        ForEach(model.sortedNodes) { node in
-                            nodeRow(node)
-                            if node.id != model.sortedNodes.last?.id { AppDivider() }
+                        ForEach(model.nodeRows) { row in
+                            nodeRow(row)
+                            if row.id != model.nodeRows.last?.id { AppDivider() }
                         }
                     }
                 }
@@ -150,9 +150,9 @@ struct HomeView: View {
         }
     }
 
-    private func nodeRow(_ node: ProxyNode) -> some View {
+    private func nodeRow(_ row: NodeListRow) -> some View {
+        let node = row.node
         let selected = model.selectedNode == node.runtimeTag
-        let displayName = model.displayName(for: node)
         return Button {
             Task { await model.selectNode(node) }
         } label: {
@@ -166,14 +166,14 @@ struct HomeView: View {
                         .fixedSize()
                 }
 
-                Text(displayName)
+                Text(row.displayName)
                     .font(AppTypography.rowTitle)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.tail)
 
-                if duplicateDisplayNames.contains(displayName.localizedLowercase) {
-                    Text("· \(model.sourceName(for: node))")
+                if row.hasDuplicateDisplayName {
+                    Text("· \(row.sourceName)")
                         .font(AppTypography.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -196,7 +196,7 @@ struct HomeView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("\(displayName) · \(model.sourceName(for: node))")
+        .help("\(row.displayName) · \(row.sourceName)")
     }
 
     @ViewBuilder
@@ -221,13 +221,6 @@ struct HomeView: View {
         guard let date = model.delayHistory.values.map(\.measuredAt).max() else { return title }
         let relative = Self.relativeFormatter.localizedString(for: date, relativeTo: Date())
         return "\(title) · \(relative)"
-    }
-
-    private var duplicateDisplayNames: Set<String> {
-        let counts = model.sortedNodes.reduce(into: [String: Int]()) { result, node in
-            result[model.displayName(for: node).localizedLowercase, default: 0] += 1
-        }
-        return Set(counts.compactMap { $0.value > 1 ? $0.key : nil })
     }
 
     private func isStale(_ node: ProxyNode) -> Bool {

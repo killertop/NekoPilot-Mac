@@ -20,6 +20,7 @@ final class AppModel: ObservableObject {
     @Published var status: EngineStatus = .stopped
     @Published var nodes: [ProxyNode] = []
     @Published private(set) var sortedNodes: [ProxyNode] = []
+    @Published private(set) var nodeRows: [NodeListRow] = []
     @Published private(set) var nodeCountsBySource: [String: Int] = [:]
     @Published var subscriptions: [NekoPilotCore.Subscription] = []
     @Published var selectedNode: String?
@@ -681,7 +682,8 @@ final class AppModel: ObservableObject {
     }
 
     private func rebuildSortedNodes() {
-        sortedNodes = NodeListPresentation.sorted(nodes, using: delayHistory)
+        nodeRows = NodeListPresentation.rows(nodes, using: delayHistory)
+        sortedNodes = nodeRows.map(\.node)
     }
 
     private func rebuildNodeCounts() {

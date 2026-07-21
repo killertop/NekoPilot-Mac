@@ -1,5 +1,26 @@
 import Foundation
 
+public struct NodeListRow: Identifiable, Equatable, Sendable {
+    public let node: ProxyNode
+    public let displayName: String
+    public let sourceName: String
+    public let hasDuplicateDisplayName: Bool
+
+    public var id: String { node.id }
+
+    public init(
+        node: ProxyNode,
+        displayName: String,
+        sourceName: String,
+        hasDuplicateDisplayName: Bool
+    ) {
+        self.node = node
+        self.displayName = displayName
+        self.sourceName = sourceName
+        self.hasDuplicateDisplayName = hasDuplicateDisplayName
+    }
+}
+
 /// Deterministic presentation rules shared by the SwiftUI node surfaces.
 /// Keeping these rules outside the views makes sorting and naming regressions
 /// testable without launching a second application process.
@@ -35,6 +56,28 @@ public enum NodeListPresentation {
                 break
             }
             return lhs.originalTag.localizedStandardCompare(rhs.originalTag) == .orderedAscending
+        }
+    }
+
+    /// Builds all values needed by the home node rows in one pass. Keeping
+    /// this work out of SwiftUI's body avoids repeated name and source scans
+    /// while URL Test results arrive in small batches.
+    public static func rows(
+        _ nodes: [ProxyNode],
+        using delays: [String: DelayRecord]
+    ) -> [NodeListRow] {
+        let sortedNodes = sorted(nodes, using: delays)
+        let names = sortedNodes.map(displayName(for:))
+        let counts = names.reduce(into: [String: Int]()) { result, name in
+            result[name.localizedLowercase, default: 0] += 1
+        }
+        return zip(sortedNodes, names).map { node, name in
+            NodeListRow(
+                node: node,
+                displayName: name,
+                sourceName: node.sourceName,
+                hasDuplicateDisplayName: counts[name.localizedLowercase, default: 0] > 1
+            )
         }
     }
 }
