@@ -73,7 +73,12 @@ func labels() -> [String] {
 
 func contains(_ alternatives: [String]) -> Bool {
     let snapshot = labels()
-    return alternatives.contains { expected in snapshot.contains(where: { $0.contains(expected) }) }
+    // AppKit may expose static labels in a display-transformed case (for
+    // example, "Priority" becomes "PRIORITY"). Text presence checks should
+    // validate semantics, not a visual capitalization choice.
+    return alternatives.contains { expected in
+        snapshot.contains { $0.localizedCaseInsensitiveContains(expected) }
+    }
 }
 
 func press(_ alternatives: [String]) -> Bool {
