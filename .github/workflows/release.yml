@@ -218,7 +218,9 @@ jobs:
             --repo "$GITHUB_REPOSITORY"
             --target "$GITHUB_SHA"
             --title "$TITLE"
-            --notes "Native SwiftUI/AppKit Apple Silicon release ${VERSION}. The bundled sing-box core is built from pinned upstream source. Verify downloads with SHA256SUMS."
+            --notes "$(printf '%s\n\n%s' \
+              "NekoPilot ${VERSION}：面向 Apple 芯片 Mac 的原生 SwiftUI/AppKit 版本；内置 sing-box 核心由固定的上游源码构建。请使用 SHA256SUMS 校验下载文件。" \
+              "NekoPilot ${VERSION}: a native SwiftUI/AppKit release for Apple Silicon Macs. The bundled sing-box core is built from pinned upstream source. Verify downloads with SHA256SUMS.")"
           )
           if [[ "$PRERELEASE" == "true" ]]; then
             RELEASE_ARGS+=(--prerelease)
