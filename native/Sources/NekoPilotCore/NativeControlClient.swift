@@ -14,7 +14,10 @@ public struct NativeSelector: Sendable, Equatable {
 /// per core process and authenticated with its in-memory random secret.
 public actor NativeControlClient {
     private static let startedService = "/daemon.StartedService"
-    private let group = PlatformSupport.makeEventLoopGroup(loopCount: 1)
+    // The control plane is loopback-only, so one app-lifetime event-loop group
+    // is sufficient for the main core and the short-lived URL Test workers.
+    private static let sharedGroup = PlatformSupport.makeEventLoopGroup(loopCount: 1)
+    private let group = NativeControlClient.sharedGroup
     private var endpoint: LocalAPIEndpoint?
     private var connection: ClientConnection?
 
@@ -28,7 +31,6 @@ public actor NativeControlClient {
 
     deinit {
         _ = connection?.close()
-        try? group.syncShutdownGracefully()
     }
 
     public func configure(endpoint: LocalAPIEndpoint) {
@@ -78,10 +80,26 @@ public actor NativeControlClient {
         _ = try await unary(method: "SelectOutbound", request: request)
     }
 
-    public func runURLTest(group: String = "ExitGateway") async throws {
+    /// Starts sing-box's asynchronous URL Test without awaiting all network
+    /// probes. The daemon records results through its status stream; waiting
+    /// for the unary acknowledgement can otherwise serialize polling behind
+    /// slow or unreachable nodes.
+    public func runURLTest(group: String = "ExitGateway") throws {
         var request = Nekopilot_Api_URLTestRequest()
         request.outboundTag = group
-        _ = try await unary(method: "URLTest", request: request)
+        let call: UnaryCall<Nekopilot_Api_URLTestRequest, Google_Protobuf_Empty> = try activeConnection().makeUnaryCall(
+            path: Self.startedService + "/URLTest",
+            request: request,
+            callOptions: options(timeLimit: .timeout(.seconds(3))),
+            interceptors: []
+        )
+        Task {
+            do {
+                _ = try await call.response.get()
+            } catch {
+                AppLogger.shared.warning("native URL Test request failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     public func delayResults(nodes: [String]) async throws -> [String: DelayRecord] {
@@ -117,7 +135,7 @@ public actor NativeControlClient {
         let call: UnaryCall<Request, Google_Protobuf_Empty> = try activeConnection().makeUnaryCall(
             path: Self.startedService + "/" + method,
             request: request,
-            callOptions: options(),
+            callOptions: options(timeLimit: .timeout(.seconds(3))),
             interceptors: []
         )
         return try await call.response.get()
@@ -127,7 +145,10 @@ public actor NativeControlClient {
         method: String,
         request: Request
     ) async throws -> Response {
-        let client = APIClient(channel: try activeConnection(), defaultCallOptions: options())
+        let client = APIClient(
+            channel: try activeConnection(),
+            defaultCallOptions: options(timeLimit: .timeout(.milliseconds(400)))
+        )
         let call: GRPCAsyncServerStreamingCall<Request, Response> = client.makeAsyncServerStreamingCall(
             path: Self.startedService + "/" + method,
             request: request,
@@ -147,9 +168,10 @@ public actor NativeControlClient {
         return connection
     }
 
-    private func options() -> CallOptions {
-        guard let endpoint else { return CallOptions() }
+    private func options(timeLimit: TimeLimit = .none) -> CallOptions {
+        guard let endpoint else { return CallOptions(timeLimit: timeLimit) }
         var options = CallOptions()
+        options.timeLimit = timeLimit
         options.customMetadata.add(name: "authorization", value: "Bearer \(endpoint.secret)")
         return options
     }

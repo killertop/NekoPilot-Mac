@@ -61,11 +61,13 @@ final class AppModel: ObservableObject {
     private var selectionTask: Task<Void, Never>?
     private var automaticDelayTask: Task<Void, Never>?
     private var urlTestTask: Task<Void, Never>?
+    private var urlTestProgressFlushTask: Task<Void, Never>?
     private var wakeTask: Task<Void, Never>?
     private var ruleUpdateTask: Task<Void, Never>?
     private var releaseCheckTask: Task<Void, Never>?
     private var selectionGeneration = 0
     private var urlTestGeneration = 0
+    private var pendingURLTestProgress: [String: DelayRecord] = [:]
     private var ruleUpdateGeneration = 0
     private var sleepStartedAt: Date?
     private var wasRunningBeforeSleep = false
@@ -92,7 +94,7 @@ final class AppModel: ObservableObject {
             nativeAPI: nativeAPI,
             ownershipURL: paths.engineOwnership
         )
-        tester = URLTester(compiler: compiler, nativeAPI: nativeAPI, paths: paths)
+        tester = URLTester(compiler: compiler, nativeAPI: nativeAPI)
         selection = NodeSelectionCoordinator(engine: engine, settings: settings)
         automaticSelection = AutoNodeSelectionService(
             engine: engine,
@@ -112,6 +114,7 @@ final class AppModel: ObservableObject {
         selectionTask?.cancel()
         automaticDelayTask?.cancel()
         urlTestTask?.cancel()
+        urlTestProgressFlushTask?.cancel()
         wakeTask?.cancel()
         ruleUpdateTask?.cancel()
         releaseCheckTask?.cancel()
@@ -241,9 +244,9 @@ final class AppModel: ObservableObject {
         isURLTesting = true
         let snapshot = nodes
         let running = status.isRunning
-        let testedTags = Set(snapshot.map(\.runtimeTag))
-        delayHistory = delayHistory.filter { !testedTags.contains($0.key) }
-        rebuildSortedNodes()
+        urlTestProgressFlushTask?.cancel()
+        urlTestProgressFlushTask = nil
+        pendingURLTestProgress.removeAll(keepingCapacity: true)
         urlTestTask = Task { [weak self] in
             guard let self else { return }
             defer {
@@ -254,11 +257,13 @@ final class AppModel: ObservableObject {
             }
             let results = await tester.test(
                 nodes: snapshot,
-                engineRunning: running
+                engineRunning: running,
+                execution: .isolatedWorkers
             ) { [weak self] tag, record in
-                await self?.applyURLTestProgress(tag: tag, record: record, generation: generation)
+                await self?.enqueueURLTestProgress(tag: tag, record: record, generation: generation)
             }
             guard !Task.isCancelled, generation == urlTestGeneration else { return }
+            flushURLTestProgress(generation: generation)
             delayHistory = results
             rebuildSortedNodes()
             do {
@@ -269,9 +274,22 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func applyURLTestProgress(tag: String, record: DelayRecord, generation: Int) {
+    private func enqueueURLTestProgress(tag: String, record: DelayRecord, generation: Int) {
         guard generation == urlTestGeneration, isURLTesting else { return }
-        delayHistory[tag] = record
+        pendingURLTestProgress[tag] = record
+        guard urlTestProgressFlushTask == nil else { return }
+        urlTestProgressFlushTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            guard !Task.isCancelled else { return }
+            self?.flushURLTestProgress(generation: generation)
+        }
+    }
+
+    private func flushURLTestProgress(generation: Int) {
+        urlTestProgressFlushTask = nil
+        guard generation == urlTestGeneration, isURLTesting, !pendingURLTestProgress.isEmpty else { return }
+        delayHistory.merge(pendingURLTestProgress, uniquingKeysWith: { _, newer in newer })
+        pendingURLTestProgress.removeAll(keepingCapacity: true)
         rebuildSortedNodes()
     }
 
@@ -279,6 +297,9 @@ final class AppModel: ObservableObject {
         urlTestGeneration += 1
         urlTestTask?.cancel()
         urlTestTask = nil
+        urlTestProgressFlushTask?.cancel()
+        urlTestProgressFlushTask = nil
+        pendingURLTestProgress.removeAll(keepingCapacity: true)
         isURLTesting = false
     }
 

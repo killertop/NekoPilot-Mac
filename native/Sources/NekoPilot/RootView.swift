@@ -25,7 +25,7 @@ struct RootView: View {
                     tabButton(.rules, icon: "arrow.triangle.branch", selectedIcon: "arrow.triangle.branch", title: L10n.rules)
                     tabButton(.settings, icon: "gearshape", selectedIcon: "gearshape.fill", title: L10n.settings)
                 }
-                .frame(height: 56)
+                .frame(height: AppVisual.tabBarHeight)
                 .background(AppVisual.background(colorScheme))
             }
         }
@@ -137,7 +137,7 @@ struct RootView: View {
                     .font(.system(size: 11, weight: .regular))
                     .lineLimit(1)
             }
-            .foregroundStyle(isSelected ? Color.accentColor : AppVisual.tertiaryLabel(colorScheme))
+            .foregroundStyle(isSelected ? Color.accentColor : AppVisual.inactiveTab(colorScheme))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
         }

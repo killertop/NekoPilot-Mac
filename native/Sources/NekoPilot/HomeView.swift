@@ -9,7 +9,7 @@ struct HomeView: View {
         ScrollView(showsIndicators: false) {
             VStack(spacing: 0) {
                 powerHero
-                    .padding(.top, 20)
+                    .padding(.top, AppVisual.pageTopPadding)
 
                 connectionStatus
                     .padding(.top, 16)
@@ -18,9 +18,9 @@ struct HomeView: View {
                     .padding(.top, 17)
 
             }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 20)
-            .frame(maxWidth: 448)
+            .padding(.horizontal, AppVisual.pageHorizontalPadding)
+            .padding(.bottom, AppVisual.pageBottomPadding)
+            .frame(maxWidth: AppVisual.pageMaximumWidth)
             .frame(maxWidth: .infinity)
         }
     }

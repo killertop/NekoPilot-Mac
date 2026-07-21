@@ -3,42 +3,109 @@ import Foundation
 
 public typealias URLTestProgressHandler = @Sendable (String, DelayRecord) async -> Void
 
+public enum URLTestExecution: Sendable {
+    /// Uses the running sing-box core when one exists. This is appropriate for
+    /// the periodic automatic selector, which must not create extra cores.
+    case activeCore
+    /// Uses isolated, bounded workers so an explicit user speed test remains
+    /// responsive even when the main proxy is connected.
+    case isolatedWorkers
+}
+
 public actor URLTester {
     // This is a sing-box URL Test RTT, rather than a TCP handshake time.
     public static let testURL = "https://www.gstatic.com/generate_204"
+    private static let nativeBatchSize = 10
+    private static let maximumOfflineWorkers = 4
+    private static let pollInterval: UInt64 = 200_000_000
     private let compiler: ConfigurationCompiler
     private let nativeAPI: NativeControlClient
-    private let paths: AppPaths
 
-    public init(compiler: ConfigurationCompiler, nativeAPI: NativeControlClient, paths: AppPaths) {
+    public init(compiler: ConfigurationCompiler, nativeAPI: NativeControlClient) {
         self.compiler = compiler
         self.nativeAPI = nativeAPI
-        self.paths = paths
     }
 
     public func test(
         nodes: [ProxyNode],
         engineRunning: Bool,
+        execution: URLTestExecution = .activeCore,
         onResult: URLTestProgressHandler? = nil
     ) async -> [String: DelayRecord] {
         guard !nodes.isEmpty else { return [:] }
-        if engineRunning {
-            return await test(client: nativeAPI, nodes: nodes, onResult: onResult)
+        if engineRunning, execution == .activeCore {
+            return await Self.test(
+                client: nativeAPI,
+                nodes: nodes,
+                maximumWait: Self.maximumWait(for: nodes.count),
+                onResult: onResult
+            )
+        }
+        return await testWithOfflineWorkers(nodes: nodes, onResult: onResult)
+    }
+
+    private func testWithOfflineWorkers(
+        nodes: [ProxyNode],
+        onResult: URLTestProgressHandler?
+    ) async -> [String: DelayRecord] {
+        guard let executable = try? SingBoxLocator.executable() else {
+            return Self.unavailable(nodes)
+        }
+        let batches = Self.offlineBatches(nodes)
+        let endpoints = batches.compactMap { _ in try? LocalAPIEndpoint.make() }
+        guard endpoints.count == batches.count,
+              let configurations = try? await compiler.makeOfflineTestConfigurations(
+                  selectedNodeGroups: batches.map { $0.map(\.runtimeTag) },
+                  apiEndpoints: endpoints
+              ),
+              configurations.count == batches.count else {
+            return Self.unavailable(nodes)
+        }
+        let jobs = zip(zip(batches, endpoints), configurations).map { batchAndEndpoint, config in
+            OfflineTestJob(
+                nodes: batchAndEndpoint.0,
+                endpoint: batchAndEndpoint.1,
+                config: config,
+                executable: executable
+            )
         }
 
-        guard let endpoint = try? LocalAPIEndpoint.make(),
-              let config = try? await compiler.makeOfflineTestConfiguration(
-                  selectedNode: nodes.first?.runtimeTag,
-                  apiEndpoint: endpoint
-              ),
-              let executable = try? SingBoxLocator.executable() else {
-            return unavailable(nodes)
+        var nextJobIndex = 0
+        var merged: [String: DelayRecord] = [:]
+        await withTaskGroup(of: [String: DelayRecord].self) { group in
+            while nextJobIndex < min(jobs.count, Self.maximumOfflineWorkers) {
+                let job = jobs[nextJobIndex]
+                nextJobIndex += 1
+                group.addTask {
+                    await Self.testOffline(job: job, onResult: onResult)
+                }
+            }
+            while let result = await group.next() {
+                merged.merge(result, uniquingKeysWith: { _, newer in newer })
+                guard !Task.isCancelled, nextJobIndex < jobs.count else { continue }
+                let job = jobs[nextJobIndex]
+                nextJobIndex += 1
+                group.addTask {
+                    await Self.testOffline(job: job, onResult: onResult)
+                }
+            }
         }
-        let temporaryDirectory = config.deletingLastPathComponent()
-        let client = NativeControlClient(endpoint: endpoint)
+        guard !Task.isCancelled else { return [:] }
+        for node in nodes where merged[node.runtimeTag] == nil {
+            merged[node.runtimeTag] = DelayRecord(delay: nil)
+        }
+        return merged
+    }
+
+    private static func testOffline(
+        job: OfflineTestJob,
+        onResult: URLTestProgressHandler?
+    ) async -> [String: DelayRecord] {
+        let temporaryDirectory = job.config.deletingLastPathComponent()
+        let client = NativeControlClient(endpoint: job.endpoint)
         let process = Process()
-        process.executableURL = executable
-        process.arguments = ["run", "-c", config.path, "--disable-color"]
+        process.executableURL = job.executable
+        process.arguments = ["run", "-c", job.config.path, "--disable-color"]
         process.currentDirectoryURL = temporaryDirectory
         process.standardOutput = FileHandle.nullDevice
         let standardError = Pipe()
@@ -56,7 +123,7 @@ public actor URLTester {
             standardError.fileHandleForReading.readabilityHandler = nil
             try? standardError.fileHandleForReading.close()
             try? FileManager.default.removeItem(at: temporaryDirectory)
-            return unavailable(nodes)
+            return unavailable(job.nodes)
         }
 
         defer {
@@ -67,21 +134,28 @@ public actor URLTester {
                 try? FileManager.default.removeItem(at: temporaryDirectory)
             }
         }
-        guard await Self.waitUntilReady(client: client, process: process) else {
+        guard await Self.waitUntilReady(endpoint: job.endpoint, process: process) else {
             AppLogger.shared.warning("offline URL Test core did not become ready")
             await client.disconnect()
-            return unavailable(nodes)
+            return unavailable(job.nodes)
         }
-        let results = await test(client: client, nodes: nodes, onResult: onResult)
+        let results = await test(
+            client: client,
+            nodes: job.nodes,
+            maximumWait: maximumWait(for: job.nodes.count),
+            onResult: onResult
+        )
         await client.disconnect()
         return results
     }
 
-    private func test(
+    private static func test(
         client: NativeControlClient,
         nodes: [ProxyNode],
+        maximumWait: TimeInterval,
         onResult: URLTestProgressHandler?
     ) async -> [String: DelayRecord] {
+        guard !Task.isCancelled else { return [:] }
         let startedAt = Date()
         do {
             try await client.runURLTest()
@@ -90,9 +164,8 @@ public actor URLTester {
             return unavailable(nodes)
         }
         var results: [String: DelayRecord] = [:]
-        // sing-box's native URL Test has a 10 s TCP timeout; allow DNS and
-        // connection teardown to complete before declaring a node timed out.
-        for _ in 0 ..< 80 where !Task.isCancelled {
+        let deadline = startedAt.addingTimeInterval(maximumWait)
+        while Date() < deadline, !Task.isCancelled {
             do {
                 let current = try await client.delayResults(nodes: nodes.map(\.runtimeTag))
                 for node in nodes {
@@ -106,7 +179,7 @@ public actor URLTester {
                 AppLogger.shared.warning("native URL Test status read failed: \(error.localizedDescription)")
             }
             if results.count == nodes.count { break }
-            try? await Task.sleep(nanoseconds: 200_000_000)
+            try? await Task.sleep(nanoseconds: pollInterval)
         }
         for node in nodes where results[node.runtimeTag] == nil {
             let result = DelayRecord(delay: nil)
@@ -116,14 +189,38 @@ public actor URLTester {
         return results
     }
 
-    private func unavailable(_ nodes: [ProxyNode]) -> [String: DelayRecord] {
+    private static func unavailable(_ nodes: [ProxyNode]) -> [String: DelayRecord] {
         Dictionary(uniqueKeysWithValues: nodes.map { ($0.runtimeTag, DelayRecord(delay: nil)) })
     }
 
-    private static func waitUntilReady(client: NativeControlClient, process: Process) async -> Bool {
+    private static func offlineBatches(_ nodes: [ProxyNode]) -> [[ProxyNode]] {
+        let workerCount = min(
+            maximumOfflineWorkers,
+            max(1, Int(ceil(Double(nodes.count) / Double(nativeBatchSize))))
+        )
+        let nodesPerWorker = Int(ceil(Double(nodes.count) / Double(workerCount)))
+        return stride(from: 0, to: nodes.count, by: nodesPerWorker).map {
+            Array(nodes[$0 ..< min($0 + nodesPerWorker, nodes.count)])
+        }
+    }
+
+    private static func maximumWait(for nodeCount: Int) -> TimeInterval {
+        let batches = max(1, Int(ceil(Double(nodeCount) / Double(nativeBatchSize))))
+        // sing-box gives every batch a native 15 s TCP deadline. Keep a small
+        // scheduling allowance without prematurely turning later batches into
+        // false timeouts.
+        return TimeInterval(batches * 16)
+    }
+
+    private static func waitUntilReady(endpoint: LocalAPIEndpoint, process: Process) async -> Bool {
         for _ in 0 ..< 50 {
             guard process.isRunning, !Task.isCancelled else { return false }
-            if await client.isReady() { return true }
+            // `SubscribeServiceStatus` is intentionally a long-lived stream.
+            // Waiting for its first event can be delayed by the daemon's
+            // scheduler even after its loopback API is usable. A TCP probe is
+            // enough to gate this disposable worker; API calls below retain
+            // their own bounded failure handling.
+            if PortProbe.isListening(endpoint.port) { return true }
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         return false
@@ -136,4 +233,11 @@ public actor URLTester {
         for _ in 0 ..< 10 where process.isRunning { usleep(50_000) }
         if process.isRunning, kill(-pid, SIGKILL) != 0 { kill(pid, SIGKILL) }
     }
+}
+
+private struct OfflineTestJob: Sendable {
+    let nodes: [ProxyNode]
+    let endpoint: LocalAPIEndpoint
+    let config: URL
+    let executable: URL
 }

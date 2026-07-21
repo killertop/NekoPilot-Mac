@@ -44,26 +44,14 @@ struct NodeManagementView: View {
                     }
 
                     sourceList
-
-                    Button { showingAdd = true } label: {
-                        HStack(spacing: 9) {
-                            Image(systemName: "plus")
-                                .font(.system(size: 16, weight: .medium))
-                            Text(L10n.text("添加节点", "Add Node"))
-                                .font(.system(size: 15, weight: .semibold))
-                        }
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 48)
-                        .foregroundStyle(.white)
-                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
                 }
+
+                addNodeButton
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 16)
-            .padding(.bottom, 20)
-            .frame(maxWidth: 448)
+            .padding(.horizontal, AppVisual.pageHorizontalPadding)
+            .padding(.top, AppVisual.pageTopPadding)
+            .padding(.bottom, AppVisual.pageBottomPadding)
+            .frame(maxWidth: AppVisual.pageMaximumWidth)
             .frame(maxWidth: .infinity)
         }
         .sheet(isPresented: $showingAdd) {
@@ -85,6 +73,22 @@ struct NodeManagementView: View {
                 )
             )
         }
+    }
+
+    private var addNodeButton: some View {
+        Button { showingAdd = true } label: {
+            HStack(spacing: 9) {
+                Image(systemName: "plus")
+                    .font(.system(size: 16, weight: .medium))
+                Text(L10n.text("添加节点", "Add Node"))
+                    .font(.system(size: 15, weight: .semibold))
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 48)
+            .foregroundStyle(.white)
+            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
     }
 
     private var sourceList: some View {

@@ -29,13 +29,69 @@ public actor ConfigurationCompiler {
         selectedNode: String?,
         apiEndpoint: LocalAPIEndpoint
     ) async throws -> URL {
+        try await makeOfflineTestConfiguration(
+            selectedNodes: selectedNode.map { [$0] } ?? [],
+            apiEndpoint: apiEndpoint
+        )
+    }
+
+    /// Creates an isolated, inbound-free configuration for one URL Test worker.
+    /// The worker's selector is restricted to `selectedNodes`, so callers can
+    /// run several bounded workers without sharing a cache or a test queue.
+    public func makeOfflineTestConfiguration(
+        selectedNodes: [String],
+        apiEndpoint: LocalAPIEndpoint
+    ) async throws -> URL {
+        let configurations = try await makeOfflineTestConfigurations(
+            selectedNodeGroups: [selectedNodes],
+            apiEndpoints: [apiEndpoint]
+        )
+        guard let configuration = configurations.first else {
+            throw NekoPilotError.processFailed("测速配置未生成")
+        }
+        return configuration
+    }
+
+    /// Builds all temporary worker configurations from one compiled base.  A
+    /// multi-node test may need several workers, but repeatedly reading every
+    /// subscription and validating the same binary rule sets used to put that
+    /// setup work on the critical path once per worker.
+    public func makeOfflineTestConfigurations(
+        selectedNodeGroups: [[String]],
+        apiEndpoints: [LocalAPIEndpoint]
+    ) async throws -> [URL] {
+        guard selectedNodeGroups.count == apiEndpoints.count,
+              let selectedNode = selectedNodeGroups.first?.first else {
+            throw NekoPilotError.processFailed("测速节点不能为空")
+        }
         // Do not call compile here. An offline URL Test must not overwrite the
         // live runtime configuration with its short-lived API credentials or
         // race a subsequent Connect request.
-        var config = try await makeConfiguration(
+        let baseConfig = try await makeConfiguration(
             selectedNode: selectedNode,
-            apiEndpoint: apiEndpoint
+            apiEndpoint: apiEndpoints[0]
         )
+        var configurations: [URL] = []
+        do {
+            for (selectedNodes, endpoint) in zip(selectedNodeGroups, apiEndpoints) {
+                var config = baseConfig
+                configureAPIService(config: &config, endpoint: endpoint)
+                try restrictExitGateway(to: selectedNodes, in: &config)
+                configurations.append(try makeIsolatedOfflineTestConfiguration(from: config))
+            }
+            return configurations
+        } catch {
+            for config in configurations {
+                try? FileManager.default.removeItem(at: config.deletingLastPathComponent())
+            }
+            throw error
+        }
+    }
+
+    private func makeIsolatedOfflineTestConfiguration(
+        from baseConfig: [String: JSONValue]
+    ) throws -> URL {
+        var config = baseConfig
         config.removeValue(forKey: "inbounds")
         if var log = config["log"]?.objectValue {
             log["disabled"] = .bool(true)
@@ -44,6 +100,14 @@ public actor ConfigurationCompiler {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("NekoPilot-URLTest-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        if var experimental = config["experimental"]?.objectValue,
+           var cacheFile = experimental["cache_file"]?.objectValue {
+            // Isolated workers may run while the primary core is connected.
+            // Never let them contend for its SQLite cache file.
+            cacheFile["path"] = .string(directory.appendingPathComponent("sing-box-cache.sqlite3").path)
+            experimental["cache_file"] = .object(cacheFile)
+            config["experimental"] = .object(experimental)
+        }
         let file = directory.appendingPathComponent("config.json")
         try AtomicFile.write(try JSONValue.encodeObject(config), to: file)
         return file
@@ -70,6 +134,30 @@ public actor ConfigurationCompiler {
         let sources = try await repository.configObjects()
         try merge(sources: sources, selectedNode: selectedNode, into: &config)
         return config
+    }
+
+    private func restrictExitGateway(
+        to selectedNodes: [String],
+        in config: inout [String: JSONValue]
+    ) throws {
+        let requested = Set(selectedNodes)
+        guard var outbounds = config["outbounds"]?.arrayValue,
+              let selectorIndex = outbounds.indices.first(where: {
+                  $0 < outbounds.count
+                      && outbounds[$0].objectValue?["tag"]?.stringValue == "ExitGateway"
+                      && outbounds[$0].objectValue?["type"]?.stringValue == "selector"
+              }),
+              var selector = outbounds[selectorIndex].objectValue else {
+            throw NekoPilotError.processFailed("测速配置缺少节点选择器")
+        }
+        let existing = selector["outbounds"]?.arrayValue?.compactMap(\.stringValue) ?? []
+        let included = existing.filter { requested.contains($0) }
+        guard Set(included) == requested else {
+            throw NekoPilotError.processFailed("测速节点未写入运行配置")
+        }
+        selector["outbounds"] = .array(included.map(JSONValue.string))
+        outbounds[selectorIndex] = .object(selector)
+        config["outbounds"] = .array(outbounds)
     }
 
     private static func loadTemplate() throws -> [String: JSONValue] {
@@ -102,16 +190,7 @@ public actor ConfigurationCompiler {
         config["experimental"] = .object(experimental)
 
         if let apiEndpoint {
-            // No dashboard, remote API, HTTP controller, or Clash service is
-            // configured. Swift connects directly to the official sing-box
-            // gRPC API over an ephemeral loopback endpoint for this process.
-            config["services"] = .array([.object([
-                "type": .string("api"),
-                "tag": .string("nekopilot-local-api"),
-                "listen": .string(apiEndpoint.host),
-                "listen_port": .number(Double(apiEndpoint.port)),
-                "secret": .string(apiEndpoint.secret),
-            ])])
+            configureAPIService(config: &config, endpoint: apiEndpoint)
         } else {
             config.removeValue(forKey: "services")
         }
@@ -163,6 +242,22 @@ public actor ConfigurationCompiler {
             route["rule_set"] = .array(ruleSets)
             config["route"] = .object(route)
         }
+    }
+
+    private func configureAPIService(
+        config: inout [String: JSONValue],
+        endpoint: LocalAPIEndpoint
+    ) {
+        // No dashboard, remote API, HTTP controller, or Clash service is
+        // configured. Swift connects directly to the official sing-box gRPC
+        // API over an ephemeral loopback endpoint for this process.
+        config["services"] = .array([.object([
+            "type": .string("api"),
+            "tag": .string("nekopilot-local-api"),
+            "listen": .string(endpoint.host),
+            "listen_port": .number(Double(endpoint.port)),
+            "secret": .string(endpoint.secret),
+        ])])
     }
 
     private func injectRules(_ rules: [RoutingRule], into config: inout [String: JSONValue]) {

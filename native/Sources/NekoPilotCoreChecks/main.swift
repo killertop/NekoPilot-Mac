@@ -118,6 +118,12 @@ checks.append(("repository and config compiler", {
         offlineConfig["services"]?.arrayValue?.first?.objectValue?["listen_port"]?.numberValue == Double(offlineAPI.port),
         "offline URL Test config did not expose the local sing-box API"
     )
+    let offlineSelectorNodes = offlineConfig["outbounds"]?.arrayValue?
+        .compactMap(\.objectValue)
+        .first { $0["tag"]?.stringValue == "ExitGateway" }?["outbounds"]?.arrayValue?.compactMap(\.stringValue)
+    try expect(offlineSelectorNodes == [nodes[0].runtimeTag], "offline URL Test did not isolate its node batch")
+    let offlineCachePath = offlineConfig["experimental"]?.objectValue?["cache_file"]?.objectValue?["path"]?.stringValue
+    try expect(offlineCachePath != paths.cacheDatabase.path, "offline URL Test reused the live cache database")
     let experimentalKeys = Set(offlineConfig["experimental"]?.objectValue.map { Array($0.keys) } ?? [])
     try expect(experimentalKeys == Set(["cache_file"]), "offline URL Test config contains an unexpected experimental service")
     let runtimeConfigurationAfterOfflineTest = try Data(contentsOf: output)
@@ -179,6 +185,44 @@ func importedStoredTestNode(repository: SubscriptionRepository) async throws -> 
     return imported
 }
 
+func importedStoredTestNodes(repository: SubscriptionRepository, limit: Int) async throws -> [ProxyNode] {
+    guard let databasePath = ProcessInfo.processInfo.environment["NEKOPILOT_TEST_APP_DATABASE"],
+          !databasePath.isEmpty else {
+        throw CheckFailure(description: "NEKOPILOT_TEST_APP_DATABASE is required for stored-node validation")
+    }
+    let sourceRepository = try SubscriptionRepository(databaseURL: URL(fileURLWithPath: databasePath))
+    let sourceHistory = try await sourceRepository.delayHistory()
+    let candidates = try await sourceRepository.nodes().sorted(by: { lhs, rhs in
+        let leftDelay = sourceHistory[lhs.runtimeTag]?.delay
+        let rightDelay = sourceHistory[rhs.runtimeTag]?.delay
+        switch (leftDelay, rightDelay) {
+        case let (left?, right?): return left < right
+        case (.some, nil): return true
+        case (nil, .some): return false
+        case (nil, nil): return lhs.runtimeTag.localizedStandardCompare(rhs.runtimeTag) == .orderedAscending
+        }
+    })
+    let selected = Array(candidates.prefix(max(1, limit)))
+    guard !selected.isEmpty else {
+        throw CheckFailure(description: "the selected application database has no usable nodes")
+    }
+    var imported: [ProxyNode] = []
+    for (index, sourceNode) in selected.enumerated() {
+        let identifier = try await repository.upsert(
+            url: nil,
+            name: "Stored URL Test \(index + 1)",
+            sourceType: .localLink,
+            config: ["outbounds": .array([.object(sourceNode.outbound)])],
+            identifier: "stored-url-test-\(index + 1)"
+        )
+        guard let node = try await repository.nodes().first(where: { $0.sourceIdentifier == identifier }) else {
+            throw CheckFailure(description: "could not prepare stored URL Test node \(index + 1)")
+        }
+        imported.append(node)
+    }
+    return imported
+}
+
 if ProcessInfo.processInfo.environment["NEKOPILOT_VALIDATE_REAL_EGRESS"] == "1" {
     checks.append(("offline URL Test reaches the internet", {
         let directory = FileManager.default.temporaryDirectory
@@ -197,7 +241,7 @@ if ProcessInfo.processInfo.environment["NEKOPILOT_VALIDATE_REAL_EGRESS"] == "1" 
         let repository = try SubscriptionRepository(databaseURL: paths.database)
         let compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
         let nativeAPI = NativeControlClient()
-        let tester = URLTester(compiler: compiler, nativeAPI: nativeAPI, paths: paths)
+        let tester = URLTester(compiler: compiler, nativeAPI: nativeAPI)
         let node: ProxyNode
         if ProcessInfo.processInfo.environment["NEKOPILOT_TEST_APP_DATABASE"] != nil {
             node = try await importedStoredTestNode(repository: repository)
@@ -210,6 +254,33 @@ if ProcessInfo.processInfo.environment["NEKOPILOT_VALIDATE_REAL_EGRESS"] == "1" 
             delay != nil,
             "offline URL Test failed for the supplied node (records=\(result.count), has_delay=\(delay != nil))"
         )
+}))
+}
+
+if ProcessInfo.processInfo.environment["NEKOPILOT_VALIDATE_MULTI_NODE_URL_TEST"] == "1" {
+    checks.append(("bounded parallel URL Test reaches multiple real nodes", {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NekoPilot-MultiURLTest-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            if ProcessInfo.processInfo.environment["NEKOPILOT_KEEP_VALIDATION"] != "1" {
+                try? FileManager.default.removeItem(at: directory)
+            }
+        }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let paths = AppPaths(applicationSupport: directory, logs: directory.appendingPathComponent("logs"))
+        AppLogger.shared.configure(destination: paths.logFile)
+        let settings = try SettingsStore(fileURL: paths.settings)
+        let repository = try SubscriptionRepository(databaseURL: paths.database)
+        let compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
+        let tester = URLTester(compiler: compiler, nativeAPI: NativeControlClient())
+        let nodes = try await importedStoredTestNodes(repository: repository, limit: 24)
+        let startedAt = Date()
+        let results = await tester.test(nodes: nodes, engineRunning: false, execution: .isolatedWorkers)
+        let elapsed = Date().timeIntervalSince(startedAt)
+        try expect(results.count == nodes.count, "parallel URL Test did not return every node result")
+        try expect(results.values.contains(where: { $0.delay != nil }), "parallel URL Test did not reach any real node")
+        try expect(elapsed < 25, "parallel URL Test exceeded its bounded completion time (\(elapsed)s)")
+        print("parallel URL Test: \(nodes.count) nodes in \(String(format: "%.1f", elapsed))s")
     }))
 }
 

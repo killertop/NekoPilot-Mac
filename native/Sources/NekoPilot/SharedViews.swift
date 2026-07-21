@@ -6,6 +6,13 @@ import SwiftUI
 /// `windowBackgroundColor` and materials are darker and blurrier than the
 /// compact grouped surface used by NekoPilot.
 enum AppVisual {
+    static let pageMaximumWidth: CGFloat = 448
+    static let pageHorizontalPadding: CGFloat = 20
+    static let pageTopPadding: CGFloat = 20
+    static let pageBottomPadding: CGFloat = 20
+    static let tabBarHeight: CGFloat = 56
+    static let cardRadius: CGFloat = 14
+
     /// Keeps attached sheets visually subordinate to the 360pt minimum app window.
     /// 312pt leaves at least 24pt of visible app context on each side.
     static let sheetWidth: CGFloat = 312
@@ -36,6 +43,10 @@ enum AppVisual {
         scheme == .dark ? Color.white.opacity(0.3) : Color(red: 60 / 255, green: 60 / 255, blue: 67 / 255).opacity(0.3)
     }
 
+    static func inactiveTab(_ scheme: ColorScheme) -> Color {
+        scheme == .dark ? Color.white.opacity(0.52) : Color.secondary.opacity(0.82)
+    }
+
     static func cardShadow(_ scheme: ColorScheme) -> Color {
         scheme == .dark ? .black.opacity(0.45) : .black.opacity(0.04)
     }
@@ -48,7 +59,7 @@ struct AppCard<Content: View>: View {
     var body: some View {
         content
             .background(AppVisual.card(colorScheme))
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: AppVisual.cardRadius, style: .continuous))
             .shadow(color: AppVisual.cardShadow(colorScheme), radius: 2.5, y: 1)
     }
 }

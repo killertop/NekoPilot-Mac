@@ -86,10 +86,10 @@ struct RulesView: View {
                     .padding(.horizontal, 4)
                     .padding(.top, feedback == nil ? 7 : 2)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 16)
-            .padding(.bottom, 20)
-            .frame(maxWidth: 448)
+            .padding(.horizontal, AppVisual.pageHorizontalPadding)
+            .padding(.top, AppVisual.pageTopPadding)
+            .padding(.bottom, AppVisual.pageBottomPadding)
+            .frame(maxWidth: AppVisual.pageMaximumWidth)
             .frame(maxWidth: .infinity)
         }
         .sheet(isPresented: $showingHelp) {

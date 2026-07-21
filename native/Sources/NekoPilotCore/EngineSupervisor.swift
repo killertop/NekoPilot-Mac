@@ -101,7 +101,7 @@ public actor EngineSupervisor {
             process = child
             sessionID = session
 
-            guard await waitUntilReady(epoch: startEpoch) else {
+            guard await waitUntilReady(endpoint: apiEndpoint, epoch: startEpoch) else {
                 try ensureCurrent(startEpoch)
                 throw NekoPilotError.processFailed("sing-box 启动超时")
             }
@@ -313,10 +313,14 @@ public actor EngineSupervisor {
         return child
     }
 
-    private func waitUntilReady(epoch expectedEpoch: UInt64) async -> Bool {
+    private func waitUntilReady(endpoint: LocalAPIEndpoint, epoch expectedEpoch: UInt64) async -> Bool {
         for _ in 0 ..< 100 {
             guard expectedEpoch == epoch, !isShuttingDown, process?.isRunning == true else { return false }
-            if await nativeAPI.isReady() { return true }
+            // The API status endpoint is stream-oriented and can delay its
+            // first status event long after sing-box has accepted loopback
+            // control connections. The bound local port is the correct
+            // readiness gate for starting system proxy ownership.
+            if PortProbe.isListening(endpoint.port) { return true }
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
         return false
