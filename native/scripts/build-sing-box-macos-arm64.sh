@@ -16,10 +16,11 @@ SOURCE_DATE_EPOCH="1779788717"
 # Clash is deliberately absent: NekoPilot uses only the native sing-box 1.14
 # API service, bound to loopback with an ephemeral secret by Swift.
 BUILD_TAGS="with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_tailscale,with_ccm,with_ocm,with_cloudflared,with_naive_outbound,badlinkname,tfogo_checklinkname0"
-# `-buildid=` clears Go's identifier. `-B none` also suppresses the Mach-O
-# LC_UUID that Go's Darwin linker otherwise generates differently on each
-# link, so the CI double-build check compares meaningful identical outputs.
-LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=${SING_BOX_VERSION} -X internal/godebug.defaultGODEBUG=multipathtcp=0 -checklinkname=0 -buildid= -B none"
+# The fixed Go build ID feeds `-B gobuildid`, producing a stable Mach-O
+# LC_UUID. macOS requires that load command to execute the sidecar, while a
+# random UUID would make two builds of the same pinned source hash differently.
+GO_BUILD_ID="nekopilot-sing-box-${SING_BOX_VERSION}-${SING_BOX_COMMIT}"
+LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=${SING_BOX_VERSION} -X internal/godebug.defaultGODEBUG=multipathtcp=0 -checklinkname=0 -buildid=${GO_BUILD_ID} -B gobuildid"
 
 OUTPUT=${NEKOPILOT_SING_BOX_OUTPUT:-"$NATIVE_DIR/.build/sidecar/sing-box"}
 VERIFY_REPRODUCIBLE=${NEKOPILOT_VERIFY_REPRODUCIBLE:-0}

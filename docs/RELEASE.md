@@ -29,7 +29,7 @@ Manual dispatch also supports a rolling `manual` channel. A stable tag can never
 - upstream release build tags;
 - `CGO_ENABLED=1`, `GOOS=darwin`, `GOARCH=arm64`;
 - `MACOSX_DEPLOYMENT_TARGET=13.0`;
-- trimmed source paths and an empty Go build ID.
+- trimmed source paths and a fixed Go build ID that produces a stable Mach-O UUID.
 
 The GitHub build runs this compile twice and requires identical output hashes. This proves repeatability on the pinned runner/toolchain; package hashes themselves can still differ because DMG filesystem metadata is created at packaging time.
 
