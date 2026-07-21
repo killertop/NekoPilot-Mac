@@ -41,6 +41,7 @@ final class AppModel: ObservableObject {
     @Published var availableUpdate: GitHubReleaseUpdate?
     @Published private(set) var lastAutomaticSelectionUpdate: AutoNodeSelectionUpdate?
     @Published private(set) var refreshingSubscriptionIDs: Set<String> = []
+    @Published private(set) var subscriptionRefreshErrors: [String: String] = [:]
     @Published private(set) var isRefreshingAllSubscriptions = false
 
     let paths: AppPaths
@@ -326,9 +327,11 @@ final class AppModel: ObservableObject {
         defer { refreshingSubscriptionIDs.remove(subscription.identifier) }
         do {
             try await importer.refresh(identifier: subscription.identifier)
+            subscriptionRefreshErrors.removeValue(forKey: subscription.identifier)
             await refreshData()
             if status.isRunning { try await reloadRunningEngine(selectedNode: selectedNode) }
         } catch {
+            subscriptionRefreshErrors[subscription.identifier] = error.localizedDescription
             show(error)
         }
     }
@@ -361,6 +364,9 @@ final class AppModel: ObservableObject {
             while let (identifier, errorMessage) = await group.next() {
                 if let errorMessage {
                     AppLogger.shared.warning("refresh failed for \(identifier): \(errorMessage)")
+                    subscriptionRefreshErrors[identifier] = errorMessage
+                } else {
+                    subscriptionRefreshErrors.removeValue(forKey: identifier)
                 }
                 if nextIndex < candidates.count {
                     let subscription = candidates[nextIndex]

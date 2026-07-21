@@ -16,4 +16,19 @@ struct CommandRunnerTests {
         #expect(result.output == "NekoPilot")
         #expect(result.errorOutput.isEmpty)
     }
+
+    @Test("A timed out command returns without waiting for Foundation process reaping")
+    func timedOutCommandReturnsPromptly() async {
+        let startedAt = Date()
+        do {
+            _ = try await CommandRunner.run(
+                executable: URL(fileURLWithPath: "/bin/sleep"),
+                arguments: ["5"],
+                timeout: 0.05
+            )
+            Issue.record("Expected the sleeping command to time out")
+        } catch {
+            #expect(Date().timeIntervalSince(startedAt) < 1)
+        }
+    }
 }

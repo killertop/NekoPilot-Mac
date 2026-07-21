@@ -21,32 +21,34 @@ struct NodeManagementView: View {
                     .padding(.vertical, 32)
                 } else {
                     SectionTitle(L10n.text("节点来源", "Node Sources")) {
-                        Button {
-                            Task { await model.refreshAllSubscriptions() }
-                        } label: {
-                            HStack(spacing: 5) {
-                                if model.isRefreshingAllSubscriptions {
-                                    ProgressView().controlSize(.mini)
-                                } else {
-                                    Image(systemName: "arrow.clockwise")
+                        HStack(spacing: 12) {
+                            if model.subscriptions.contains(where: { $0.sourceType == .subscription }) {
+                                Button {
+                                    Task { await model.refreshAllSubscriptions() }
+                                } label: {
+                                    HStack(spacing: 5) {
+                                        if model.isRefreshingAllSubscriptions {
+                                            ProgressView().controlSize(.mini)
+                                        } else {
+                                            Image(systemName: "arrow.clockwise")
+                                        }
+                                        Text(model.isRefreshingAllSubscriptions ? L10n.text("正在更新", "Updating") : L10n.text("更新全部", "Update All"))
+                                    }
+                                    .font(.system(size: 13, weight: .medium))
                                 }
-                                Text(model.isRefreshingAllSubscriptions ? L10n.text("正在更新", "Updating") : L10n.text("更新全部", "Update All"))
+                                .buttonStyle(.plain)
+                                .foregroundStyle(Color.accentColor)
+                                .disabled(model.isRefreshingAllSubscriptions || !model.refreshingSubscriptionIDs.isEmpty)
                             }
-                            .font(.system(size: 13, weight: .medium))
+
+                            addNodeHeaderButton
                         }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(Color.accentColor)
-                        .disabled(
-                            model.isRefreshingAllSubscriptions ||
-                                !model.refreshingSubscriptionIDs.isEmpty ||
-                                !model.subscriptions.contains(where: { $0.sourceType == .subscription })
-                        )
                     }
 
                     sourceList
                 }
 
-                addNodeButton
+                if model.subscriptions.isEmpty { addNodeButton }
             }
             .padding(.horizontal, AppVisual.pageHorizontalPadding)
             .padding(.top, AppVisual.pageTopPadding)
@@ -91,6 +93,16 @@ struct NodeManagementView: View {
         .buttonStyle(.plain)
     }
 
+    private var addNodeHeaderButton: some View {
+        Button { showingAdd = true } label: {
+            Label(L10n.text("添加", "Add"), systemImage: "plus")
+                .font(.system(size: 13, weight: .medium))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Color.accentColor)
+        .accessibilityLabel(L10n.text("添加节点", "Add Node"))
+    }
+
     private var sourceList: some View {
         LazyVStack(spacing: 0) {
             ForEach(model.subscriptions) { subscription in
@@ -114,9 +126,9 @@ struct NodeManagementView: View {
                     ZStack {
                         RoundedRectangle(cornerRadius: 11, style: .continuous)
                             .fill(AppVisual.fill(colorScheme))
-                        Image(systemName: "globe.asia.australia.fill")
+                        Image(systemName: sourceIcon(subscription))
                             .font(.system(size: 17, weight: .regular))
-                            .foregroundStyle(AppVisual.tertiaryLabel(colorScheme))
+                            .foregroundStyle(subscription.sourceType == .subscription ? Color.accentColor : .secondary)
                     }
                     .frame(width: 40, height: 40)
 
@@ -127,8 +139,9 @@ struct NodeManagementView: View {
                             .lineLimit(1)
                         Text(sourceSubtitle(subscription))
                             .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(sourceSubtitleColor(subscription))
                             .lineLimit(1)
+                            .help(model.subscriptionRefreshErrors[subscription.identifier] ?? "")
                     }
                     Spacer(minLength: 0)
                 }
@@ -161,17 +174,6 @@ struct NodeManagementView: View {
                 } label: {
                     Label(L10n.text("详情", "Details"), systemImage: "info.circle")
                 }
-                if subscription.sourceType == .subscription {
-                    Button {
-                        Task { await model.refresh(subscription) }
-                    } label: {
-                        Label(L10n.text("更新", "Update"), systemImage: "arrow.clockwise")
-                    }
-                    .disabled(
-                        model.isRefreshingAllSubscriptions ||
-                            model.refreshingSubscriptionIDs.contains(subscription.identifier)
-                    )
-                }
                 Button {
                     editTarget = subscription
                 } label: {
@@ -202,16 +204,27 @@ struct NodeManagementView: View {
             .help(L10n.text("管理节点来源", "Manage node source"))
         }
         .padding(.horizontal, 14)
-        .frame(minHeight: 68)
+        .frame(minHeight: 62)
     }
 
     private func sourceSubtitle(_ subscription: NekoPilotCore.Subscription) -> String {
+        if model.subscriptionRefreshErrors[subscription.identifier] != nil {
+            return L10n.text("更新失败", "Update failed")
+        }
         let count = model.nodeCountsBySource[subscription.identifier, default: 0]
         if subscription.sourceType == .localLink {
             return L10n.text("本地节点，不自动更新", "Local node, no automatic updates")
         }
         let time = Self.relativeDateFormatter.localizedString(for: subscription.lastUpdateTime, relativeTo: Date())
         return L10n.text("\(count) 个节点 · 更新于 \(time)", "\(count) node(s) · updated \(time)")
+    }
+
+    private func sourceSubtitleColor(_ subscription: NekoPilotCore.Subscription) -> Color {
+        model.subscriptionRefreshErrors[subscription.identifier] == nil ? .secondary : .red
+    }
+
+    private func sourceIcon(_ subscription: NekoPilotCore.Subscription) -> String {
+        subscription.sourceType == .subscription ? "arrow.down.circle.fill" : "link.circle.fill"
     }
 
     private static let relativeDateFormatter: RelativeDateTimeFormatter = {
