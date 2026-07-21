@@ -154,21 +154,20 @@ struct HomeView: View {
             Task { await model.selectNode(node) }
         } label: {
             HStack(spacing: 8) {
+                if model.showProtocol {
+                    Text(node.protocolName.uppercased())
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .frame(width: 58, height: 20)
+                        .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .fixedSize()
+                }
+
                 Text(model.displayName(for: node))
                     .font(.system(size: 14, weight: .regular))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.tail)
-
-                if model.showProtocol {
-                    Text(node.protocolName.uppercased())
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Color.accentColor)
-                        .padding(.horizontal, 6)
-                        .frame(height: 20)
-                        .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        .fixedSize()
-                }
 
                 Spacer(minLength: 4)
                 delayLabel(node)
@@ -193,7 +192,7 @@ struct HomeView: View {
         if let delay = model.delayHistory[node.runtimeTag]?.delay {
             Text("\(delay)ms")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(delay < 250 ? Color.green : delay < 600 ? Color.orange : Color.red)
+                .foregroundStyle(.primary)
         } else if model.delayHistory[node.runtimeTag] != nil {
             Text(L10n.text("超时", "Timeout"))
                 .font(.system(size: 12, weight: .medium))

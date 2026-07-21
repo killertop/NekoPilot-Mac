@@ -369,15 +369,16 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func addRule(action: RuleAction, kind: RuleKind, value: String) async -> Bool {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard Self.validateRule(trimmed, kind: kind) else {
-            show(NekoPilotError.invalidSetting("rule"))
-            return false
-        }
+    func addRules(action: RuleAction, kind: RuleKind, input: String) async -> RuleBatchMutation? {
         let previous = rules
-        rules.append(RoutingRule(action: action, kind: kind, value: trimmed))
-        return await persistRules(previous: previous)
+        do {
+            let mutation = try RuleMutation.add(to: rules, action: action, kind: kind, rawInput: input)
+            rules = mutation.rules
+            return await persistRules(previous: previous) ? mutation : nil
+        } catch {
+            show(error)
+            return nil
+        }
     }
 
     func deleteRule(_ rule: RoutingRule) async {
@@ -391,21 +392,23 @@ final class AppModel: ObservableObject {
         action: RuleAction,
         kind: RuleKind,
         value: String
-    ) async -> Bool {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard Self.validateRule(trimmed, kind: kind),
-              !rules.contains(where: {
-                  $0.id != rule.id && $0.action == action && $0.kind == kind && $0.value == trimmed
-              }),
-              let index = rules.firstIndex(where: { $0.id == rule.id }) else {
-            show(NekoPilotError.invalidSetting("rule"))
-            return false
-        }
+    ) async -> RuleEditMutation? {
         let previous = rules
-        rules[index].action = action
-        rules[index].kind = kind
-        rules[index].value = trimmed
-        return await persistRules(previous: previous)
+        do {
+            let mutation = try RuleMutation.update(
+                in: rules,
+                original: rule,
+                action: action,
+                kind: kind,
+                value: value
+            )
+            if mutation.unchanged { return mutation }
+            rules = mutation.rules
+            return await persistRules(previous: previous) ? mutation : nil
+        } catch {
+            show(error)
+            return nil
+        }
     }
 
     func setAutoSelect(_ value: Bool) async {
@@ -733,19 +736,6 @@ final class AppModel: ObservableObject {
         errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
 
-    private static func validateRule(_ value: String, kind: RuleKind) -> Bool {
-        guard !value.isEmpty, value.utf8.count <= 512, !value.contains(where: \.isWhitespace) else { return false }
-        if kind == .ipCIDR {
-            guard let slash = value.lastIndex(of: "/"),
-                  let prefix = Int(value[value.index(after: slash)...]) else { return false }
-            let address = String(value[..<slash])
-            var ipv4 = in_addr(), ipv6 = in6_addr()
-            let isV4 = address.withCString { inet_pton(AF_INET, $0, &ipv4) == 1 }
-            let isV6 = address.withCString { inet_pton(AF_INET6, $0, &ipv6) == 1 }
-            return (isV4 && (0 ... 32).contains(prefix)) || (isV6 && (0 ... 128).contains(prefix))
-        }
-        return !value.contains("://")
-    }
 }
 
 private extension String {

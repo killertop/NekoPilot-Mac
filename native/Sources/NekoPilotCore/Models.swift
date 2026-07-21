@@ -127,6 +127,8 @@ public enum NekoPilotError: LocalizedError, Equatable {
     case invalidSubscription
     case remoteAddressBlocked
     case responseTooLarge
+    case invalidRule
+    case duplicateRule
     case singBoxMissing
     case portOccupied(Int)
     case processFailed(String)
@@ -141,6 +143,8 @@ public enum NekoPilotError: LocalizedError, Equatable {
         case .invalidSubscription: "订阅中没有可用节点"
         case .remoteAddressBlocked: "订阅地址指向本机或内网，已拒绝访问"
         case .responseTooLarge: "订阅内容过大"
+        case .invalidRule: "规则格式无效"
+        case .duplicateRule: "规则已存在"
         case .singBoxMissing: "缺少 sing-box 代理核心"
         case let .portOccupied(port): "端口 \(port) 已被占用"
         case let .processFailed(message): message
