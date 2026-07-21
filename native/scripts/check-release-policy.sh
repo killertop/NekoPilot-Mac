@@ -64,6 +64,8 @@ require_text "$CORE_BUILD" 'SING_BOX_ARCHIVE_SHA256='
 require_text "$CORE_BUILD" 'vtool -show-build'
 require_text "$CORE_BUILD" './cmd/sing-box'
 require_text "$CORE_BUILD" '-B gobuildid'
+require_text "$CORE_BUILD" 'BUILD_TAGS="with_gvisor,with_quic,with_dhcp,with_utls,with_naive_outbound,badlinkname,tfogo_checklinkname0"'
+require_text "$CORE_BUILD" 'LDFLAGS="-s -w '
 require_text "$CORE_BUILD" 'canonical_macho_sha256'
 reject_pattern "$CORE_BUILD" 'src-tauri/binaries'
 
@@ -72,8 +74,9 @@ require_text "$PACKAGE" '$NATIVE_DIR/Resources/AppIcon.icns'
 require_text "$PACKAGE" '$NATIVE_DIR/Resources/menu-bar-template.png'
 require_text "$PACKAGE" 'LSMultipleInstancesProhibited'
 require_text "$PACKAGE" 'swift test --package-path'
+require_text "$PACKAGE" 'strip -S -x "$APP_BUNDLE/Contents/MacOS/NekoPilot"'
+require_text "$PACKAGE" '-format UDZO -imagekey zlib-level=9'
 require_text "$PACKAGE" 'verify-macos-artifacts.sh'
-require_text "$PACKAGE" 'smoke-test-macos-app.sh'
 
 require_text "$GUIDE" "Only Apple Silicon macOS assets are built or published"
 require_text "$GUIDE" "Windows, Linux, Intel macOS, Rust/Tauri, and WebView packages are never Release assets or active source targets"

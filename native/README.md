@@ -48,6 +48,6 @@ Set `NEKOPILOT_VERIFY_REPRODUCIBLE=1` to run the same double-build check locally
 native/scripts/package-macos.sh
 ```
 
-The script creates and verifies an ad-hoc-signed `.app`, `.dmg`, `.app.tar.gz`, and `SHA256SUMS` under `native/dist`. Both executable files must be arm64-only and compatible with macOS 13. The packaged DMG and archive are mounted/extracted and checked independently.
+The script creates and verifies an ad-hoc-signed `.app`, `.dmg`, `.app.tar.gz`, and `SHA256SUMS` under `native/dist`. Both executable files must be arm64-only, compatible with macOS 13, and stripped for release. The zlib-level-9 DMG and archive are mounted/extracted and checked independently. Visual acceptance is performed manually.
 
 The repository contains one production architecture only: a SwiftUI/AppKit shell plus the pinned upstream Go sing-box executable. Rust, WebView, Windows, Linux, and Intel application targets are rejected by the repository policy check.

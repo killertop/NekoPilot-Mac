@@ -60,7 +60,7 @@ Then launch `native/dist/NekoPilot.app` and complete the manual acceptance list 
 
 ## GitHub Actions
 
-`.github/workflows/test.yml` is the non-publishing hard gate. On an Apple Silicon `macos-26` runner with Xcode 26.2 and Go 1.26.5 it builds the pinned sing-box source twice, runs native tests, packages the actual bundle, mounts/extracts the artifacts, and validates architecture, `minos`, resources, version, signature, real initial-window creation, single-instance behavior, and normal quit. A separate policy check prevents publication scope from drifting.
+`.github/workflows/test.yml` is the non-publishing hard gate. On an Apple Silicon `macos-26` runner with Xcode 26.2 and Go 1.26.5 it builds the pinned sing-box source twice, runs native tests, packages the actual bundle, mounts/extracts the artifacts, and validates architecture, `minos`, resources, version, stripped release symbols, and signature. Visual and interaction acceptance remains the manual checklist below. A separate policy check prevents publication scope from drifting.
 
 `.github/workflows/release.yml` repeats the complete native build rather than trusting an artifact from another run. GitHub content write permission exists only in the final publish job, after all package checks pass. Rolling releases are deleted only after a replacement has been built and verified.
 

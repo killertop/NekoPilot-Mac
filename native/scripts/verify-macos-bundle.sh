@@ -5,7 +5,7 @@ APP_BUNDLE=${1:-}
 EXPECTED_VERSION=${2:-}
 EXPECTED_SING_BOX_VERSION="1.14.0-alpha.48"
 EXPECTED_GO_VERSION="1.26.5"
-EXPECTED_TAGS="with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_tailscale,with_ccm,with_ocm,with_cloudflared,with_naive_outbound,badlinkname,tfogo_checklinkname0"
+EXPECTED_TAGS="with_gvisor,with_quic,with_dhcp,with_utls,with_naive_outbound,badlinkname,tfogo_checklinkname0"
 EXPECTED_MENU_ICON_SHA256="4c632710a7644b1704fc7995fae95e1dee53c854984eb74e52c43c9ec7718213"
 
 fail() {
@@ -57,6 +57,12 @@ assert_arm64_only "$APP_EXECUTABLE"
 assert_arm64_only "$SING_BOX"
 assert_macos_13_or_older "$APP_EXECUTABLE"
 assert_macos_13_or_older "$SING_BOX"
+if nm -m "$APP_EXECUTABLE" 2>/dev/null | awk 'index($0, "non-external") { found = 1 } END { exit !found }'; then
+  fail "Packaged Swift executable still contains local symbols"
+fi
+if go tool nm "$SING_BOX" 2>/dev/null | awk '/ runtime\.main$| github\.com\/sagernet\/sing-box\// { found = 1 } END { exit !found }'; then
+  fail "Packaged sing-box still contains Go symbol/debug tables"
+fi
 
 [[ "$(plutil -extract CFBundleIdentifier raw "$PLIST")" == "dev.nekopilot.desktop" ]] || fail "Unexpected bundle identifier"
 [[ "$(plutil -extract CFBundleShortVersionString raw "$PLIST")" == "$EXPECTED_VERSION" ]] || fail "Unexpected short version"

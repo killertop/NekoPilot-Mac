@@ -15,13 +15,17 @@ MACOS_SDK_VERSION="26.2"
 SOURCE_DATE_EPOCH="1779788717"
 # Clash is deliberately absent: NekoPilot uses only the native sing-box 1.14
 # API service, bound to loopback with an ephemeral secret by Swift.
-BUILD_TAGS="with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_tailscale,with_ccm,with_ocm,with_cloudflared,with_naive_outbound,badlinkname,tfogo_checklinkname0"
+# Keep the transport/runtime features used by NekoPilot's supported proxy
+# protocols plus DHCP DNS discovery for network-aware local resolution. Server,
+# certificate, mesh-network, and enterprise-management services have no product
+# entry point and are intentionally left out.
+BUILD_TAGS="with_gvisor,with_quic,with_dhcp,with_utls,with_naive_outbound,badlinkname,tfogo_checklinkname0"
 # The fixed Go build ID feeds `-B gobuildid`. macOS requires LC_UUID for dyld
 # to execute the sidecar; the linker may still emit a different UUID for two
 # otherwise identical builds, so the reproducibility check canonicalizes only
 # that runtime identifier rather than stripping the required load command.
 GO_BUILD_ID="nekopilot-sing-box-${SING_BOX_VERSION}-${SING_BOX_COMMIT}"
-LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=${SING_BOX_VERSION} -X internal/godebug.defaultGODEBUG=multipathtcp=0 -checklinkname=0 -buildid=${GO_BUILD_ID} -B gobuildid"
+LDFLAGS="-s -w -X github.com/sagernet/sing-box/constant.Version=${SING_BOX_VERSION} -X internal/godebug.defaultGODEBUG=multipathtcp=0 -checklinkname=0 -buildid=${GO_BUILD_ID} -B gobuildid"
 
 OUTPUT=${NEKOPILOT_SING_BOX_OUTPUT:-"$NATIVE_DIR/.build/sidecar/sing-box"}
 VERIFY_REPRODUCIBLE=${NEKOPILOT_VERIFY_REPRODUCIBLE:-0}
@@ -65,6 +69,9 @@ validate_binary() {
   grep -Fq "Tags: $BUILD_TAGS" <<<"$version_output" || \
     fail "sing-box was not built with the pinned upstream release tags"
   grep -Fq "CGO: enabled" <<<"$version_output" || fail "sing-box must be built with CGO enabled"
+  if go tool nm "$binary" 2>/dev/null | awk '/ runtime\.main$| github\.com\/sagernet\/sing-box\// { found = 1 } END { exit !found }'; then
+    fail "sing-box still contains Go symbol/debug tables; release linker stripping is required"
+  fi
 }
 
 [[ "$(uname -s)" == "Darwin" ]] || fail "This release build only runs on macOS"

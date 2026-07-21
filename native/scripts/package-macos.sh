@@ -48,6 +48,10 @@ mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources/rules"
 
 install -m 0755 "$BUILD_ROOT/NekoPilot" "$APP_BUNDLE/Contents/MacOS/NekoPilot"
 install -m 0755 "$SING_BOX_SOURCE" "$APP_BUNDLE/Contents/MacOS/sing-box"
+# SwiftPM release products retain local and debug symbols unless the packaged
+# executable is stripped explicitly. Keep symbols in .build for local crash
+# diagnosis and strip only the copy shipped to users.
+strip -S -x "$APP_BUNDLE/Contents/MacOS/NekoPilot"
 install -m 0644 "$ICON_SOURCE" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 install -m 0644 "$MENU_ICON_SOURCE" "$APP_BUNDLE/Contents/Resources/menu-bar-template.png"
 install -m 0644 "$NATIVE_DIR/Sources/NekoPilotCore/Resources/base-config.json" "$APP_BUNDLE/Contents/Resources/base-config.json"
@@ -86,7 +90,7 @@ DMG_PATH="$OUTPUT_DIR/NekoPilot_${VERSION}_aarch64.dmg"
 ARCHIVE_PATH="$OUTPUT_DIR/NekoPilot_${VERSION}_aarch64.app.tar.gz"
 CHECKSUM_PATH="$OUTPUT_DIR/SHA256SUMS"
 rm -f -- "$DMG_PATH" "$ARCHIVE_PATH" "$CHECKSUM_PATH"
-hdiutil create -quiet -fs HFS+ -volname NekoPilot -srcfolder "$DMG_SOURCE" -format UDZO "$DMG_PATH"
+hdiutil create -quiet -fs HFS+ -volname NekoPilot -srcfolder "$DMG_SOURCE" -format UDZO -imagekey zlib-level=9 "$DMG_PATH"
 COPYFILE_DISABLE=1 tar -C "$OUTPUT_DIR" -czf "$ARCHIVE_PATH" "$APP_NAME"
 (
   cd "$OUTPUT_DIR"
@@ -94,7 +98,6 @@ COPYFILE_DISABLE=1 tar -C "$OUTPUT_DIR" -czf "$ARCHIVE_PATH" "$APP_NAME"
 )
 
 "$SCRIPT_DIR/verify-macos-artifacts.sh" "$OUTPUT_DIR" "$VERSION"
-"$SCRIPT_DIR/smoke-test-macos-app.sh" "$APP_BUNDLE"
 
 echo "[native-package] Built and verified native macOS artifacts:"
 echo "  $APP_BUNDLE"

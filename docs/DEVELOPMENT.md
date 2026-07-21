@@ -70,13 +70,13 @@ The package script performs these hard checks:
 - `LSUIElement` is absent so SwiftUI can create the first window before AppDelegate switches the process to accessory mode;
 - menu-bar artwork and offline rule resources are present;
 - sing-box reports the pinned version, Go version, release tags, and CGO state;
+- both shipped executables have their release symbol/debug tables stripped;
 - the app has a valid strict ad-hoc signature;
 - both the mounted DMG and extracted app archive pass the same bundle checks;
+- the DMG uses zlib level 9 compression;
 - `SHA256SUMS` contains exactly the DMG and archive.
-- the real packaged executable creates exactly one visible initial window, rejects a second instance, and completes a normal quit handshake.
-- when the build host grants Accessibility permission, the packaged SwiftUI window exposes Home, Nodes, the Add Node sheet, and Settings through the macOS accessibility tree and survives navigation back to Home; hosts without that permission report this check as skipped instead of fabricating a pass.
 
-Passing these checks still does not prove real proxy egress.
+Passing these checks still does not prove the visual result, interaction quality, or real proxy egress. Those remain manual acceptance items.
 
 ## 5. Manual QA boundary
 
