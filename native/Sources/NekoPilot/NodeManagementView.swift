@@ -236,8 +236,8 @@ private struct AddNodeSheet: View {
                 .disabled(importing || input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
-        .padding(22)
-        .frame(width: 360)
+        .padding(AppVisual.sheetPadding)
+        .frame(width: AppVisual.sheetWidth)
     }
 }
 
@@ -301,8 +301,8 @@ private struct EditSourceSheet: View {
                 )
             }
         }
-        .padding(22)
-        .frame(width: 360)
+        .padding(AppVisual.sheetPadding)
+        .frame(width: AppVisual.sheetWidth)
     }
 }
 
@@ -428,8 +428,8 @@ private struct SourceDetailSheet: View {
                 }
             }
         }
-        .frame(width: 360)
-        .frame(minHeight: 420, idealHeight: 520, maxHeight: 560)
+        .frame(width: AppVisual.sheetWidth)
+        .frame(minHeight: 400, idealHeight: 480, maxHeight: AppVisual.sheetMaximumHeight)
     }
 
     private func infoRow(_ title: String, _ value: String) -> some View {

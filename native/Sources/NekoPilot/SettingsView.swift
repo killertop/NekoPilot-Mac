@@ -293,8 +293,8 @@ private struct ProxyPortSheet: View {
                 .disabled(saving || Int(port).map { !(1 ... 65_535).contains($0) } ?? true)
             }
         }
-        .padding(22)
-        .frame(width: 360)
+        .padding(AppVisual.sheetPadding)
+        .frame(width: AppVisual.sheetWidth)
     }
 }
 
@@ -344,8 +344,8 @@ private struct DirectDNSSheet: View {
                 .disabled(saving || value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
-        .padding(22)
-        .frame(width: 360)
+        .padding(AppVisual.sheetPadding)
+        .frame(width: AppVisual.sheetWidth)
     }
 }
 
@@ -391,25 +391,18 @@ private struct UserAgentSheet: View {
                                         .font(.system(size: 17, weight: .regular))
                                         .foregroundStyle(selected == preset ? Color.accentColor : AppVisual.tertiaryLabel(colorScheme))
                                         .frame(width: 22)
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(preset.title)
-                                            .font(.system(size: 13.5, weight: .medium))
-                                            .foregroundStyle(.primary)
-                                        if let detail = preset.detail {
-                                            Text(detail)
-                                                .font(.system(size: 10.5, design: .monospaced))
-                                                .foregroundStyle(.secondary)
-                                                .lineLimit(2)
-                                        }
-                                    }
+                                    Text(preset.title)
+                                        .font(.system(size: 13.5, weight: .medium))
+                                        .foregroundStyle(.primary)
                                     Spacer(minLength: 0)
                                 }
-                                .padding(.horizontal, 14)
-                                .frame(minHeight: preset.detail == nil ? 44 : 54)
+                                .padding(.horizontal, 13)
+                                .frame(height: 42)
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel(preset.title)
+                            .accessibilityValue(preset.detail ?? "")
                             if preset != SubscriptionUserAgentPreset.allCases.last { AppDivider(leading: 48) }
                         }
                     }
@@ -420,6 +413,19 @@ private struct UserAgentSheet: View {
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 12.5, design: .monospaced))
                         .accessibilityLabel(L10n.text("输入自定义 User Agent", "Enter a custom User Agent"))
+                } else if let detail = selected.detail {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(L10n.text("当前请求标识", "Current request identifier"))
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        Text(detail)
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .textSelection(.enabled)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 2)
                 }
 
                 Text(L10n.text(
@@ -447,9 +453,9 @@ private struct UserAgentSheet: View {
                     .disabled(saving || (selected == .custom && customValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
                 }
             }
-            .padding(22)
+            .padding(AppVisual.sheetPadding)
         }
-        .frame(width: 430)
+        .frame(width: AppVisual.sheetWidth)
     }
 }
 

@@ -251,9 +251,9 @@ private struct AddRuleSheet: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     .keyboardShortcut(.cancelAction)
             }
-            .padding(22)
+            .padding(AppVisual.sheetPadding)
         }
-        .frame(width: 400)
+        .frame(width: AppVisual.sheetWidth)
     }
 
     private var placeholder: String { kind.placeholder }
@@ -361,9 +361,9 @@ private struct EditRuleSheet: View {
                     .disabled(saving || value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
-            .padding(22)
+            .padding(AppVisual.sheetPadding)
         }
-        .frame(width: 400)
+        .frame(width: AppVisual.sheetWidth)
     }
 }
 
@@ -456,7 +456,7 @@ private struct RuleHelpSheet: View {
                     .frame(height: 46)
             }
         }
-        .frame(width: 390, height: 570)
+        .frame(width: AppVisual.sheetWidth, height: 500)
     }
 
     private func helpSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {

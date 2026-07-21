@@ -40,6 +40,17 @@ func text(_ element: AXUIElement, attribute: String) -> String? {
     return value as? String
 }
 
+func size(_ element: AXUIElement) -> CGSize? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &value) == .success,
+          let value,
+          CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+    let axValue = unsafeBitCast(value, to: AXValue.self)
+    guard AXValueGetType(axValue) == .cgSize else { return nil }
+    var result = CGSize.zero
+    return AXValueGetValue(axValue, .cgSize, &result) ? result : nil
+}
+
 func descendants() -> [AXUIElement] {
     var result: [AXUIElement] = []
     var queue = values(application, attribute: kAXWindowsAttribute)
@@ -86,6 +97,19 @@ func require(_ condition: @autoclosure () -> Bool, _ message: String) {
     }
 }
 
+func requireActiveSheetFitsMainWindow(_ name: String) {
+    let snapshot = descendants()
+    let windowWidth = snapshot.first {
+        text($0, attribute: kAXRoleAttribute) == kAXWindowRole
+    }.flatMap(size)?.width
+    let sheetWidths = snapshot.compactMap { element -> CGFloat? in
+        guard text(element, attribute: kAXRoleAttribute) == kAXSheetRole else { return nil }
+        return size(element)?.width
+    }
+    require(windowWidth != nil && !sheetWidths.isEmpty, "Could not measure \(name)")
+    require(sheetWidths.allSatisfy { $0 < windowWidth! }, "\(name) exceeded the main app window width")
+}
+
 func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) -> Bool {
     let deadline = Date().addingTimeInterval(timeout)
     repeat {
@@ -114,6 +138,7 @@ Thread.sleep(forTimeInterval: 0.4)
 require(waitUntil { contains(["添加节点", "Add Node"]) }, "Nodes tab did not expose Add Node")
 require(press(["添加节点", "Add Node"]), "Could not open the Add Node sheet")
 Thread.sleep(forTimeInterval: 0.4)
+requireActiveSheetFitsMainWindow("Add Node sheet")
 require(waitUntil { contains(["导入", "Import"]) }, "Add Node sheet did not expose Import")
 require(press(["取消", "Cancel"]), "Could not dismiss the Add Node sheet")
 Thread.sleep(forTimeInterval: 0.4)
@@ -122,11 +147,13 @@ Thread.sleep(forTimeInterval: 0.4)
 require(waitUntil { contains(["添加规则", "Add Rule"]) }, "Rules tab did not expose Add Rule")
 require(press(["规则说明", "Rule Information"]), "Could not open rule information")
 Thread.sleep(forTimeInterval: 0.4)
+requireActiveSheetFitsMainWindow("Rule Information sheet")
 require(waitUntil { contains(["优先级", "Priority"]) }, "Rule information did not expose priority")
 require(press(["关闭", "Close"]), "Could not dismiss rule information")
 Thread.sleep(forTimeInterval: 0.4)
 require(press(["添加规则", "Add Rule"]), "Could not open Add Rule")
 Thread.sleep(forTimeInterval: 0.4)
+requireActiveSheetFitsMainWindow("Add Rule sheet")
 require(waitUntil { contains(["支持换行", "Paste multiple values"]) }, "Add Rule did not expose bulk input")
 require(press(["完成", "Done"]), "Could not dismiss Add Rule")
 Thread.sleep(forTimeInterval: 0.4)
@@ -136,6 +163,7 @@ require(waitUntil { contains(["自动选择节点", "Automatic Node Selection"])
 require(contains(["GitHub"]), "Settings tab did not expose GitHub releases")
 require(press(["User Agent 设置", "User Agent Settings"]), "Could not open User Agent settings")
 Thread.sleep(forTimeInterval: 0.4)
+requireActiveSheetFitsMainWindow("User Agent sheet")
 require(waitUntil { contains(["默认（sing-box）", "Default (sing-box)"]) }, "User Agent settings did not expose the default preset")
 require(contains(["SFM 1.12"]), "User Agent settings did not expose the SFM preset")
 require(press(["自定义", "Custom"]), "Could not select the custom User Agent preset")
