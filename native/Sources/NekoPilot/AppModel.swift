@@ -253,6 +253,9 @@ final class AppModel: ObservableObject {
         isURLTesting = true
         let snapshot = nodes
         let running = status.isRunning
+        let testedTags = Set(snapshot.map(\.runtimeTag))
+        delayHistory = delayHistory.filter { !testedTags.contains($0.key) }
+        rebuildSortedNodes()
         urlTestTask = Task { [weak self] in
             guard let self else { return }
             defer {
@@ -261,8 +264,13 @@ final class AppModel: ObservableObject {
                     urlTestTask = nil
                 }
             }
-            let results = await tester.test(nodes: snapshot, engineRunning: running)
-            guard !Task.isCancelled else { return }
+            let results = await tester.test(
+                nodes: snapshot,
+                engineRunning: running
+            ) { [weak self] tag, record in
+                await self?.applyURLTestProgress(tag: tag, record: record, generation: generation)
+            }
+            guard !Task.isCancelled, generation == urlTestGeneration else { return }
             delayHistory = results
             rebuildSortedNodes()
             do {
@@ -271,6 +279,12 @@ final class AppModel: ObservableObject {
                 show(error)
             }
         }
+    }
+
+    private func applyURLTestProgress(tag: String, record: DelayRecord, generation: Int) {
+        guard generation == urlTestGeneration, isURLTesting else { return }
+        delayHistory[tag] = record
+        rebuildSortedNodes()
     }
 
     func cancelURLTest() {
@@ -362,9 +376,15 @@ final class AppModel: ObservableObject {
     func edit(_ subscription: NekoPilotCore.Subscription, name: String, input: String) async -> Bool {
         guard storageAvailable, !isShuttingDown else { return false }
         do {
-            try await importer.replace(identifier: subscription.identifier, rawInput: input, name: name)
+            let replacement = try await importer.replace(
+                identifier: subscription.identifier,
+                rawInput: input,
+                name: name
+            )
             await refreshData()
-            if status.isRunning { try await reloadRunningEngine(selectedNode: selectedNode) }
+            if replacement == .contentChanged, status.isRunning {
+                try await reloadRunningEngine(selectedNode: selectedNode)
+            }
             return true
         } catch {
             show(error)

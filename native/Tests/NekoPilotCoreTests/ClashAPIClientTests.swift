@@ -3,9 +3,9 @@ import Testing
 
 @Suite("Clash API client")
 struct ClashAPIClientTests {
-    @Test("Default probe matches the Android URL Test baseline")
+    @Test("Default probe uses the macOS-verified lightweight 204 endpoint")
     func defaultProbeBaseline() {
-        #expect(URLTester.testURL == "https://cp.cloudflare.com/")
+        #expect(URLTester.testURL == "https://www.gstatic.com/generate_204")
         #expect(URLTester.timeoutMilliseconds == 3_000)
     }
 

@@ -276,8 +276,8 @@ private struct EditSourceSheet: View {
             }
             Text(
                 subscription.sourceType == .subscription
-                    ? L10n.text("修改名称或机场订阅 URL。保存前会重新下载并校验节点。", "Change the name or subscription URL. Nodes are downloaded and validated before saving.")
-                    : L10n.text("修改名称或单节点链接。保存前会重新解析并校验节点。", "Change the name or single-node link. The node is parsed and validated before saving.")
+                    ? L10n.text("名称会立即保存；仅修改机场 URL 时重新下载并校验节点。", "Names save instantly. Nodes are downloaded and validated only when the subscription URL changes.")
+                    : L10n.text("名称会立即保存；仅修改节点链接时重新解析并校验。", "Names save instantly. The node is parsed and validated only when its link changes.")
             )
             .font(.subheadline)
             .foregroundStyle(.secondary)

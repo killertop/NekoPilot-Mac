@@ -1,11 +1,13 @@
 import Darwin
 import Foundation
 
+public typealias URLTestProgressHandler = @Sendable (String, DelayRecord) async -> Void
+
 public actor URLTester {
-    // Keep this probe aligned with NekoPilot Android so latency values remain
-    // comparable across devices. The result is an end-to-end URL Test RTT,
-    // not a raw TCP ping.
-    public static let testURL = "https://cp.cloudflare.com/"
+    // GStatic's empty 204 endpoint avoids redirects and proved substantially
+    // more reliable than Cloudflare's captive-portal endpoint with the same
+    // real nodes on macOS. The result is URL Test RTT, not a raw TCP ping.
+    public static let testURL = "https://www.gstatic.com/generate_204"
     public static let timeoutMilliseconds = 3_000
     private let compiler: ConfigurationCompiler
     private let clashAPI: ClashAPIClient
@@ -18,11 +20,12 @@ public actor URLTester {
     public func test(
         nodes: [ProxyNode],
         engineRunning: Bool,
-        maximumConcurrency: Int = 3
+        maximumConcurrency: Int = 3,
+        onResult: URLTestProgressHandler? = nil
     ) async -> [String: DelayRecord] {
         guard !nodes.isEmpty else { return [:] }
         if engineRunning {
-            return await concurrentTest(nodes: nodes, maximumConcurrency: maximumConcurrency) { node in
+            return await concurrentTest(nodes: nodes, maximumConcurrency: maximumConcurrency, onResult: onResult) { node in
                 await self.clashAPI.delay(
                     node: node.runtimeTag,
                     testURL: Self.testURL,
@@ -65,7 +68,7 @@ public actor URLTester {
             guard await Self.waitUntilReady(client: client, process: process) else {
                 return Dictionary(uniqueKeysWithValues: nodes.map { ($0.runtimeTag, DelayRecord(delay: nil)) })
             }
-            return await concurrentTest(nodes: nodes, maximumConcurrency: maximumConcurrency) { node in
+            return await concurrentTest(nodes: nodes, maximumConcurrency: maximumConcurrency, onResult: onResult) { node in
                 await client.delay(
                     node: node.runtimeTag,
                     testURL: Self.testURL,
@@ -122,6 +125,7 @@ public actor URLTester {
     private func concurrentTest(
         nodes: [ProxyNode],
         maximumConcurrency: Int,
+        onResult: URLTestProgressHandler?,
         operation: @escaping @Sendable (ProxyNode) async -> Int?
     ) async -> [String: DelayRecord] {
         let limit = max(1, min(maximumConcurrency, nodes.count))
@@ -135,6 +139,7 @@ public actor URLTester {
             var result: [String: DelayRecord] = [:]
             while let value = await group.next() {
                 result[value.0] = value.1
+                if !Task.isCancelled { await onResult?(value.0, value.1) }
                 if let node = iterator.next() {
                     group.addTask { (node.runtimeTag, DelayRecord(delay: await operation(node))) }
                 }

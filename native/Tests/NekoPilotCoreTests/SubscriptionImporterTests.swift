@@ -73,6 +73,32 @@ struct SubscriptionImporterTests {
         #expect(nodes.map(\.originalTag) == ["ANYTLS · Replacement"])
     }
 
+    @Test("Renaming an unchanged subscription is local and preserves its content timestamp")
+    func renamingSubscriptionDoesNotFetchOrRewriteContent() async throws {
+        let location = try temporaryRepositoryLocation()
+        defer { try? FileManager.default.removeItem(at: location.directory) }
+        let repository = try SubscriptionRepository(databaseURL: location.database)
+        let url = "https://offline.example/sub"
+        let identifier = try await repository.upsert(
+            url: url,
+            name: "Before",
+            sourceType: .subscription,
+            config: configuration([endpoint(tag: "kept", server: "example.com", port: 443)])
+        )
+        let before = try #require(try await repository.subscription(identifier: identifier))
+        let importer = SubscriptionImporter(repository: repository) { _ in
+            Issue.record("A name-only edit unexpectedly validated node content")
+        }
+
+        let result = try await importer.replace(identifier: identifier, rawInput: url, name: "  After  ")
+
+        let after = try #require(try await repository.subscription(identifier: identifier))
+        #expect(result == .renamed)
+        #expect(after.name == "After")
+        #expect(after.lastUpdateTime == before.lastUpdateTime)
+        #expect(try await repository.nodes().map(\.originalTag) == ["kept"])
+    }
+
     @Test("Invalid edit leaves the previous local node untouched")
     func invalidEditLeavesPreviousNodeUntouched() async throws {
         let location = try temporaryRepositoryLocation()

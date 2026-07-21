@@ -150,6 +150,17 @@ public actor SubscriptionRepository {
         )
     }
 
+    public func rename(identifier: String, name: String) throws {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty, trimmedName.utf8.count <= 512 else {
+            throw NekoPilotError.invalidSetting("name")
+        }
+        try database.execute(
+            "UPDATE subscriptions SET name = ? WHERE identifier = ?",
+            bindings: [.text(trimmedName), .text(identifier)]
+        )
+    }
+
     public func subscription(identifier: String) throws -> Subscription? {
         try database.query(
             """

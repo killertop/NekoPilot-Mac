@@ -5,6 +5,11 @@ import Security
 
 public typealias SubscriptionCandidateValidator = @Sendable ([String: JSONValue]) async throws -> Void
 
+public enum SubscriptionReplacement: Sendable, Equatable {
+    case renamed
+    case contentChanged
+}
+
 public actor SubscriptionImporter {
     private static let maximumResponseBytes = 8 * 1024 * 1024
     private static let maximumURLBytes = 16 * 1024
@@ -65,13 +70,23 @@ public actor SubscriptionImporter {
         )
     }
 
-    public func replace(identifier: String, rawInput: String, name: String) async throws {
+    @discardableResult
+    public func replace(identifier: String, rawInput: String, name: String) async throws -> SubscriptionReplacement {
         guard let existing = try await repository.subscription(identifier: identifier) else {
             throw NekoPilotError.invalidLink
         }
         let input = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.isEmpty, !resolvedName.isEmpty else { throw NekoPilotError.invalidLink }
+
+        // A display-name edit must remain local and instantaneous. Re-fetching
+        // and validating an unchanged subscription URL made a simple rename
+        // depend on the airport's availability and unnecessarily reloaded the
+        // running proxy engine.
+        if input == existing.subscriptionURL {
+            try await repository.rename(identifier: identifier, name: resolvedName)
+            return .renamed
+        }
 
         let config: [String: JSONValue]
         let sourceURL: String
@@ -100,6 +115,7 @@ public actor SubscriptionImporter {
             config: config,
             identifier: identifier
         )
+        return .contentChanged
     }
 
     public func refresh(identifier: String) async throws {

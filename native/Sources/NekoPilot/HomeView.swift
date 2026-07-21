@@ -4,7 +4,6 @@ import SwiftUI
 struct HomeView: View {
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var model: AppModel
-    @State private var nodeSearch = ""
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -136,13 +135,6 @@ struct HomeView: View {
                 .accessibilityLabel(model.isURLTesting ? L10n.text("停止测速", "Stop Speed Test") : L10n.text("开始测速", "Start Speed Test"))
             }
 
-            if model.nodes.count > 12 {
-                TextField(L10n.text("搜索节点", "Search nodes"), text: $nodeSearch)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 13))
-                    .accessibilityLabel(L10n.text("搜索节点", "Search nodes"))
-            }
-
             AppCard {
                 if model.nodes.isEmpty {
                     EmptyStateView(
@@ -150,17 +142,11 @@ struct HomeView: View {
                         title: L10n.text("还没有节点", "No Nodes Yet"),
                         message: L10n.text("前往“节点”导入机场订阅或单节点", "Import a subscription or proxy link from Nodes")
                     )
-                } else if visibleNodes.isEmpty {
-                    Text(L10n.text("没有匹配的节点", "No matching nodes"))
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(18)
                 } else {
                     LazyVStack(spacing: 0) {
-                        ForEach(visibleNodes) { node in
+                        ForEach(model.sortedNodes) { node in
                             nodeRow(node)
-                            if node.id != visibleNodes.last?.id { AppDivider() }
+                            if node.id != model.sortedNodes.last?.id { AppDivider() }
                         }
                     }
                 }
@@ -239,16 +225,6 @@ struct HomeView: View {
         guard let date = model.delayHistory.values.map(\.measuredAt).max() else { return title }
         let relative = Self.relativeFormatter.localizedString(for: date, relativeTo: Date())
         return "\(title) · \(relative)"
-    }
-
-    private var visibleNodes: [ProxyNode] {
-        let query = nodeSearch.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase
-        guard !query.isEmpty else { return model.sortedNodes }
-        return model.sortedNodes.filter { node in
-            model.displayName(for: node).localizedLowercase.contains(query) ||
-                node.protocolName.localizedLowercase.contains(query) ||
-                model.sourceName(for: node).localizedLowercase.contains(query)
-        }
     }
 
     private var duplicateDisplayNames: Set<String> {
