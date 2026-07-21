@@ -40,7 +40,7 @@ public actor SystemProxyManager {
             }
 
             let services = try await self.networkServices()
-            let snapshots = try await services.asyncMap { try await self.snapshot(service: $0) }
+            let snapshots = try await services.concurrentMap { try await self.snapshot(service: $0) }
             let prepared = snapshots.map {
                 $0.withAppliedBypass(self.ownedBypass(existing: $0.bypassDomains, extra: bypassDomains))
             }
@@ -59,12 +59,13 @@ public actor SystemProxyManager {
             )
             try self.writeMarker(marker)
             do {
-                for backup in prepared {
+                _ = try await prepared.concurrentMap { backup in
                     try await self.setOwnedProxy(
                         service: backup.name,
                         port: port,
                         bypass: backup.appliedBypassDomains ?? []
                     )
+                    return true
                 }
                 self.activeSession = session
                 AppLogger.shared.info("system proxy applied to \(prepared.count) services on \(self.host):\(port)")
@@ -109,25 +110,25 @@ public actor SystemProxyManager {
 
     private func restoreLocked(_ marker: OwnershipMarker) async throws {
         let availableServices = Set(try await networkServices())
-        var failures: [String] = []
-        for backup in marker.services {
+        let failures = await marker.services.concurrentMap { backup -> String? in
             guard availableServices.contains(backup.name) else {
                 AppLogger.shared.info("network service removed; skipping proxy restore for \(backup.name)")
-                continue
+                return nil
             }
             do {
-                let current = try await snapshot(service: backup.name)
-                try await restore(kind: .web, current: current.web, state: backup.web, service: backup.name, marker: marker)
-                try await restore(kind: .secureWeb, current: current.secureWeb, state: backup.secureWeb, service: backup.name, marker: marker)
-                try await restore(kind: .socks, current: current.socks, state: backup.socks, service: backup.name, marker: marker)
+                let current = try await self.snapshot(service: backup.name)
+                try await self.restore(kind: .web, current: current.web, state: backup.web, service: backup.name, marker: marker)
+                try await self.restore(kind: .secureWeb, current: current.secureWeb, state: backup.secureWeb, service: backup.name, marker: marker)
+                try await self.restore(kind: .socks, current: current.socks, state: backup.socks, service: backup.name, marker: marker)
                 if let appliedBypass = backup.appliedBypassDomains,
                    Set(current.bypassDomains) == Set(appliedBypass) {
-                    try await setBypass(backup.bypassDomains, service: backup.name)
+                    try await self.setBypass(backup.bypassDomains, service: backup.name)
                 }
+                return nil
             } catch {
-                failures.append("\(backup.name): \(error.localizedDescription)")
+                return "\(backup.name): \(error.localizedDescription)"
             }
-        }
+        }.compactMap { $0 }
         guard failures.isEmpty else {
             throw NekoPilotError.processFailed("系统代理恢复失败：\(failures.joined(separator: "; "))")
         }
@@ -343,11 +344,18 @@ private func pidIsAlive(_ pid: Int32) -> Bool {
     pid > 1 && (kill(pid, 0) == 0 || errno == EPERM)
 }
 
-private extension Array {
-    func asyncMap<T>(_ transform: (Element) async throws -> T) async rethrows -> [T] {
-        var result: [T] = []
-        result.reserveCapacity(count)
-        for element in self { result.append(try await transform(element)) }
-        return result
+private extension Array where Element: Sendable {
+    func concurrentMap<T: Sendable>(
+        _ transform: @escaping @Sendable (Element) async throws -> T
+    ) async rethrows -> [T] {
+        try await withThrowingTaskGroup(of: (Int, T).self) { group in
+            for (index, element) in enumerated() {
+                group.addTask { (index, try await transform(element)) }
+            }
+            var result: [(Int, T)] = []
+            result.reserveCapacity(count)
+            for try await item in group { result.append(item) }
+            return result.sorted { $0.0 < $1.0 }.map(\.1)
+        }
     }
 }

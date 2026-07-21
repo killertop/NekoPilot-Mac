@@ -6,7 +6,6 @@ struct NodeManagementView: View {
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var model: AppModel
     @State private var showingAdd = false
-    @State private var refreshingAll = false
     @State private var editTarget: NekoPilotCore.Subscription?
     @State private var detailTarget: NekoPilotCore.Subscription?
 
@@ -34,20 +33,20 @@ struct NodeManagementView: View {
                 AppCard {
                     VStack(spacing: 0) {
                         Button {
-                            Task {
-                                refreshingAll = true
-                                await model.refreshAllSubscriptions()
-                                refreshingAll = false
-                            }
+                            Task { await model.refreshAllSubscriptions() }
                         } label: {
                             actionRow(
-                                title: refreshingAll ? L10n.text("正在更新", "Updating") : L10n.text("更新全部", "Update All"),
+                                title: model.isRefreshingAllSubscriptions ? L10n.text("正在更新", "Updating") : L10n.text("更新全部", "Update All"),
                                 icon: "arrow.clockwise",
-                                busy: refreshingAll
+                                busy: model.isRefreshingAllSubscriptions
                             )
                         }
                         .buttonStyle(.plain)
-                        .disabled(refreshingAll || !model.subscriptions.contains(where: { $0.sourceType == .subscription }))
+                        .disabled(
+                            model.isRefreshingAllSubscriptions ||
+                                !model.refreshingSubscriptionIDs.isEmpty ||
+                                !model.subscriptions.contains(where: { $0.sourceType == .subscription })
+                        )
 
                         AppDivider()
 
@@ -126,6 +125,10 @@ struct NodeManagementView: View {
                     } label: {
                         Label(L10n.text("更新", "Update"), systemImage: "arrow.clockwise")
                     }
+                    .disabled(
+                        model.isRefreshingAllSubscriptions ||
+                            model.refreshingSubscriptionIDs.contains(subscription.identifier)
+                    )
                 }
                 Button {
                     editTarget = subscription
@@ -429,7 +432,7 @@ private struct SourceDetailSheet: View {
             }
         }
         .frame(width: AppVisual.sheetWidth)
-        .frame(minHeight: 400, idealHeight: 480, maxHeight: AppVisual.sheetMaximumHeight)
+        .frame(minHeight: 360, idealHeight: 440, maxHeight: AppVisual.sheetMaximumHeight)
     }
 
     private func infoRow(_ title: String, _ value: String) -> some View {

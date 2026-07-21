@@ -6,10 +6,11 @@ import SwiftUI
 /// `windowBackgroundColor` and materials are darker and blurrier than the
 /// compact grouped surface used by NekoPilot.
 enum AppVisual {
-    /// Keeps every attached sheet visibly inset inside the 360pt minimum app window.
-    static let sheetWidth: CGFloat = 336
-    static let sheetPadding: CGFloat = 18
-    static let sheetMaximumHeight: CGFloat = 520
+    /// Keeps attached sheets visually subordinate to the 360pt minimum app window.
+    /// 312pt leaves at least 24pt of visible app context on each side.
+    static let sheetWidth: CGFloat = 312
+    static let sheetPadding: CGFloat = 16
+    static let sheetMaximumHeight: CGFloat = 480
 
     static func background(_ scheme: ColorScheme) -> Color {
         scheme == .dark ? .black : Color(red: 247 / 255, green: 247 / 255, blue: 247 / 255)

@@ -108,6 +108,10 @@ func requireActiveSheetFitsMainWindow(_ name: String) {
     }
     require(windowWidth != nil && !sheetWidths.isEmpty, "Could not measure \(name)")
     require(sheetWidths.allSatisfy { $0 < windowWidth! }, "\(name) exceeded the main app window width")
+    require(
+        sheetWidths.allSatisfy { $0 <= windowWidth! * 0.9 },
+        "\(name) occupied more than 90% of the main app window width"
+    )
 }
 
 func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) -> Bool {

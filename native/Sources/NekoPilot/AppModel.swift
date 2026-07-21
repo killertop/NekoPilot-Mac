@@ -44,6 +44,8 @@ final class AppModel: ObservableObject {
     @Published var pendingDeepLink: PendingDeepLink?
     @Published var pendingLANEnable = false
     @Published var availableUpdate: GitHubReleaseUpdate?
+    @Published private(set) var refreshingSubscriptionIDs: Set<String> = []
+    @Published private(set) var isRefreshingAllSubscriptions = false
 
     let paths: AppPaths
     let settings: SettingsStore
@@ -70,6 +72,9 @@ final class AppModel: ObservableObject {
     private var ruleUpdateTask: Task<Void, Never>?
     private var releaseCheckTask: Task<Void, Never>?
     private var selectionGeneration = 0
+    private var urlTestGeneration = 0
+    private var trafficGeneration = 0
+    private var ruleUpdateGeneration = 0
     private var sleepStartedAt: Date?
     private var wasRunningBeforeSleep = false
     private var lifecycleGeneration = 0
@@ -77,60 +82,13 @@ final class AppModel: ObservableObject {
     private let storageAvailable: Bool
     private let bootstrapError: String?
 
-    init() {
-        var candidatePaths: AppPaths?
-        var candidateSettings: SettingsStore?
-        var candidateRepository: SubscriptionRepository?
-        var storageAvailable = false
-        var bootstrapError: String?
-        do {
-            let livePaths = try AppPaths.live()
-            candidatePaths = livePaths
-            do {
-                candidateSettings = try SettingsStore(fileURL: livePaths.settings)
-                candidateRepository = try SubscriptionRepository(databaseURL: livePaths.database)
-                storageAvailable = true
-                bootstrapError = nil
-            } catch {
-                let recovery = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("NekoPilot-Recovery-\(UUID().uuidString)", isDirectory: true)
-                try FileManager.default.createDirectory(at: recovery, withIntermediateDirectories: true)
-                let recoveryPaths = AppPaths(applicationSupport: recovery, logs: recovery.appendingPathComponent("logs"))
-                candidateSettings = try SettingsStore(fileURL: recoveryPaths.settings)
-                candidateRepository = try SubscriptionRepository(databaseURL: recoveryPaths.database)
-                storageAvailable = false
-                bootstrapError = L10n.text(
-                    "本地数据无法读取，应用已进入安全恢复模式；原文件没有被覆盖。\n\(error.localizedDescription)",
-                    "Local data could not be read. NekoPilot opened in safe recovery mode without overwriting the original files.\n\(error.localizedDescription)"
-                )
-            }
-        } catch {
-            let recovery = FileManager.default.temporaryDirectory
-                .appendingPathComponent("NekoPilot-Emergency-\(UUID().uuidString)", isDirectory: true)
-            try? FileManager.default.createDirectory(at: recovery, withIntermediateDirectories: true)
-            let emergencyPaths = AppPaths(applicationSupport: recovery, logs: recovery.appendingPathComponent("logs"))
-            candidatePaths = emergencyPaths
-            try? FileManager.default.createDirectory(at: emergencyPaths.logs, withIntermediateDirectories: true)
-            // If even the process temporary directory is unavailable, the OS
-            // cannot provide a usable application environment.
-            candidateSettings = try! SettingsStore(fileURL: emergencyPaths.settings)
-            candidateRepository = try! SubscriptionRepository(databaseURL: emergencyPaths.database)
-            storageAvailable = false
-            bootstrapError = L10n.text(
-                "无法访问应用数据目录，连接功能已停用。\n\(error.localizedDescription)",
-                "The application data directory is unavailable, so connection features are disabled.\n\(error.localizedDescription)"
-            )
-        }
-        guard let resolvedPaths = candidatePaths,
-              let resolvedSettings = candidateSettings,
-              let resolvedRepository = candidateRepository else {
-            fatalError("NekoPilot cannot initialize even temporary storage")
-        }
-        paths = resolvedPaths
-        settings = resolvedSettings
-        repository = resolvedRepository
-        self.storageAvailable = storageAvailable
-        self.bootstrapError = bootstrapError
+    init() throws {
+        let storage = try AppStorageBootstrap.resolve()
+        paths = storage.paths
+        settings = storage.settings
+        repository = storage.repository
+        storageAvailable = storage.isPersistent
+        bootstrapError = storage.recoveryMessage
         importer = SubscriptionImporter(repository: repository, settings: settings)
         compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
         clashAPI = ClashAPIClient(settings: settings)
@@ -288,11 +246,19 @@ final class AppModel: ObservableObject {
     func runURLTest() {
         guard !isURLTesting, !nodes.isEmpty else { return }
         urlTestTask?.cancel()
+        urlTestGeneration += 1
+        let generation = urlTestGeneration
         isURLTesting = true
         let snapshot = nodes
         let running = status.isRunning
         urlTestTask = Task { [weak self] in
             guard let self else { return }
+            defer {
+                if generation == urlTestGeneration {
+                    isURLTesting = false
+                    urlTestTask = nil
+                }
+            }
             let results = await tester.test(nodes: snapshot, engineRunning: running)
             guard !Task.isCancelled else { return }
             delayHistory = results
@@ -302,11 +268,11 @@ final class AppModel: ObservableObject {
             } catch {
                 show(error)
             }
-            isURLTesting = false
         }
     }
 
     func cancelURLTest() {
+        urlTestGeneration += 1
         urlTestTask?.cancel()
         urlTestTask = nil
         isURLTesting = false
@@ -329,7 +295,10 @@ final class AppModel: ObservableObject {
     }
 
     func refresh(_ subscription: NekoPilotCore.Subscription) async {
-        guard subscription.sourceType == .subscription else { return }
+        guard subscription.sourceType == .subscription,
+              !isRefreshingAllSubscriptions,
+              refreshingSubscriptionIDs.insert(subscription.identifier).inserted else { return }
+        defer { refreshingSubscriptionIDs.remove(subscription.identifier) }
         do {
             try await importer.refresh(identifier: subscription.identifier)
             await refreshData()
@@ -340,7 +309,15 @@ final class AppModel: ObservableObject {
     }
 
     func refreshAllSubscriptions() async {
+        guard !isRefreshingAllSubscriptions, refreshingSubscriptionIDs.isEmpty else { return }
         let candidates = subscriptions.filter { $0.sourceType == .subscription }
+        guard !candidates.isEmpty else { return }
+        isRefreshingAllSubscriptions = true
+        refreshingSubscriptionIDs = Set(candidates.map(\.identifier))
+        defer {
+            refreshingSubscriptionIDs.removeAll()
+            isRefreshingAllSubscriptions = false
+        }
         await withTaskGroup(of: (String, String?).self) { group in
             var nextIndex = 0
             let limit = min(3, candidates.count)
@@ -496,6 +473,7 @@ final class AppModel: ObservableObject {
 
     private func applyAllowLAN(_ value: Bool) async {
         let previous = allowLAN
+        let wasRunning = status.isRunning
         allowLAN = value
         do {
             try await settings.set(.bool(value), for: SettingsStore.Key.allowLAN)
@@ -503,12 +481,14 @@ final class AppModel: ObservableObject {
         } catch {
             allowLAN = previous
             try? await settings.set(.bool(previous), for: SettingsStore.Key.allowLAN)
+            await restoreConnectionIfNeeded(wasRunning)
             show(error)
         }
     }
 
     func setSkipSystemProxy(_ value: Bool) async {
         let previous = skipSystemProxy
+        let wasRunning = status.isRunning
         skipSystemProxy = value
         do {
             try await settings.set(.bool(value), for: SettingsStore.Key.skipSystemProxy)
@@ -516,6 +496,7 @@ final class AppModel: ObservableObject {
         } catch {
             skipSystemProxy = previous
             try? await settings.set(.bool(previous), for: SettingsStore.Key.skipSystemProxy)
+            await restoreConnectionIfNeeded(wasRunning)
             show(error)
         }
     }
@@ -525,12 +506,17 @@ final class AppModel: ObservableObject {
             show(NekoPilotError.invalidSetting("proxy_port"))
             return false
         }
+        let previous = proxyPort
+        let wasRunning = status.isRunning
         proxyPort = value
         do {
             try await settings.set(.number(Double(value)), for: SettingsStore.Key.proxyPort)
             try await applyConnectionSettingChange()
             return true
         } catch {
+            proxyPort = previous
+            try? await settings.set(.number(Double(previous)), for: SettingsStore.Key.proxyPort)
+            await restoreConnectionIfNeeded(wasRunning)
             show(error)
             return false
         }
@@ -539,6 +525,7 @@ final class AppModel: ObservableObject {
     func setDirectDNS(_ value: String) async -> Bool {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         let previous = directDNS
+        let wasRunning = status.isRunning
         directDNS = trimmed
         do {
             try await settings.set(.string(trimmed), for: SettingsStore.Key.directDNS)
@@ -547,6 +534,7 @@ final class AppModel: ObservableObject {
         } catch {
             directDNS = previous
             try? await settings.set(.string(previous), for: SettingsStore.Key.directDNS)
+            await restoreConnectionIfNeeded(wasRunning)
             show(error)
             return false
         }
@@ -636,15 +624,24 @@ final class AppModel: ObservableObject {
         selectionTask?.cancel()
         automaticDelayTask?.cancel()
         trafficTask?.cancel()
-        let updatingRules = ruleUpdateTask
-        updatingRules?.cancel()
+        ruleUpdateTask?.cancel()
         ruleUpdateTask = nil
         releaseCheckTask?.cancel()
         releaseCheckTask = nil
         await automaticSelection.stop()
-        await testing?.value
-        await updatingRules?.value
+        // Releasing the system proxy and the long-lived sing-box process is
+        // the only shutdown work that must finish before the app may exit.
+        // Network-backed maintenance tasks can take until their URLSession
+        // timeout even after cancellation, so they must never stand in front
+        // of engine cleanup.
+        AppLogger.shared.info("shutdown: stopping proxy engine")
         await engine.shutdown()
+        AppLogger.shared.info("shutdown: proxy engine stopped")
+        await testing?.value
+        // Rule-set refresh owns no child process or system state. URLSession
+        // cancellation is enough here; waiting for a remote server timeout
+        // would make the app appear stuck after all critical cleanup finished.
+        AppLogger.shared.info("shutdown: critical cleanup complete")
     }
 
     private func rebuildSortedNodes() {
@@ -710,6 +707,15 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func restoreConnectionIfNeeded(_ wasRunning: Bool) async {
+        guard wasRunning, !status.isRunning, !status.isBusy else { return }
+        do {
+            try await engine.start(selectedNode: selectedNode)
+        } catch {
+            AppLogger.shared.error("failed to restore previous connection settings: \(error.localizedDescription)")
+        }
+    }
+
     private func reloadRunningEngine(selectedNode: String?) async throws {
         stopTrafficStream()
         defer {
@@ -720,6 +726,8 @@ final class AppModel: ObservableObject {
 
     private func startTrafficStream() {
         guard trafficTask == nil else { return }
+        trafficGeneration += 1
+        let generation = trafficGeneration
         trafficTask = Task { [weak self] in
             guard let self else { return }
             do {
@@ -731,11 +739,12 @@ final class AppModel: ObservableObject {
             } catch {
                 if !Task.isCancelled { AppLogger.shared.warning("traffic stream ended: \(error.localizedDescription)") }
             }
-            trafficTask = nil
+            if generation == trafficGeneration { trafficTask = nil }
         }
     }
 
     private func stopTrafficStream() {
+        trafficGeneration += 1
         trafficTask?.cancel()
         trafficTask = nil
         trafficState.snapshot = .zero
@@ -743,6 +752,8 @@ final class AppModel: ObservableObject {
 
     private func scheduleRuleSetRefresh() {
         guard ruleUpdateTask == nil else { return }
+        ruleUpdateGeneration += 1
+        let generation = ruleUpdateGeneration
         ruleUpdateTask = Task { [weak self] in
             guard let self else { return }
             let changed = await ruleSetUpdater.refreshIfDue()
@@ -754,7 +765,7 @@ final class AppModel: ObservableObject {
                     AppLogger.shared.warning("updated rule sets require a later reload: \(error.localizedDescription)")
                 }
             }
-            ruleUpdateTask = nil
+            if generation == ruleUpdateGeneration { ruleUpdateTask = nil }
         }
     }
 
@@ -785,4 +796,56 @@ final class AppModel: ObservableObject {
 
 private extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+
+private struct AppStorageBootstrap {
+    let paths: AppPaths
+    let settings: SettingsStore
+    let repository: SubscriptionRepository
+    let isPersistent: Bool
+    let recoveryMessage: String?
+
+    static func resolve() throws -> AppStorageBootstrap {
+        do {
+            let paths = try AppPaths.live()
+            do {
+                return AppStorageBootstrap(
+                    paths: paths,
+                    settings: try SettingsStore(fileURL: paths.settings),
+                    repository: try SubscriptionRepository(databaseURL: paths.database),
+                    isPersistent: true,
+                    recoveryMessage: nil
+                )
+            } catch {
+                return try recovery(
+                    message: L10n.text(
+                        "本地数据无法读取，应用已进入安全恢复模式；原文件没有被覆盖。\n\(error.localizedDescription)",
+                        "Local data could not be read. NekoPilot opened in safe recovery mode without overwriting the original files.\n\(error.localizedDescription)"
+                    )
+                )
+            }
+        } catch {
+            return try recovery(
+                message: L10n.text(
+                    "无法访问应用数据目录，连接功能已停用。\n\(error.localizedDescription)",
+                    "The application data directory is unavailable, so connection features are disabled.\n\(error.localizedDescription)"
+                )
+            )
+        }
+    }
+
+    private static func recovery(message: String) throws -> AppStorageBootstrap {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NekoPilot-Recovery-\(UUID().uuidString)", isDirectory: true)
+        let paths = AppPaths(applicationSupport: root, logs: root.appendingPathComponent("logs", isDirectory: true))
+        try FileManager.default.createDirectory(at: paths.applicationSupport, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: paths.logs, withIntermediateDirectories: true)
+        return AppStorageBootstrap(
+            paths: paths,
+            settings: try SettingsStore(fileURL: paths.settings),
+            repository: try SubscriptionRepository(databaseURL: paths.database),
+            isPersistent: false,
+            recoveryMessage: message
+        )
+    }
 }

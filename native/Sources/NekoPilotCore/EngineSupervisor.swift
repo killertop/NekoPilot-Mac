@@ -144,13 +144,16 @@ public actor EngineSupervisor {
         let stoppingSession = sessionID
         let stoppingProxySession = proxySessionID
         setStatus(.stopping)
+        // Stop the child first. Restoring every macOS network service can be
+        // comparatively slow, and neither a normal disconnect nor app exit
+        // may leave sing-box alive while that work is in progress.
+        let didStop = await stopProcessOnly(expectedSession: stoppingSession)
         do {
             try await systemProxy.removeOwnedProxy(expectedSession: stoppingProxySession)
             if proxySessionID == stoppingProxySession { proxySessionID = nil }
         } catch {
             AppLogger.shared.error("system proxy cleanup failed during stop: \(error.localizedDescription)")
         }
-        let didStop = await stopProcessOnly(expectedSession: stoppingSession)
         guard epoch == stopEpoch else { return }
         setStatus(didStop ? .stopped : .failed("sing-box 无法停止"))
     }
@@ -243,13 +246,17 @@ public actor EngineSupervisor {
         let stoppingSession = sessionID
         let stoppingProxySession = proxySessionID
         setStatus(.stopping)
+        AppLogger.shared.info("shutdown: terminating sing-box child")
+        let didStop = await stopProcessOnly(expectedSession: stoppingSession)
+        AppLogger.shared.info("shutdown: sing-box child terminated=\(didStop)")
         do {
+            AppLogger.shared.info("shutdown: restoring system proxy")
             try await systemProxy.removeOwnedProxy(expectedSession: stoppingProxySession)
             if proxySessionID == stoppingProxySession { proxySessionID = nil }
+            AppLogger.shared.info("shutdown: system proxy restored")
         } catch {
             AppLogger.shared.error("system proxy cleanup failed during shutdown: \(error.localizedDescription)")
         }
-        let didStop = await stopProcessOnly(expectedSession: stoppingSession)
         setStatus(didStop ? .stopped : .failed("sing-box 无法停止"))
     }
 
@@ -288,6 +295,8 @@ public actor EngineSupervisor {
             }
         }
         try child.run()
+        try? standardOutput.fileHandleForWriting.close()
+        try? standardError.fileHandleForWriting.close()
         _ = setpgid(child.processIdentifier, child.processIdentifier)
         do {
             try writeOwnership(

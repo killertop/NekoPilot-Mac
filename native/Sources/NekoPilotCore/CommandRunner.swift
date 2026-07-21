@@ -23,6 +23,13 @@ enum CommandRunner {
         process.standardOutput = output
         process.standardError = errors
         try process.run()
+        // `Pipe` keeps a parent-side writer open as well as the descriptor
+        // inherited by the child. If the parent copy stays open,
+        // readDataToEndOfFile can wait forever after a short command exits.
+        // Closing only the parent writers makes EOF deterministic while the
+        // child continues using its inherited descriptors.
+        try? output.fileHandleForWriting.close()
+        try? errors.fileHandleForWriting.close()
 
         // Drain both pipes while the child is running. Waiting first can
         // deadlock once either kernel pipe buffer fills (configuration checks

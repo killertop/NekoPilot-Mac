@@ -177,7 +177,7 @@ private struct AddRuleSheet: View {
     var body: some View {
         ZStack {
             AppVisual.background(colorScheme).ignoresSafeArea()
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 13) {
                 sheetHeader(L10n.text("添加规则", "Add Rule")) { isPresented = false }
 
                 ruleSection(L10n.text("动作", "Action")) {
@@ -215,7 +215,7 @@ private struct AddRuleSheet: View {
                             .scrollContentBackground(.hidden)
                             .padding(5)
                     }
-                    .frame(height: 86)
+                    .frame(height: 76)
                     .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.primary.opacity(0.12)) }
 
@@ -311,7 +311,7 @@ private struct EditRuleSheet: View {
     var body: some View {
         ZStack {
             AppVisual.background(colorScheme).ignoresSafeArea()
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 13) {
                 sheetHeader(L10n.text("编辑规则", "Edit Rule"), close: onCancel)
                 ruleSection(L10n.text("动作", "Action")) {
                     Picker("", selection: $action) {
@@ -386,8 +386,8 @@ private struct RuleHelpSheet: View {
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(L10n.text("关闭", "Close"))
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 18)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
 
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 14) {
@@ -453,10 +453,10 @@ private struct RuleHelpSheet: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Color.accentColor)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 46)
+                    .frame(height: 42)
             }
         }
-        .frame(width: AppVisual.sheetWidth, height: 500)
+        .frame(width: AppVisual.sheetWidth, height: 450)
     }
 
     private func helpSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
