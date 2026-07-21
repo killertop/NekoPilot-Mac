@@ -53,6 +53,24 @@ enum AppVisual {
     }
 }
 
+/// The compact desktop type scale. Text must use these tokens instead of
+/// page-local numeric fonts so node names, settings rows and sheets keep the
+/// same hierarchy at every window size.
+enum AppTypography {
+    static let dialogTitle = Font.system(size: 20, weight: .semibold)
+    static let sectionTitle = Font.system(size: 13, weight: .semibold)
+    static let rowTitle = Font.system(size: 15, weight: .regular)
+    static let rowTitleEmphasized = Font.system(size: 15, weight: .medium)
+    static let body = Font.system(size: 14, weight: .regular)
+    static let bodyEmphasized = Font.system(size: 14, weight: .medium)
+    static let secondary = Font.system(size: 12, weight: .regular)
+    static let caption = Font.system(size: 11, weight: .regular)
+    static let captionEmphasized = Font.system(size: 11, weight: .medium)
+    static let badge = Font.system(size: 10, weight: .semibold)
+    static let monoBody = Font.system(size: 12, weight: .regular, design: .monospaced)
+    static let monoCaption = Font.system(size: 11, weight: .regular, design: .monospaced)
+}
+
 struct AppCard<Content: View>: View {
     @Environment(\.colorScheme) private var colorScheme
     @ViewBuilder let content: Content
@@ -90,7 +108,7 @@ struct SectionTitle: View {
     var body: some View {
         HStack(spacing: 8) {
             Text(title)
-                .font(.system(size: 11, weight: .semibold))
+                .font(AppTypography.sectionTitle)
                 .textCase(.uppercase)
                 .tracking(0.4)
                 .foregroundStyle(.secondary)
@@ -115,9 +133,9 @@ struct EmptyStateView: View {
                 .frame(width: 64, height: 64)
                 .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             Text(title)
-                .font(.system(size: 17, weight: .semibold))
+                .font(AppTypography.rowTitleEmphasized)
             Text(message)
-                .font(.system(size: 13))
+                .font(AppTypography.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .lineSpacing(1)

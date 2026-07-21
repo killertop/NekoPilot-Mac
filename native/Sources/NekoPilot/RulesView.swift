@@ -30,7 +30,7 @@ struct RulesView: View {
                 if model.rules.count > 12 {
                     TextField(L10n.text("筛选规则", "Filter rules"), text: $search)
                         .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 13, design: .monospaced))
+                        .font(AppTypography.monoBody)
                         .padding(.bottom, 2)
                 }
 
@@ -38,7 +38,7 @@ struct RulesView: View {
                     LazyVStack(spacing: 0) {
                         if visibleRules.isEmpty, !model.rules.isEmpty {
                             Text(L10n.text("没有匹配的规则", "No matching rules"))
-                                .font(.system(size: 13))
+                                .font(AppTypography.body)
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity)
                                 .padding(16)
@@ -58,7 +58,7 @@ struct RulesView: View {
                                     .frame(width: 28, height: 28)
                                     .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                                 Text(L10n.text("添加规则", "Add Rule"))
-                                    .font(.system(size: 15, weight: .medium))
+                                    .font(AppTypography.rowTitleEmphasized)
                                 Spacer()
                             }
                             .foregroundStyle(Color.accentColor)
@@ -72,7 +72,7 @@ struct RulesView: View {
 
                 if let feedback {
                     Text(feedback)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(AppTypography.captionEmphasized)
                         .foregroundStyle(Color.orange)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 4)
@@ -80,7 +80,7 @@ struct RulesView: View {
                 }
 
                 Text(L10n.text("连接时即时生效；未连接时将在下次连接生效。", "Applies live while connected, or on the next connection."))
-                    .font(.system(size: 11))
+                    .font(AppTypography.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 4)
@@ -128,7 +128,7 @@ struct RulesView: View {
                     RuleActionBadge(action: rule.action)
                     RuleKindChip(kind: rule.kind)
                     Text(rule.value)
-                        .font(.system(size: 13, weight: .regular, design: .monospaced))
+                        .font(AppTypography.monoBody)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -204,14 +204,14 @@ private struct AddRuleSheet: View {
                     ZStack(alignment: .topLeading) {
                         if input.isEmpty {
                             Text("\(placeholder)\n\(L10n.text("支持换行、英文或中文逗号批量添加", "Paste multiple values separated by new lines or commas"))")
-                                .font(.system(size: 12, design: .monospaced))
+                                .font(AppTypography.monoBody)
                                 .foregroundStyle(.tertiary)
                                 .padding(.horizontal, 9)
                                 .padding(.vertical, 10)
                                 .allowsHitTesting(false)
                         }
                         TextEditor(text: $input)
-                            .font(.system(size: 12.5, design: .monospaced))
+                            .font(AppTypography.monoBody)
                             .scrollContentBackground(.hidden)
                             .padding(5)
                     }
@@ -240,7 +240,7 @@ private struct AddRuleSheet: View {
 
                 if let feedback {
                     Label(feedback, systemImage: feedbackIsWarning ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(AppTypography.secondary)
                         .foregroundStyle(feedbackIsWarning ? Color.orange : Color.green)
                 }
 
@@ -339,7 +339,7 @@ private struct EditRuleSheet: View {
                     }
                 }
                 TextField(kind.placeholder, text: $value)
-                    .font(.system(size: 13, design: .monospaced))
+                    .font(AppTypography.monoBody)
                     .textFieldStyle(.roundedBorder)
                 RulePreview(action: action, kind: kind, value: value.isEmpty ? kind.placeholder : value)
                 RulePriorityHint()
@@ -377,7 +377,7 @@ private struct RuleHelpSheet: View {
             VStack(spacing: 0) {
                 HStack {
                     Text(L10n.text("规则说明", "Rule Information"))
-                        .font(.system(size: 18, weight: .semibold))
+                        .font(AppTypography.dialogTitle)
                     Spacer()
                     Button { isPresented = false } label: {
                         Image(systemName: "xmark.circle.fill").font(.system(size: 18))
@@ -409,7 +409,7 @@ private struct RuleHelpSheet: View {
                                     RuleKindChip(kind: kind)
                                     Text(kind.title).frame(width: 48, alignment: .leading)
                                     Text(kind.placeholder)
-                                        .font(.system(size: 11.5, design: .monospaced))
+                                        .font(AppTypography.monoCaption)
                                         .foregroundStyle(.secondary)
                                         .lineLimit(1)
                                 }
@@ -425,11 +425,11 @@ private struct RuleHelpSheet: View {
                                     RuleActionBadge(action: .proxy)
                                     Image(systemName: "chevron.right").font(.system(size: 9))
                                     Text(L10n.text("内置中国直连", "Built-in China Direct"))
-                                        .font(.system(size: 11, weight: .medium))
+                                        .font(AppTypography.captionEmphasized)
                                         .foregroundStyle(.secondary)
                                 }
                                 Text(L10n.text("自定义直连优先于自定义代理；两者都优先于内置中国规则。同一地址同时存在时，靠前的动作生效。", "Custom Direct precedes Custom Proxy; both precede built-in China rules. Earlier actions win when the same address appears more than once."))
-                                    .font(.system(size: 12))
+                                    .font(AppTypography.secondary)
                                     .foregroundStyle(.secondary)
                             }
                             .padding(13)
@@ -439,7 +439,7 @@ private struct RuleHelpSheet: View {
                             L10n.text("连接时规则会即时重载；未连接时在下次连接生效。", "Rules reload live while connected, or apply on the next connection."),
                             systemImage: "arrow.clockwise"
                         )
-                        .font(.system(size: 11))
+                        .font(AppTypography.caption)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 2)
                     }
@@ -450,7 +450,7 @@ private struct RuleHelpSheet: View {
                 AppDivider(leading: 0)
                 Button(L10n.text("关闭", "Close")) { isPresented = false }
                     .buttonStyle(.plain)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(AppTypography.bodyEmphasized)
                     .foregroundStyle(Color.accentColor)
                     .frame(maxWidth: .infinity)
                     .frame(height: 42)
@@ -461,8 +461,8 @@ private struct RuleHelpSheet: View {
 
     private func helpSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title.uppercased())
-                .font(.system(size: 11, weight: .semibold))
+        Text(title.uppercased())
+            .font(AppTypography.sectionTitle)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 4)
             AppCard { content() }
@@ -474,7 +474,7 @@ private struct RuleHelpSheet: View {
             content()
             Spacer(minLength: 0)
         }
-        .font(.system(size: 12))
+        .font(AppTypography.secondary)
         .padding(.horizontal, 13)
         .frame(minHeight: 44)
     }
@@ -485,7 +485,7 @@ private struct RuleActionBadge: View {
 
     var body: some View {
         Text(action.title)
-            .font(.system(size: 11, weight: .semibold))
+            .font(AppTypography.captionEmphasized)
             .foregroundStyle(action.color)
             .padding(.horizontal, 8)
             .frame(minWidth: 40, minHeight: 22)
@@ -499,7 +499,7 @@ private struct RuleKindChip: View {
 
     var body: some View {
         Text("\(kind.glyph) \(kind.abbreviation)")
-            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .font(AppTypography.badge)
             .foregroundStyle(.secondary)
             .padding(.horizontal, 7)
             .frame(minHeight: 22)
@@ -515,7 +515,7 @@ private struct RulePreview: View {
 
     var body: some View {
         Text("\(action.title)：\(kind.preview(value))")
-            .font(.system(size: 12, weight: .medium))
+            .font(AppTypography.secondary)
             .foregroundStyle(action.color)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 2)
@@ -525,7 +525,7 @@ private struct RulePreview: View {
 private struct RulePriorityHint: View {
     var body: some View {
         Text(L10n.text("优先级：自定义直连 > 自定义代理 > 内置中国直连", "Priority: Custom Direct > Custom Proxy > Built-in China Direct"))
-            .font(.system(size: 11))
+            .font(AppTypography.caption)
             .foregroundStyle(.tertiary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 2)
@@ -534,7 +534,7 @@ private struct RulePriorityHint: View {
 
 private func sheetHeader(_ title: String, close: @escaping () -> Void) -> some View {
     HStack {
-        Text(title).font(.system(size: 19, weight: .semibold))
+        Text(title).font(AppTypography.dialogTitle)
         Spacer()
         Button(action: close) {
             Image(systemName: "xmark.circle.fill").font(.system(size: 18))
@@ -548,7 +548,7 @@ private func sheetHeader(_ title: String, close: @escaping () -> Void) -> some V
 private func ruleSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
     VStack(alignment: .leading, spacing: 6) {
         Text(title)
-            .font(.system(size: 11, weight: .semibold))
+            .font(AppTypography.sectionTitle)
             .foregroundStyle(.secondary)
             .padding(.horizontal, 2)
         content()

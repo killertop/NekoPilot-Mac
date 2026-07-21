@@ -134,7 +134,7 @@ struct RootView: View {
                     .font(.system(size: 19, weight: .regular))
                     .frame(height: 22)
                 Text(title)
-                    .font(.system(size: 11, weight: .regular))
+                    .font(AppTypography.caption)
                     .lineLimit(1)
             }
             .foregroundStyle(isSelected ? Color.accentColor : AppVisual.inactiveTab(colorScheme))

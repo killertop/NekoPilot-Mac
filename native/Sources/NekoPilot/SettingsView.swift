@@ -20,7 +20,7 @@ struct SettingsView: View {
                     Text("\(L10n.text("版本", "Version")) \(version)")
                     Text("© 2026 NekoPilot")
                 }
-                .font(.system(size: 11))
+                .font(AppTypography.caption)
                 .foregroundStyle(.tertiary)
                 .padding(.top, 6)
                 .padding(.bottom, 2)
@@ -197,10 +197,10 @@ struct SettingsView: View {
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 15, weight: .medium))
+                    .font(AppTypography.rowTitle)
                 if let subtitle {
                     Text(subtitle)
-                        .font(.system(size: 12))
+                        .font(AppTypography.secondary)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -231,17 +231,17 @@ struct SettingsView: View {
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 15, weight: .medium))
+                    .font(AppTypography.rowTitle)
                     .foregroundStyle(.primary)
                 Text(subtitle)
-                    .font(.system(size: 12))
+                    .font(AppTypography.secondary)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
             if let trailing {
                 Text(trailing)
-                    .font(.system(size: 14, weight: .regular))
+                    .font(AppTypography.body)
                     .foregroundStyle(.secondary)
             }
             if chevron {
@@ -270,12 +270,12 @@ private struct ProxyPortSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text(L10n.text("代理端口", "Proxy Port")).font(.title2.bold())
+            Text(L10n.text("代理端口", "Proxy Port")).font(AppTypography.dialogTitle)
             Text(L10n.text("HTTP/SOCKS 混合入站端口", "Mixed HTTP/SOCKS inbound port"))
-                .font(.subheadline).foregroundStyle(.secondary)
+                .font(AppTypography.body).foregroundStyle(.secondary)
             TextField("16789", text: $port)
                 .textFieldStyle(.roundedBorder)
-                .font(.system(size: 18, design: .monospaced))
+                .font(AppTypography.monoBody)
             HStack {
                 Spacer()
                 Button(L10n.text("取消", "Cancel")) { isPresented = false }
@@ -315,7 +315,7 @@ private struct DirectDNSSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text(L10n.text("直连 DNS", "Direct DNS"))
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(AppTypography.dialogTitle)
                 Spacer()
                 Button { isPresented = false } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -324,11 +324,11 @@ private struct DirectDNSSheet: View {
                 .foregroundStyle(.secondary)
             }
             Text(L10n.text("用于直连域名解析的 DNS 服务器地址", "DNS server used to resolve direct connections"))
-                .font(.system(size: 12))
+                .font(AppTypography.secondary)
                 .foregroundStyle(.secondary)
             TextField("223.5.5.5", text: $value)
                 .textFieldStyle(.roundedBorder)
-                .font(.system(size: 14, design: .monospaced))
+                .font(AppTypography.monoBody)
             HStack {
                 Spacer()
                 Button(L10n.text("取消", "Cancel")) { isPresented = false }
@@ -372,7 +372,7 @@ private struct UserAgentSheet: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
                     Text(L10n.text("User Agent 设置", "User Agent Settings"))
-                        .font(.system(size: 19, weight: .semibold))
+                        .font(AppTypography.dialogTitle)
                     Spacer()
                     Button { isPresented = false } label: {
                         Image(systemName: "xmark.circle.fill")
@@ -393,7 +393,7 @@ private struct UserAgentSheet: View {
                                         .foregroundStyle(selected == preset ? Color.accentColor : AppVisual.tertiaryLabel(colorScheme))
                                         .frame(width: 22)
                                     Text(preset.title)
-                                        .font(.system(size: 13.5, weight: .medium))
+                                        .font(AppTypography.rowTitle)
                                         .foregroundStyle(.primary)
                                     Spacer(minLength: 0)
                                 }
@@ -412,15 +412,15 @@ private struct UserAgentSheet: View {
                 if selected == .custom {
                     TextField(L10n.text("输入自定义 User Agent", "Enter a custom User Agent"), text: $customValue)
                         .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 12.5, design: .monospaced))
+                        .font(AppTypography.monoBody)
                         .accessibilityLabel(L10n.text("输入自定义 User Agent", "Enter a custom User Agent"))
                 } else if let detail = selected.detail {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(L10n.text("当前请求标识", "Current request identifier"))
-                            .font(.system(size: 10.5, weight: .semibold))
+                            .font(AppTypography.captionEmphasized)
                             .foregroundStyle(.secondary)
                         Text(detail)
-                            .font(.system(size: 10.5, design: .monospaced))
+                            .font(AppTypography.monoCaption)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                             .textSelection(.enabled)
@@ -433,7 +433,7 @@ private struct UserAgentSheet: View {
                     "仅用于获取机场订阅；部分服务会根据客户端标识返回不同格式。",
                     "Used only for subscription requests. Some providers return different formats based on this identifier."
                 ))
-                .font(.system(size: 11))
+                .font(AppTypography.caption)
                 .foregroundStyle(.secondary)
 
                 HStack {

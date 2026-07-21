@@ -94,7 +94,7 @@ struct HomeView: View {
                 .fill(model.status == .stopped ? AppVisual.tertiaryLabel(colorScheme) : model.status.tint)
                 .frame(width: 5, height: 5)
             Text(model.status.localizedTitle)
-                .font(.system(size: 13, weight: .medium))
+                .font(AppTypography.bodyEmphasized)
                 .foregroundStyle(model.status == .stopped ? Color.secondary : Color.primary)
         }
         .frame(height: 20)
@@ -120,7 +120,7 @@ struct HomeView: View {
                         }
                         Text(model.isURLTesting ? L10n.text("停止", "Stop") : L10n.text("测速", "Speed Test"))
                     }
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(AppTypography.captionEmphasized)
                     .foregroundStyle(Color.accentColor)
                     .padding(.horizontal, 8)
                     .frame(height: 28)
@@ -159,7 +159,7 @@ struct HomeView: View {
             HStack(spacing: 8) {
                 if model.showProtocol {
                     Text(node.protocolName.uppercased())
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(AppTypography.badge)
                         .foregroundStyle(Color.accentColor)
                         .frame(width: 58, height: 20)
                         .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
@@ -167,14 +167,14 @@ struct HomeView: View {
                 }
 
                 Text(displayName)
-                    .font(.system(size: 14, weight: .regular))
+                    .font(AppTypography.rowTitle)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.tail)
 
                 if duplicateDisplayNames.contains(displayName.localizedLowercase) {
                     Text("· \(model.sourceName(for: node))")
-                        .font(.system(size: 11))
+                        .font(AppTypography.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -203,15 +203,15 @@ struct HomeView: View {
     private func delayLabel(_ node: ProxyNode) -> some View {
         if let delay = model.delayHistory[node.runtimeTag]?.delay {
             Text("\(delay)ms")
-                .font(.system(size: 13, weight: .medium))
+                .font(AppTypography.bodyEmphasized)
                 .foregroundStyle(isStale(node) ? Color.secondary : Color.primary)
         } else if model.delayHistory[node.runtimeTag] != nil {
             Text(L10n.text("超时", "Timeout"))
-                .font(.system(size: 12, weight: .medium))
+                .font(AppTypography.secondary)
                 .foregroundStyle(AppVisual.tertiaryLabel(colorScheme))
         } else {
             Text("—")
-                .font(.system(size: 13, weight: .regular))
+                .font(AppTypography.body)
                 .foregroundStyle(AppVisual.tertiaryLabel(colorScheme))
         }
     }

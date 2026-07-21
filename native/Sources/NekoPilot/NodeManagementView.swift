@@ -34,8 +34,8 @@ struct NodeManagementView: View {
                                             Image(systemName: "arrow.clockwise")
                                         }
                                         Text(model.isRefreshingAllSubscriptions ? L10n.text("正在更新", "Updating") : L10n.text("更新全部", "Update All"))
-                                    }
-                                    .font(.system(size: 13, weight: .medium))
+                                }
+                                    .font(AppTypography.bodyEmphasized)
                                 }
                                 .buttonStyle(.plain)
                                 .foregroundStyle(Color.accentColor)
@@ -94,7 +94,7 @@ struct NodeManagementView: View {
                 Image(systemName: "plus")
                     .font(.system(size: 16, weight: .medium))
                 Text(L10n.text("添加节点", "Add Node"))
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(AppTypography.rowTitleEmphasized)
             }
             .frame(maxWidth: .infinity)
             .frame(height: 48)
@@ -107,7 +107,7 @@ struct NodeManagementView: View {
     private var addNodeHeaderButton: some View {
         Button { showingAdd = true } label: {
             Label(L10n.text("添加", "Add"), systemImage: "plus")
-                .font(.system(size: 13, weight: .medium))
+                .font(AppTypography.bodyEmphasized)
         }
         .buttonStyle(.plain)
         .foregroundStyle(Color.accentColor)
@@ -145,11 +145,11 @@ struct NodeManagementView: View {
 
                     VStack(alignment: .leading, spacing: 3) {
                         Text(subscription.name.isEmpty ? subscription.identifier : subscription.name)
-                            .font(.system(size: 15.5, weight: .medium))
+                            .font(AppTypography.rowTitle)
                             .foregroundStyle(.primary)
                             .lineLimit(1)
                         Text(sourceSubtitle(subscription))
-                            .font(.system(size: 13))
+                            .font(AppTypography.secondary)
                             .foregroundStyle(sourceSubtitleColor(subscription))
                             .lineLimit(1)
                             .help(model.subscriptionRefreshErrors[subscription.identifier] ?? "")
@@ -171,7 +171,7 @@ struct NodeManagementView: View {
                             Text(L10n.text("更新", "Update"))
                         }
                     }
-                    .font(.system(size: 13, weight: .medium))
+                    .font(AppTypography.bodyEmphasized)
                     .foregroundStyle(Color.accentColor)
                     .frame(minWidth: 36, minHeight: 28)
                 }
@@ -277,7 +277,7 @@ private struct RefreshErrorSheet: View {
                     .font(.system(size: 21, weight: .regular))
                     .foregroundStyle(.red)
                 Text(L10n.text("更新失败", "Update Failed"))
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(AppTypography.dialogTitle)
                 Spacer()
                 Button { isPresented = false } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -288,12 +288,12 @@ private struct RefreshErrorSheet: View {
             }
 
             Text(subscription.name.isEmpty ? subscription.identifier : subscription.name)
-                .font(.system(size: 13, weight: .medium))
+                .font(AppTypography.bodyEmphasized)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
 
             Text(errorMessage)
-                .font(.system(size: 12.5))
+                .font(AppTypography.secondary)
                 .foregroundStyle(.primary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -339,19 +339,19 @@ private struct AddNodeSheet: View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
                 Text(L10n.text("添加节点", "Add Node"))
-                    .font(.title2.bold())
+                    .font(AppTypography.dialogTitle)
                 Spacer()
                 Button { isPresented = false } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
             }
             Text(L10n.text("粘贴机场订阅 URL，或 VLESS、Trojan、AnyTLS、Hysteria2、TUIC、VMess、Shadowsocks 单节点链接。", "Paste a subscription URL or a supported single-node link."))
-                .font(.subheadline)
+                .font(AppTypography.body)
                 .foregroundStyle(.secondary)
             TextField(L10n.text("名称（可选）", "Name (optional)"), text: $name)
                 .textFieldStyle(.roundedBorder)
             TextEditor(text: $input)
-                .font(.system(size: 12, design: .monospaced))
+                .font(AppTypography.monoBody)
                 .frame(minHeight: 120)
                 .padding(8)
                 .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
@@ -398,7 +398,7 @@ private struct EditSourceSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
-                Text(L10n.text("编辑节点", "Edit Node Source")).font(.title2.bold())
+                Text(L10n.text("编辑节点", "Edit Node Source")).font(AppTypography.dialogTitle)
                 Spacer()
                 Button { isPresented = false } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain)
@@ -409,11 +409,11 @@ private struct EditSourceSheet: View {
                     ? L10n.text("名称会立即保存；仅修改机场 URL 时重新下载并校验节点。", "Names save instantly. Nodes are downloaded and validated only when the subscription URL changes.")
                     : L10n.text("名称会立即保存；仅修改节点链接时重新解析并校验。", "Names save instantly. The node is parsed and validated only when its link changes.")
             )
-            .font(.subheadline)
+            .font(AppTypography.body)
             .foregroundStyle(.secondary)
             TextField(L10n.text("名称", "Name"), text: $name).textFieldStyle(.roundedBorder)
             TextEditor(text: $input)
-                .font(.system(size: 12, design: .monospaced))
+                .font(AppTypography.monoBody)
                 .frame(minHeight: 110)
                 .padding(8)
                 .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
@@ -457,10 +457,10 @@ private struct SourceDetailSheet: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(subscription.name.isEmpty ? subscription.identifier : subscription.name)
-                            .font(.system(size: 17, weight: .medium))
+                            .font(AppTypography.rowTitleEmphasized)
                             .lineLimit(1)
                         Text(L10n.text("节点来源详情", "Node Source Details"))
-                            .font(.system(size: 12))
+                            .font(AppTypography.secondary)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -500,10 +500,10 @@ private struct SourceDetailSheet: View {
                                             ? L10n.text("订阅 URL", "Subscription URL")
                                             : L10n.text("节点链接", "Node Link")
                                     )
-                                        .font(.system(size: 11, weight: .semibold))
+                                        .font(AppTypography.captionEmphasized)
                                         .foregroundStyle(.secondary)
                                     Text(url)
-                                        .font(.system(size: 11, design: .monospaced))
+                                        .font(AppTypography.monoCaption)
                                         .foregroundStyle(.primary)
                                         .lineLimit(3)
                                         .textSelection(.enabled)
@@ -516,7 +516,7 @@ private struct SourceDetailSheet: View {
                                                 : L10n.text("复制节点链接", "Copy Node Link"),
                                             systemImage: "doc.on.doc"
                                         )
-                                            .font(.system(size: 12, weight: .medium))
+                                            .font(AppTypography.secondary)
                                     }
                                     .buttonStyle(.plain)
                                     .foregroundStyle(Color.accentColor)
@@ -528,13 +528,13 @@ private struct SourceDetailSheet: View {
 
                         VStack(alignment: .leading, spacing: 6) {
                             Text(L10n.text("节点配置", "Node Configurations"))
-                                .font(.system(size: 11, weight: .semibold))
+                                .font(AppTypography.sectionTitle)
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 4)
                             AppCard {
                                 if nodes.isEmpty {
                                     Text(L10n.text("没有节点", "No nodes"))
-                                        .font(.system(size: 13))
+                                        .font(AppTypography.body)
                                         .foregroundStyle(.secondary)
                                         .frame(maxWidth: .infinity)
                                         .padding(18)
@@ -553,7 +553,7 @@ private struct SourceDetailSheet: View {
                             copyToPasteboard(configurationSummary)
                         } label: {
                             Label(L10n.text("复制配置摘要", "Copy Configuration Summary"), systemImage: "doc.on.doc")
-                                .font(.system(size: 14, weight: .medium))
+                                .font(AppTypography.bodyEmphasized)
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 44)
                         }
@@ -573,11 +573,11 @@ private struct SourceDetailSheet: View {
     private func infoRow(_ title: String, _ value: String) -> some View {
         HStack(spacing: 12) {
             Text(title)
-                .font(.system(size: 13))
+                .font(AppTypography.body)
                 .foregroundStyle(.primary)
             Spacer()
             Text(value)
-                .font(.system(size: 12))
+                .font(AppTypography.secondary)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
@@ -589,22 +589,22 @@ private struct SourceDetailSheet: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Text(displayName(node))
-                    .font(.system(size: 13, weight: .regular))
+                    .font(AppTypography.body)
                     .lineLimit(1)
                 Spacer(minLength: 6)
                 Text(node.protocolName.uppercased())
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(AppTypography.badge)
                     .foregroundStyle(Color.accentColor)
                     .padding(.horizontal, 6)
                     .frame(height: 18)
                     .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
             }
             Text(endpointSummary(node))
-                .font(.system(size: 11, design: .monospaced))
+                .font(AppTypography.monoCaption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             Text(tlsSummary(node))
-                .font(.system(size: 11))
+                .font(AppTypography.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
