@@ -24,7 +24,12 @@ public actor RuleSetUpdater {
                 guard Self.isValidRuleSet(data) else {
                     throw NekoPilotError.processFailed("下载的中国规则库无效")
                 }
-                downloads.append((paths.ruleSets.appendingPathComponent(source.fileName), data))
+                let destination = paths.ruleSets.appendingPathComponent(source.fileName)
+                let candidate = paths.ruleSets.appendingPathComponent(".\(source.fileName).\(UUID().uuidString).candidate")
+                defer { try? FileManager.default.removeItem(at: candidate) }
+                try AtomicFile.write(data, to: candidate)
+                try await SingBoxValidator.validate(ruleSet: candidate, tag: source.tag)
+                downloads.append((destination, data))
             }
             for (destination, data) in downloads {
                 try AtomicFile.write(data, to: destination)
@@ -92,16 +97,19 @@ public actor RuleSetUpdater {
     }
 
     private struct Source {
+        let tag: String
         let fileName: String
         let remoteURL: URL
     }
 
     private static let sources = [
         Source(
+            tag: "geoip-cn",
             fileName: "geoip-cn.srs",
             remoteURL: URL(string: "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs")!
         ),
         Source(
+            tag: "geosite-cn",
             fileName: "geosite-cn.srs",
             remoteURL: URL(string: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs")!
         ),

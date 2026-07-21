@@ -16,11 +16,6 @@ struct PendingDeepLink: Identifiable, Equatable {
 }
 
 @MainActor
-final class TrafficState: ObservableObject {
-    @Published var snapshot: TrafficSnapshot = .zero
-}
-
-@MainActor
 final class AppModel: ObservableObject {
     @Published var status: EngineStatus = .stopped
     @Published var nodes: [ProxyNode] = []
@@ -39,7 +34,7 @@ final class AppModel: ObservableObject {
     @Published var skipSystemProxy = false
     @Published var proxyPort = SettingsStore.defaultProxyPort
     @Published var directDNS = "223.5.5.5"
-    @Published var userAgent = "sing-box 1.13.14"
+    @Published var userAgent = "sing-box 1.14.0-alpha.26"
     @Published var isInitialized = false
     @Published var pendingDeepLink: PendingDeepLink?
     @Published var pendingLANEnable = false
@@ -53,7 +48,7 @@ final class AppModel: ObservableObject {
     let repository: SubscriptionRepository
     let importer: SubscriptionImporter
     let compiler: ConfigurationCompiler
-    let clashAPI: ClashAPIClient
+    let nativeAPI: NativeControlClient
     let systemProxy: SystemProxyManager
     let engine: EngineSupervisor
     let tester: URLTester
@@ -62,19 +57,15 @@ final class AppModel: ObservableObject {
     let ruleSetUpdater: RuleSetUpdater
     let releaseChecker: GitHubReleaseChecker
     let networkReadiness = NetworkReadiness()
-    let trafficState = TrafficState()
-
     private var statusTask: Task<Void, Never>?
     private var selectionTask: Task<Void, Never>?
     private var automaticDelayTask: Task<Void, Never>?
-    private var trafficTask: Task<Void, Never>?
     private var urlTestTask: Task<Void, Never>?
     private var wakeTask: Task<Void, Never>?
     private var ruleUpdateTask: Task<Void, Never>?
     private var releaseCheckTask: Task<Void, Never>?
     private var selectionGeneration = 0
     private var urlTestGeneration = 0
-    private var trafficGeneration = 0
     private var ruleUpdateGeneration = 0
     private var sleepStartedAt: Date?
     private var wasRunningBeforeSleep = false
@@ -92,23 +83,23 @@ final class AppModel: ObservableObject {
         bootstrapError = storage.recoveryMessage
         importer = SubscriptionImporter(repository: repository, settings: settings)
         compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
-        clashAPI = ClashAPIClient(settings: settings)
+        nativeAPI = NativeControlClient(paths: paths)
         systemProxy = SystemProxyManager(markerURL: paths.proxyOwnership)
         engine = EngineSupervisor(
             settings: settings,
             compiler: compiler,
             systemProxy: systemProxy,
-            clashAPI: clashAPI,
+            nativeAPI: nativeAPI,
             ownershipURL: paths.engineOwnership
         )
-        tester = URLTester(compiler: compiler, clashAPI: clashAPI)
+        tester = URLTester(compiler: compiler, nativeAPI: nativeAPI, paths: paths)
         selection = NodeSelectionCoordinator(engine: engine, settings: settings)
         automaticSelection = AutoNodeSelectionService(
             engine: engine,
             repository: repository,
             settings: settings,
             tester: tester,
-            clashAPI: clashAPI,
+            nativeAPI: nativeAPI,
             selection: selection
         )
         ruleSetUpdater = RuleSetUpdater(paths: paths)
@@ -120,7 +111,6 @@ final class AppModel: ObservableObject {
         statusTask?.cancel()
         selectionTask?.cancel()
         automaticDelayTask?.cancel()
-        trafficTask?.cancel()
         urlTestTask?.cancel()
         wakeTask?.cancel()
         ruleUpdateTask?.cancel()
@@ -137,10 +127,8 @@ final class AppModel: ObservableObject {
                 guard !Task.isCancelled else { return }
                 status = next
                 if next.isRunning {
-                    startTrafficStream()
                     scheduleRuleSetRefresh()
                 } else {
-                    stopTrafficStream()
                     ruleUpdateTask?.cancel()
                     ruleUpdateTask = nil
                 }
@@ -645,7 +633,6 @@ final class AppModel: ObservableObject {
         statusTask?.cancel()
         selectionTask?.cancel()
         automaticDelayTask?.cancel()
-        trafficTask?.cancel()
         ruleUpdateTask?.cancel()
         ruleUpdateTask = nil
         releaseCheckTask?.cancel()
@@ -691,8 +678,6 @@ final class AppModel: ObservableObject {
             return L10n.text("已是最快：\(displayName(forTag: node)) · \(delay)ms", "Already fastest: \(displayName(forTag: node)) · \(delay)ms")
         case let .switched(node, delay):
             return L10n.text("已切换：\(displayName(forTag: node)) · \(delay)ms", "Switched: \(displayName(forTag: node)) · \(delay)ms")
-        case .deferredBusy:
-            return L10n.text("测速完成 · 活跃连接中暂缓切换", "Tested · switch deferred for active connection")
         case .unavailable:
             return L10n.text("测速完成 · 暂无可用节点", "Tested · no reachable nodes")
         case .failed:
@@ -717,7 +702,7 @@ final class AppModel: ObservableObject {
             directDNS = await DNSResolverDetector.detectSystemResolver() ?? DNSResolverDetector.fallback
             try? await settings.set(.string(directDNS), for: SettingsStore.Key.directDNS)
         }
-        userAgent = await settings.string(SettingsStore.Key.userAgent, default: "sing-box 1.13.14")
+        userAgent = await settings.string(SettingsStore.Key.userAgent, default: "sing-box 1.14.0-alpha.26")
         selectedNode = (await settings.string(SettingsStore.Key.selectedNode)).nilIfEmpty
         let storedHistory = (try? await repository.delayHistory()) ?? [:]
         let legacyHistory = (try? await settings.takeLegacyDelayHistory()) ?? [:]
@@ -765,37 +750,7 @@ final class AppModel: ObservableObject {
     }
 
     private func reloadRunningEngine(selectedNode: String?) async throws {
-        stopTrafficStream()
-        defer {
-            if status.isRunning { startTrafficStream() }
-        }
         try await engine.reload(selectedNode: selectedNode)
-    }
-
-    private func startTrafficStream() {
-        guard trafficTask == nil else { return }
-        trafficGeneration += 1
-        let generation = trafficGeneration
-        trafficTask = Task { [weak self] in
-            guard let self else { return }
-            do {
-                let stream = await clashAPI.trafficStream()
-                for try await sample in stream {
-                    guard !Task.isCancelled else { return }
-                    trafficState.snapshot = sample
-                }
-            } catch {
-                if !Task.isCancelled { AppLogger.shared.warning("traffic stream ended: \(error.localizedDescription)") }
-            }
-            if generation == trafficGeneration { trafficTask = nil }
-        }
-    }
-
-    private func stopTrafficStream() {
-        trafficGeneration += 1
-        trafficTask?.cancel()
-        trafficTask = nil
-        trafficState.snapshot = .zero
     }
 
     private func scheduleRuleSetRefresh() {

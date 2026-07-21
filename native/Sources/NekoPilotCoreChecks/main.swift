@@ -13,7 +13,6 @@ var checks: [(String, () async throws -> Void)] = []
 
 checks.append(("defaults", {
     try expect(SettingsStore.defaultProxyPort == 16_789, "unexpected default proxy port")
-    try expect(SettingsStore.clashAPIPort == 19_191, "unexpected Clash API port")
 }))
 
 checks.append(("VLESS parser", {
@@ -105,30 +104,27 @@ checks.append(("repository and config compiler", {
         selector?["outbounds"]?.arrayValue?.first?.stringValue == nodes[0].runtimeTag,
         "compiler did not select stable runtime node"
     )
-    let offlineConfigURL = try await compiler.makeOfflineTestConfiguration(
-        selectedNode: nodes[0].runtimeTag,
-        controllerPort: 20_001,
-        secret: "offline-test-secret"
-    )
+    try await SingBoxValidator.validate(configuration: output)
+    let offlineConfigURL = try await compiler.makeOfflineTestConfiguration(selectedNode: nodes[0].runtimeTag)
     defer { try? FileManager.default.removeItem(at: offlineConfigURL.deletingLastPathComponent()) }
     let offlineConfig = try JSONValue.decodeObject(from: Data(contentsOf: offlineConfigURL))
     try expect(offlineConfig["inbounds"] == nil, "offline URL Test config unexpectedly exposed a proxy inbound")
-    let offlineClashAPI = offlineConfig["experimental"]?.objectValue?["clash_api"]?.objectValue
-    try expect(
-        offlineClashAPI?["external_controller"]?.stringValue == "127.0.0.1:20001",
-        "offline URL Test config did not isolate its controller port"
-    )
-    try expect(
-        offlineClashAPI?["secret"]?.stringValue == "offline-test-secret",
-        "offline URL Test config did not isolate its API secret"
-    )
+    let experimentalKeys = Set(offlineConfig["experimental"]?.objectValue.map { Array($0.keys) } ?? [])
+    try expect(experimentalKeys == Set(["cache_file"]), "offline URL Test config contains an unexpected experimental service")
 }))
 
-func importedTestNode(repository: SubscriptionRepository) async throws -> ProxyNode {
-    guard let raw = ProcessInfo.processInfo.environment["NEKOPILOT_TEST_NODE_URL"]?
-        .trimmingCharacters(in: .whitespacesAndNewlines),
-        !raw.isEmpty else {
-        throw CheckFailure(description: "NEKOPILOT_TEST_NODE_URL is required for live validation")
+func importedTestNode(repository: SubscriptionRepository, requiresExternalNode: Bool = false) async throws -> ProxyNode {
+    let configuredURL = ProcessInfo.processInfo.environment["NEKOPILOT_TEST_NODE_URL"]?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    let raw: String
+    if let configuredURL, !configuredURL.isEmpty {
+        raw = configuredURL
+    } else if requiresExternalNode {
+        throw CheckFailure(description: "NEKOPILOT_TEST_NODE_URL is required for real egress validation")
+    } else {
+        // Lifecycle validation must not depend on a third-party endpoint. The
+        // test node is never dialled; it only exercises config/start/select/reload/stop.
+        raw = "vless://00000000-0000-4000-8000-000000000000@127.0.0.1:1?encryption=none&type=tcp#Lifecycle%20Test"
     }
     let importer = SubscriptionImporter(repository: repository)
     let identifier = try await importer.importInput(raw, name: "Runtime Test")
@@ -138,21 +134,58 @@ func importedTestNode(repository: SubscriptionRepository) async throws -> ProxyN
     return node
 }
 
+func importedStoredTestNode(repository: SubscriptionRepository) async throws -> ProxyNode {
+    guard let databasePath = ProcessInfo.processInfo.environment["NEKOPILOT_TEST_APP_DATABASE"],
+          !databasePath.isEmpty else {
+        throw CheckFailure(description: "NEKOPILOT_TEST_APP_DATABASE is required for stored-node validation")
+    }
+    let sourceRepository = try SubscriptionRepository(databaseURL: URL(fileURLWithPath: databasePath))
+    guard let sourceNode = try await sourceRepository.nodes().first else {
+        throw CheckFailure(description: "the selected application database has no usable nodes")
+    }
+    let identifier = try await repository.upsert(
+        url: nil,
+        name: "Stored Runtime Test",
+        sourceType: .localLink,
+        config: ["outbounds": .array([.object(sourceNode.outbound)])]
+    )
+    guard let imported = try await repository.nodes().first(where: { $0.sourceIdentifier == identifier }) else {
+        throw CheckFailure(description: "could not prepare a stored-node validation configuration")
+    }
+    return imported
+}
+
 if ProcessInfo.processInfo.environment["NEKOPILOT_VALIDATE_REAL_EGRESS"] == "1" {
     checks.append(("offline URL Test reaches the internet", {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("NekoPilot-Egress-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
+        defer {
+            if ProcessInfo.processInfo.environment["NEKOPILOT_KEEP_VALIDATION"] != "1" {
+                try? FileManager.default.removeItem(at: directory)
+            } else {
+                print("kept validation directory: \(directory.path)")
+            }
+        }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let paths = AppPaths(applicationSupport: directory, logs: directory.appendingPathComponent("logs"))
+        AppLogger.shared.configure(destination: paths.logFile)
         let settings = try SettingsStore(fileURL: paths.settings)
         let repository = try SubscriptionRepository(databaseURL: paths.database)
         let compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
-        let clash = ClashAPIClient(settings: settings)
-        let tester = URLTester(compiler: compiler, clashAPI: clash)
-        let node = try await importedTestNode(repository: repository)
+        let nativeAPI = NativeControlClient(paths: paths)
+        let tester = URLTester(compiler: compiler, nativeAPI: nativeAPI, paths: paths)
+        let node: ProxyNode
+        if ProcessInfo.processInfo.environment["NEKOPILOT_TEST_APP_DATABASE"] != nil {
+            node = try await importedStoredTestNode(repository: repository)
+        } else {
+            node = try await importedTestNode(repository: repository, requiresExternalNode: true)
+        }
         let result = await tester.test(nodes: [node], engineRunning: false)
-        try expect(result[node.runtimeTag]?.delay != nil, "offline URL Test failed for the supplied node")
+        let delay = result[node.runtimeTag]?.delay
+        try expect(
+            delay != nil,
+            "offline URL Test failed for the supplied node (records=\(result.count), has_delay=\(delay != nil))"
+        )
     }))
 }
 
@@ -160,7 +193,13 @@ if ProcessInfo.processInfo.environment["NEKOPILOT_VALIDATE_ENGINE"] == "1" {
     checks.append(("native supervisor starts and stops sing-box", {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("NekoPilot-Engine-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
+        defer {
+            if ProcessInfo.processInfo.environment["NEKOPILOT_KEEP_VALIDATION"] != "1" {
+                try? FileManager.default.removeItem(at: directory)
+            } else {
+                print("kept validation directory: \(directory.path)")
+            }
+        }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let paths = AppPaths(applicationSupport: directory, logs: directory.appendingPathComponent("logs"))
         AppLogger.shared.configure(destination: paths.logFile)
@@ -169,24 +208,27 @@ if ProcessInfo.processInfo.environment["NEKOPILOT_VALIDATE_ENGINE"] == "1" {
         try await settings.set(.number(17_689), for: SettingsStore.Key.proxyPort)
         let repository = try SubscriptionRepository(databaseURL: paths.database)
         let compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
-        let clash = ClashAPIClient(settings: settings)
+        let nativeAPI = NativeControlClient(paths: paths)
         let proxy = SystemProxyManager(markerURL: paths.proxyOwnership)
-        let engine = EngineSupervisor(settings: settings, compiler: compiler, systemProxy: proxy, clashAPI: clash)
-        let selected = try await importedTestNode(repository: repository).runtimeTag
+        let engine = EngineSupervisor(settings: settings, compiler: compiler, systemProxy: proxy, nativeAPI: nativeAPI)
+        let node: ProxyNode
+        if ProcessInfo.processInfo.environment["NEKOPILOT_TEST_APP_DATABASE"] != nil {
+            node = try await importedStoredTestNode(repository: repository)
+        } else {
+            node = try await importedTestNode(repository: repository)
+        }
+        let selected = node.runtimeTag
         do {
             try await engine.start(selectedNode: selected)
             let runningStatus = await engine.currentStatus()
             try expect(runningStatus.isRunning, "engine did not reach running state")
-            let selector = try await clash.selector()
-            try expect(selector.nodes.contains(selected), "Clash selector did not expose selected node")
-            let previousSecret = try await settings.clashSecret()
+            let selector = try await nativeAPI.selector(knownNodes: [selected])
+            try expect(selector.nodes.contains(selected), "native selector did not expose selected node")
             try await settings.replaceRules([
                 RoutingRule(action: .direct, kind: .domainSuffix, value: ".nekopilot-live-reload.invalid"),
             ])
             try await engine.reload(selectedNode: selected)
-            let reloadedSecret = try await settings.clashSecret()
-            try expect(reloadedSecret != previousSecret, "reload did not cross the new Clash API ownership boundary")
-            let reloadedSelector = try await clash.selector()
+            let reloadedSelector = try await nativeAPI.selector(knownNodes: [selected])
             try expect(reloadedSelector.nodes.contains(selected), "selector disappeared after live reload")
             await engine.stop()
             let stoppedStatus = await engine.currentStatus()

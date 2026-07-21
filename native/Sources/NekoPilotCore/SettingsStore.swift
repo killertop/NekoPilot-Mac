@@ -13,13 +13,11 @@ public actor SettingsStore {
         public static let selectedNode = "selected_node"
         public static let delayHistory = "delay_history"
         public static let lastUpdateCheck = "github_release_update_last_check"
-        public static let clashSecret = "clash_api_secret"
         public static let directRules = "rules_direct"
         public static let proxyRules = "rules_proxy"
     }
 
     public static let defaultProxyPort = 16_789
-    public static let clashAPIPort = 19_191
 
     private let fileURL: URL
     private var values: [String: JSONValue]
@@ -66,16 +64,6 @@ public actor SettingsStore {
     public func proxyPort() -> Int {
         let port = integer(Key.proxyPort, default: Self.defaultProxyPort)
         return (1 ... 65_535).contains(port) ? port : Self.defaultProxyPort
-    }
-
-    public func clashSecret() throws -> String {
-        if let existing = values[Key.clashSecret]?.stringValue,
-           (16 ... 256).contains(existing.count) {
-            return existing
-        }
-        let secret = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
-        try commit { values[Key.clashSecret] = .string(secret) }
-        return secret
     }
 
     func delayHistory() -> [String: DelayRecord] {
@@ -184,7 +172,7 @@ public actor SettingsStore {
             }
         case Key.allowLAN, Key.autoSelect, Key.showProtocol, Key.skipSystemProxy:
             guard value.boolValue != nil else { throw NekoPilotError.invalidSetting(key) }
-        case Key.selectedNode, Key.clashSecret:
+        case Key.selectedNode:
             guard let string = value.stringValue, string.utf8.count <= 16 * 1024 else {
                 throw NekoPilotError.invalidSetting(key)
             }

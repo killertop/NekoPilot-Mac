@@ -136,12 +136,3 @@ extension EngineStatus {
         }
     }
 }
-
-func formattedBytesPerSecond(_ bytes: Int64) -> String {
-    let formatter = ByteCountFormatter()
-    formatter.countStyle = .binary
-    formatter.allowedUnits = [.useKB, .useMB, .useGB]
-    formatter.includesUnit = true
-    formatter.isAdaptive = true
-    return "\(formatter.string(fromByteCount: bytes))/s"
-}

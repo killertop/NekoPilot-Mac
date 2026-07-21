@@ -1,68 +1,62 @@
 {
   "log": {
     "disabled": false,
-    "level": "debug",
-    "timestamp": false
+    "level": "warn",
+    "timestamp": true
   },
   "dns": {
     "servers": [
       {
+        "tag": "local",
+        "type": "local"
+      },
+      {
         "tag": "system",
         "type": "udp",
-        "server": "119.29.29.29",
-        "server_port": 53,
-        "connect_timeout": "5s"
+        "server": "223.5.5.5",
+        "server_port": 53
       },
       {
         "tag": "dns_proxy",
         "type": "tcp",
         "server": "1.0.0.1",
         "server_port": 53,
-        "detour": "ExitGateway",
-        "connect_timeout": "5s"
+        "detour": "ExitGateway"
       }
     ],
     "rules": [
       {
-        "query_type": [
-          "HTTPS",
-          "SVCB",
-          "PTR"
-        ],
-        "action": "reject"
+        "action": "evaluate",
+        "server": "dns_proxy"
       },
       {
-        "domain": [
-          "captive.apple.com",
-          "captive.apple.com",
-          "nmcheck.gnome.org",
-          "www.msftconnecttest.com",
-          "connectivitycheck.gstatic.com",
-          "sequoia.apple.com",
-          "seed-sequoia.siri.apple.com"
-        ],
-        "rule_set": [
-          "geoip-cn",
-          "geosite-cn",
-          "geosite-apple",
-          "geosite-microsoft-cn",
-          "geosite-samsung",
-          "geosite-private"
-        ],
-        "strategy": "prefer_ipv4",
+        "match_response": true,
+        "rule_set": ["geoip-cn"],
+        "action": "route",
         "server": "system"
+      },
+      {
+        "rule_set": ["geosite-cn"],
+        "action": "route",
+        "server": "system"
+      },
+      {
+        "domain_suffix": ["local", "lan", "localdomain", "localhost"],
+        "action": "route",
+        "server": "local"
       }
     ],
     "final": "dns_proxy",
-    "strategy": "prefer_ipv4"
+    "strategy": "prefer_ipv4",
+    "cache_capacity": 2048,
+    "timeout": "5s"
   },
   "inbounds": [
     {
       "tag": "mixed",
       "type": "mixed",
       "listen": "127.0.0.1",
-      "listen_port": 6789,
-      "set_system_proxy": false
+      "listen_port": 6789
     }
   ],
   "route": {
@@ -74,88 +68,33 @@
         "type": "logical",
         "mode": "or",
         "rules": [
-          {
-            "protocol": "dns"
-          },
-          {
-            "port": 53
-          }
+          { "protocol": "dns" },
+          { "port": 53 }
         ],
         "action": "hijack-dns"
-      },
-      {
-        "protocol": "quic",
-        "action": "reject"
       },
       {
         "ip_is_private": true,
         "outbound": "direct"
       },
       {
-        "domain": [
-          "direct-tag.nekopilot.invalid"
-        ],
+        "domain_suffix": ["local", "lan", "localdomain", "localhost"],
+        "outbound": "direct"
+      },
+      {
+        "domain": ["direct-tag.nekopilot.invalid"],
         "domain_suffix": [],
         "ip_cidr": [],
         "outbound": "direct"
       },
       {
-        "domain": [
-          "proxy-tag.nekopilot.invalid"
-        ],
+        "domain": ["proxy-tag.nekopilot.invalid"],
         "domain_suffix": [],
         "ip_cidr": [],
         "outbound": "ExitGateway"
       },
       {
-        "domain_suffix": [
-          ".oaiusercontent.com",
-          ".tiktok.com"
-        ],
-        "rule_set": [
-          "geosite-tiktok",
-          "geosite-linkedin",
-          "geosite-linkedin-cn"
-        ],
-        "outbound": "ExitGateway"
-      },
-      {
-        "domain": [
-          "captive.apple.com",
-          "captive.apple.com",
-          "nmcheck.gnome.org",
-          "www.msftconnecttest.com",
-          "connectivitycheck.gstatic.com",
-          "sequoia.apple.com",
-          "seed-sequoia.siri.apple.com"
-        ],
-        "domain_suffix": [
-          "local",
-          "lan",
-          "localdomain",
-          "localhost",
-          "bypass.local",
-          ".nekopilot.invalid",
-          ".ksjhaoka.com",
-          ".mixcapp.com"
-        ],
-        "outbound": "direct",
-        "rule_set": [
-          "geoip-cn",
-          "geosite-cn",
-          "geosite-apple",
-          "geosite-microsoft-cn",
-          "geosite-samsung",
-          "geosite-private"
-        ]
-      },
-      {
-        "process_path": [
-          "/Applications/WeChat.app/Contents/MacOS/WeChat"
-        ],
-        "process_path_regex": [
-          "^/System/Applications/.+"
-        ],
+        "rule_set": ["geosite-cn", "geoip-cn"],
         "outbound": "direct"
       }
     ],
@@ -165,62 +104,17 @@
     "rule_set": [
       {
         "tag": "geoip-cn",
-        "type": "remote",
-        "format": "binary",
-        "url": "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip/cn.srs"
-      },
-      {
-        "tag": "geosite-linkedin",
-        "type": "remote",
-        "format": "binary",
-        "url": "https://cdn.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-linkedin.srs"
-      },
-      {
-        "tag": "geosite-linkedin-cn",
-        "type": "remote",
-        "format": "binary",
-        "url": "https://cdn.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-linkedin@cn.srs"
+        "type": "local",
+        "format": "binary"
       },
       {
         "tag": "geosite-cn",
-        "type": "remote",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs"
-      },
-      {
-        "tag": "geosite-apple",
-        "type": "remote",
-        "format": "binary",
-        "url": "https://cdn.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-apple.srs"
-      },
-      {
-        "tag": "geosite-microsoft-cn",
-        "type": "remote",
-        "format": "binary",
-        "url": "https://cdn.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-microsoft@cn.srs"
-      },
-      {
-        "tag": "geosite-samsung",
-        "type": "remote",
-        "format": "binary",
-        "url": "https://cdn.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-samsung.srs"
-      },
-      {
-        "tag": "geosite-private",
-        "type": "remote",
-        "format": "binary",
-        "url": "https://cdn.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-private.srs"
-      },
-      {
-        "tag": "geosite-tiktok",
-        "type": "remote",
-        "format": "binary",
-        "url": "https://cdn.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-tiktok.srs"
+        "type": "local",
+        "format": "binary"
       }
     ]
   },
   "experimental": {
-    "clash_api": {},
     "cache_file": {}
   },
   "outbounds": [
@@ -232,8 +126,7 @@
     {
       "tag": "ExitGateway",
       "type": "selector",
-      "outbounds": [],
-      "interrupt_exist_connections": true
+      "outbounds": []
     }
   ]
 }

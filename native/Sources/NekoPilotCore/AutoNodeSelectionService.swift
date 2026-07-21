@@ -4,7 +4,6 @@ public struct AutoNodeSelectionUpdate: Sendable, Equatable {
     public enum Outcome: Sendable, Equatable {
         case kept(node: String, delay: Int)
         case switched(node: String, delay: Int)
-        case deferredBusy
         case unavailable
         case failed
     }
@@ -27,7 +26,7 @@ public actor AutoNodeSelectionService {
     private let repository: SubscriptionRepository
     private let settings: SettingsStore
     private let tester: URLTester
-    private let clashAPI: ClashAPIClient
+    private let nativeAPI: NativeControlClient
     private let selection: NodeSelectionCoordinator
     private var timerTask: Task<Void, Never>?
     private var isStarted = false
@@ -38,14 +37,14 @@ public actor AutoNodeSelectionService {
         repository: SubscriptionRepository,
         settings: SettingsStore,
         tester: URLTester,
-        clashAPI: ClashAPIClient,
+        nativeAPI: NativeControlClient,
         selection: NodeSelectionCoordinator
     ) {
         self.engine = engine
         self.repository = repository
         self.settings = settings
         self.tester = tester
-        self.clashAPI = clashAPI
+        self.nativeAPI = nativeAPI
         self.selection = selection
     }
 
@@ -109,18 +108,12 @@ public actor AutoNodeSelectionService {
             publish(AutoNodeSelectionUpdate(delays: delays, outcome: .unavailable))
             return
         }
-        guard let selector = try? await clashAPI.selector(), selector.nodes.contains(fastest.0) else {
+        guard let selector = try? await nativeAPI.selector(knownNodes: nodes.map(\.runtimeTag)), selector.nodes.contains(fastest.0) else {
             publish(AutoNodeSelectionUpdate(delays: delays, outcome: .failed))
             return
         }
         if selector.current == fastest.0 {
             publish(AutoNodeSelectionUpdate(delays: delays, outcome: .kept(node: fastest.0, delay: fastest.1)))
-            return
-        }
-        guard let hasLongConnection = await clashAPI.hasLongLivedConnection(),
-              !hasLongConnection else {
-            AppLogger.shared.info("automatic node switch deferred because connection state is unavailable or busy")
-            publish(AutoNodeSelectionUpdate(delays: delays, outcome: .deferredBusy))
             return
         }
         do {

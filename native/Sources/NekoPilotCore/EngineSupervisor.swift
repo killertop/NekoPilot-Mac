@@ -5,7 +5,7 @@ public actor EngineSupervisor {
     private let settings: SettingsStore
     private let compiler: ConfigurationCompiler
     private let systemProxy: SystemProxyManager
-    private let clashAPI: ClashAPIClient
+    private let nativeAPI: NativeControlClient
     private let ownershipURL: URL?
     private var status: EngineStatus = .stopped
     private var process: Process?
@@ -19,13 +19,13 @@ public actor EngineSupervisor {
         settings: SettingsStore,
         compiler: ConfigurationCompiler,
         systemProxy: SystemProxyManager,
-        clashAPI: ClashAPIClient,
+        nativeAPI: NativeControlClient,
         ownershipURL: URL? = nil
     ) {
         self.settings = settings
         self.compiler = compiler
         self.systemProxy = systemProxy
-        self.clashAPI = clashAPI
+        self.nativeAPI = nativeAPI
         self.ownershipURL = ownershipURL
     }
 
@@ -84,7 +84,7 @@ public actor EngineSupervisor {
             try ensureCurrent(startEpoch)
 
             let mixedPort = await settings.proxyPort()
-            for port in [mixedPort, SettingsStore.clashAPIPort] where PortProbe.isListening(port) {
+            for port in [mixedPort] where PortProbe.isListening(port) {
                 throw NekoPilotError.portOccupied(port)
             }
             let executable = try SingBoxLocator.executable()
@@ -93,7 +93,8 @@ public actor EngineSupervisor {
                 executable: executable,
                 config: config,
                 session: session,
-                mixedPort: mixedPort
+                mixedPort: mixedPort,
+                apiSocket: nativeAPI.socketPath
             )
             startedSession = session
             process = child
@@ -115,7 +116,7 @@ public actor EngineSupervisor {
                 proxySessionID = proxySession
             }
             try ensureCurrent(startEpoch)
-            if let selectedNode { try await clashAPI.select(node: selectedNode) }
+            if let selectedNode { try await nativeAPI.select(node: selectedNode) }
             try ensureCurrent(startEpoch)
             setStatus(.running)
             AppLogger.shared.info("sing-box running pid=\(child.processIdentifier) session=\(session)")
@@ -181,33 +182,22 @@ public actor EngineSupervisor {
             return
         }
 
-        // Rotate the local control secret for every reload.  Requests signed
-        // with the new secret cannot be answered by the old instance, which
-        // gives us a reliable hand-off boundary instead of assuming that a
-        // fixed sleep was long enough for SIGHUP to take effect.
-        let previousSecret = try await settings.clashSecret()
-        let reloadSecret = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
-        try await settings.set(.string(reloadSecret), for: SettingsStore.Key.clashSecret)
-        var newControllerWasReady = false
         do {
             let config = try await compiler.compile(selectedNode: selectedNode)
             try await SingBoxValidator.validate(configuration: config)
             let reloadEpoch = epoch
             let expectedNodes = try expectedSelectorNodes(in: config)
-            guard kill(child.processIdentifier, SIGHUP) == 0 else {
-                throw NekoPilotError.processFailed("无法重新加载 sing-box 配置")
-            }
+            try await nativeAPI.reload()
 
             for _ in 0 ..< 50 {
                 try ensureCurrent(reloadEpoch)
                 guard sessionID == runningSession, child.isRunning else {
                     throw NekoPilotError.processFailed("sing-box 在重新加载时退出")
                 }
-                if await clashAPI.isReady() { newControllerWasReady = true }
-                if let selector = try? await clashAPI.selector(),
+                if let selector = try? await nativeAPI.selector(knownNodes: Array(expectedNodes)),
                    Set(selector.nodes) == expectedNodes {
                     if let selectedNode, selector.current != selectedNode {
-                        try await clashAPI.select(node: selectedNode)
+                        try await nativeAPI.select(node: selectedNode)
                     }
                     return
                 }
@@ -215,11 +205,6 @@ public actor EngineSupervisor {
             }
             throw NekoPilotError.processFailed("规则重新加载未生效")
         } catch {
-            // If the new controller never authenticated, sing-box rejected or
-            // never observed the reload and is still using the old secret.
-            if !newControllerWasReady {
-                try? await settings.set(.string(previousSecret), for: SettingsStore.Key.clashSecret)
-            }
             throw error
         }
     }
@@ -227,7 +212,7 @@ public actor EngineSupervisor {
     public func select(node: String) async throws {
         guard !isShuttingDown else { throw CancellationError() }
         if status.isRunning {
-            try await clashAPI.select(node: node)
+            try await nativeAPI.select(node: node)
         } else {
             _ = try await compiler.compile(selectedNode: node)
         }
@@ -264,13 +249,14 @@ public actor EngineSupervisor {
         executable: URL,
         config: URL,
         session: UUID,
-        mixedPort: Int
+        mixedPort: Int,
+        apiSocket: URL
     ) throws -> Process {
         let child = Process()
         let standardOutput = Pipe()
         let standardError = Pipe()
         child.executableURL = executable
-        child.arguments = ["run", "-c", config.path, "--disable-color"]
+        child.arguments = ["run", "-c", config.path, "--api-socket", apiSocket.path, "--disable-color"]
         child.currentDirectoryURL = config.deletingLastPathComponent()
         child.standardOutput = standardOutput
         child.standardError = standardError
@@ -321,7 +307,7 @@ public actor EngineSupervisor {
     private func waitUntilReady(epoch expectedEpoch: UInt64) async -> Bool {
         for _ in 0 ..< 100 {
             guard expectedEpoch == epoch, !isShuttingDown, process?.isRunning == true else { return false }
-            if await clashAPI.isReady() { return true }
+            if await nativeAPI.isReady() { return true }
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
         return false
@@ -406,7 +392,6 @@ public actor EngineSupervisor {
             childProcess: childIdentity,
             configPath: config.path,
             mixedPort: mixedPort,
-            clashPort: SettingsStore.clashAPIPort,
             createdAt: Date()
         )
         let encoder = JSONEncoder()
@@ -442,7 +427,6 @@ private struct EngineOwnershipMarker: Codable, Sendable {
     let childProcess: ProcessIdentityRecord
     let configPath: String
     let mixedPort: Int
-    let clashPort: Int
     let createdAt: Date
 }
 

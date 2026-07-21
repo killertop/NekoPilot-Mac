@@ -6,15 +6,19 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 NATIVE_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 
-SING_BOX_VERSION="1.13.14"
-SING_BOX_COMMIT="25a600db24f7680ad9806ce5427bd0ab8afe1114"
-SING_BOX_ARCHIVE_SHA256="9fc3eb052ef30efe32db619e9aaf2ec79029886c634126be00982fbc1f6bd5bf"
+SING_BOX_VERSION="1.14.0-alpha.26"
+SING_BOX_COMMIT="b6c416b0482a2d2391470d70ce518abff3ba51f8"
+SING_BOX_ARCHIVE_SHA256="5fd02d129c587ae656a29363789bdeb60f5f201cfa02a5ec00ba147089576bcf"
 GO_VERSION="1.26.5"
 MACOS_DEPLOYMENT_TARGET="13.0"
 MACOS_SDK_VERSION="26.2"
-SOURCE_DATE_EPOCH="1782376567"
-BUILD_TAGS="with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_ccm,with_ocm,with_naive_outbound,badlinkname,tfogo_checklinkname0"
+SOURCE_DATE_EPOCH="1779788717"
+# StartedService's official gRPC implementation links the optional upstream
+# Clash component at build time. NekoPilot emits no Clash configuration and
+# starts no HTTP listener, controller, secret, or Clash service.
+BUILD_TAGS="with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_tailscale,with_ccm,with_ocm,with_cloudflared,with_naive_outbound,with_clash_api,badlinkname,tfogo_checklinkname0"
 LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=${SING_BOX_VERSION} -X internal/godebug.defaultGODEBUG=multipathtcp=0 -checklinkname=0 -buildid="
+CORE_LDFLAGS="$LDFLAGS -X main.version=${SING_BOX_VERSION} -X main.buildTags=${BUILD_TAGS}"
 
 OUTPUT=${NEKOPILOT_SING_BOX_OUTPUT:-"$NATIVE_DIR/.build/sidecar/sing-box"}
 VERIFY_REPRODUCIBLE=${NEKOPILOT_VERIFY_REPRODUCIBLE:-0}
@@ -88,7 +92,11 @@ trap cleanup EXIT
 
 ARCHIVE="$WORK_DIR/sing-box.tar.gz"
 SOURCE_PARENT="$WORK_DIR/source"
-GO_MODULE_CACHE="$WORK_DIR/go-mod-cache"
+# Module archives are verified against the upstream go.sum on every build.
+# Keep that verified cache outside the disposable source tree so a local
+# rebuild after changing only NekoPilot's wrapper does not redownload the
+# entire sing-box dependency graph.
+GO_MODULE_CACHE=${NEKOPILOT_GO_MODULE_CACHE:-"$(go env GOMODCACHE)"}
 mkdir -p "$SOURCE_PARENT"
 
 echo "[sing-box-build] Downloading SagerNet/sing-box $SING_BOX_COMMIT"
@@ -108,6 +116,8 @@ tar -xzf "$ARCHIVE" -C "$SOURCE_PARENT"
 SOURCE_ROOT=$(find "$SOURCE_PARENT" -mindepth 1 -maxdepth 1 -type d -print -quit)
 [[ -n "$SOURCE_ROOT" && -f "$SOURCE_ROOT/go.mod" ]] || fail "Downloaded archive has no sing-box source root"
 grep -Fxq "module github.com/sagernet/sing-box" "$SOURCE_ROOT/go.mod" || fail "Unexpected Go module in source archive"
+mkdir -p "$SOURCE_ROOT/cmd/nekopilot-core"
+install -m 0644 "$NATIVE_DIR/CoreCommand/main.go" "$SOURCE_ROOT/cmd/nekopilot-core/main.go"
 
 build_once() {
   local destination=$1
@@ -125,10 +135,14 @@ build_once() {
     export GOWORK=off
     export GOCACHE="$build_cache"
     export GOMODCACHE="$GO_MODULE_CACHE"
+    # proxy.golang.org is not reachable on a number of Chinese networks.
+    # Use a module mirror for transport only; the pinned upstream source's
+    # go.sum still verifies every downloaded archive before it is compiled.
+    export GOPROXY="https://goproxy.cn,direct"
     export GONOPROXY=""
-    export GONOSUMDB=""
+    export GONOSUMDB="*"
     export GOPRIVATE=""
-    export GOSUMDB=sum.golang.org
+    export GOSUMDB=off
     export LC_ALL=C
     export MACOSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET"
     export SDKROOT
@@ -140,9 +154,9 @@ build_once() {
       -buildvcs=false \
       -trimpath \
       -tags "$BUILD_TAGS" \
-      -ldflags "$LDFLAGS" \
+      -ldflags "$CORE_LDFLAGS" \
       -o "$destination" \
-      ./cmd/sing-box
+      ./cmd/nekopilot-core
   )
   chmod 0755 "$destination"
   validate_binary "$destination"

@@ -71,6 +71,19 @@ struct ProxyLinkParserTests {
         }
     }
 
+    @Test("Hysteria2 preserves Gecko packet bounds")
+    func hysteria2GeckoPacketBounds() throws {
+        let outbound = try firstOutbound(
+            "hysteria2://secret@example.com:443?obfs=gecko&obfs-password=mask&obfs-min-packet-size=640&obfs-max-packet-size=1400#Gecko"
+        )
+
+        let obfs = try #require(outbound["obfs"]?.objectValue)
+        #expect(obfs["type"]?.stringValue == "gecko")
+        #expect(obfs["password"]?.stringValue == "mask")
+        #expect(obfs["min_packet_size"]?.numberValue == 640)
+        #expect(obfs["max_packet_size"]?.numberValue == 1_400)
+    }
+
     private func firstOutbound(_ link: String) throws -> [String: JSONValue] {
         let config = try ProxyLinkParser.parse(link)
         return try #require(config["outbounds"]?.arrayValue?.first?.objectValue)

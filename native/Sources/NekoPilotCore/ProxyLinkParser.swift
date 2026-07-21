@@ -83,12 +83,25 @@ public enum ProxyLinkParser {
             if let password = parts.query["obfs-password"] ?? parts.query["obfsPassword"] {
                 obfsObject["password"] = .string(password)
             }
+            if obfs == "gecko" {
+                if let minimum = packetSize(parts.query["obfs-min-packet-size"] ?? parts.query["obfsMinPacketSize"]) {
+                    obfsObject["min_packet_size"] = .number(Double(minimum))
+                }
+                if let maximum = packetSize(parts.query["obfs-max-packet-size"] ?? parts.query["obfsMaxPacketSize"]) {
+                    obfsObject["max_packet_size"] = .number(Double(maximum))
+                }
+            }
             outbound["obfs"] = .object(obfsObject)
         }
         var query = parts.query
         query["security"] = "tls"
         try addTLS(&outbound, query: query, server: parts.host, defaultEnabled: true)
         return outbound
+    }
+
+    private static func packetSize(_ value: String?) -> Int? {
+        guard let value, let size = Int(value), (64 ... 65_535).contains(size) else { return nil }
+        return size
     }
 
     private static func parseTUIC(_ link: String) throws -> [String: JSONValue] {

@@ -112,13 +112,6 @@ public struct DelayRecord: Codable, Equatable, Sendable {
     }
 }
 
-public struct TrafficSnapshot: Equatable, Sendable {
-    public let upload: Int64
-    public let download: Int64
-
-    public static let zero = TrafficSnapshot(upload: 0, download: 0)
-}
-
 public enum NekoPilotError: LocalizedError, Equatable {
     case noNodes
     case nodeNotFound

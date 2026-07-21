@@ -18,15 +18,13 @@ public actor ConfigurationCompiler {
         let port = await settings.proxyPort()
         let allowLAN = await settings.bool(SettingsStore.Key.allowLAN)
         let dns = await settings.string(SettingsStore.Key.directDNS, default: DNSResolverDetector.fallback)
-        let secret = try await settings.clashSecret()
         let rules = await settings.rules()
         try installRuleSetBaseline()
         configureRuntime(
             config: &config,
             proxyPort: port,
             allowLAN: allowLAN,
-            directDNS: dns,
-            clashSecret: secret
+            directDNS: dns
         )
         injectRules(rules, into: &config)
         let sources = try await repository.configObjects()
@@ -36,19 +34,11 @@ public actor ConfigurationCompiler {
     }
 
     public func makeOfflineTestConfiguration(
-        selectedNode: String?,
-        controllerPort: Int,
-        secret: String
+        selectedNode: String?
     ) async throws -> URL {
         _ = try await compile(selectedNode: selectedNode)
         var config = try JSONValue.decodeObject(from: Data(contentsOf: paths.runtimeConfig))
         config.removeValue(forKey: "inbounds")
-        config["experimental"] = .object([
-            "clash_api": .object([
-                "external_controller": .string("127.0.0.1:\(controllerPort)"),
-                "secret": .string(secret),
-            ]),
-        ])
         if var log = config["log"]?.objectValue {
             log["disabled"] = .bool(true)
             config["log"] = .object(log)
@@ -72,8 +62,7 @@ public actor ConfigurationCompiler {
         config: inout [String: JSONValue],
         proxyPort: Int,
         allowLAN: Bool,
-        directDNS: String,
-        clashSecret: String
+        directDNS: String
     ) {
         config["log"] = .object([
             // Connection-level INFO output is extremely chatty and duplicates
@@ -82,14 +71,10 @@ public actor ConfigurationCompiler {
             "disabled": .bool(false), "level": .string("warn"), "timestamp": .bool(true),
         ])
         var experimental = config["experimental"]?.objectValue ?? [:]
-        experimental["clash_api"] = .object([
-            "external_controller": .string("127.0.0.1:\(SettingsStore.clashAPIPort)"),
-            "secret": .string(clashSecret),
-        ])
         experimental["cache_file"] = .object([
             "enabled": .bool(true),
             "store_fakeip": .bool(true),
-            "store_rdrc": .bool(true),
+            "store_dns": .bool(true),
             "path": .string(paths.cacheDatabase.path),
         ])
         config["experimental"] = .object(experimental)
@@ -124,6 +109,7 @@ public actor ConfigurationCompiler {
            var ruleSets = route["rule_set"]?.arrayValue {
             ruleSets = ruleSets.map { value in
                 guard var ruleSet = value.objectValue,
+                      ruleSet["type"]?.stringValue == "local",
                       let tag = ruleSet["tag"]?.stringValue else { return value }
                 let file: URL?
                 switch tag {
@@ -132,9 +118,8 @@ public actor ConfigurationCompiler {
                 default: file = nil
                 }
                 guard let file else { return value }
-                ruleSet.removeValue(forKey: "url")
-                ruleSet["type"] = .string("local")
-                ruleSet["format"] = .string("binary")
+                // The template already declares standard local binary rule
+                // sets. Only the per-install absolute asset path is dynamic.
                 ruleSet["path"] = .string(file.path)
                 return .object(ruleSet)
             }
@@ -216,7 +201,9 @@ public actor ConfigurationCompiler {
             throw NekoPilotError.processFailed("内置配置缺少节点选择器")
         }
         selector["outbounds"] = .array(nodes.compactMap { $0["tag"]?.stringValue }.map(JSONValue.string))
-        selector["interrupt_exist_connections"] = .bool(true)
+        // Keep established sessions on their existing path when automatic
+        // selection picks a faster node; only new connections use it.
+        selector.removeValue(forKey: "interrupt_exist_connections")
         outbounds[selectorIndex] = .object(selector)
         outbounds.append(contentsOf: nodes.map(JSONValue.object))
         config["outbounds"] = .array(outbounds)

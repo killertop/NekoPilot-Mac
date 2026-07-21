@@ -4,83 +4,100 @@ import Foundation
 public typealias URLTestProgressHandler = @Sendable (String, DelayRecord) async -> Void
 
 public actor URLTester {
-    // GStatic's empty 204 endpoint avoids redirects and proved substantially
-    // more reliable than Cloudflare's captive-portal endpoint with the same
-    // real nodes on macOS. The result is URL Test RTT, not a raw TCP ping.
+    // This is a sing-box URL Test RTT, rather than a TCP handshake time.
     public static let testURL = "https://www.gstatic.com/generate_204"
-    public static let timeoutMilliseconds = 3_000
     private let compiler: ConfigurationCompiler
-    private let clashAPI: ClashAPIClient
+    private let nativeAPI: NativeControlClient
+    private let paths: AppPaths
 
-    public init(compiler: ConfigurationCompiler, clashAPI: ClashAPIClient) {
+    public init(compiler: ConfigurationCompiler, nativeAPI: NativeControlClient, paths: AppPaths) {
         self.compiler = compiler
-        self.clashAPI = clashAPI
+        self.nativeAPI = nativeAPI
+        self.paths = paths
     }
 
     public func test(
         nodes: [ProxyNode],
         engineRunning: Bool,
-        maximumConcurrency: Int = 3,
+        maximumConcurrency _: Int = 3,
         onResult: URLTestProgressHandler? = nil
     ) async -> [String: DelayRecord] {
         guard !nodes.isEmpty else { return [:] }
         if engineRunning {
-            return await concurrentTest(nodes: nodes, maximumConcurrency: maximumConcurrency, onResult: onResult) { node in
-                await self.clashAPI.delay(
-                    node: node.runtimeTag,
-                    testURL: Self.testURL,
-                    timeoutMilliseconds: Self.timeoutMilliseconds
-                )
-            }
+            return await test(client: nativeAPI, nodes: nodes, onResult: onResult)
         }
-        guard let port = Self.availableLoopbackPort(),
+
+        guard let config = try? await compiler.makeOfflineTestConfiguration(selectedNode: nodes.first?.runtimeTag),
               let executable = try? SingBoxLocator.executable() else {
-            return Dictionary(uniqueKeysWithValues: nodes.map { ($0.runtimeTag, DelayRecord(delay: nil)) })
+            return unavailable(nodes)
         }
-        let secret = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
-        guard let config = try? await compiler.makeOfflineTestConfiguration(
-            selectedNode: nodes.first?.runtimeTag,
-            controllerPort: port,
-            secret: secret
-        ) else {
-            return Dictionary(uniqueKeysWithValues: nodes.map { ($0.runtimeTag, DelayRecord(delay: nil)) })
-        }
+        let temporaryDirectory = config.deletingLastPathComponent()
+        let temporaryPaths = AppPaths(applicationSupport: temporaryDirectory, logs: temporaryDirectory)
+        let client = NativeControlClient(paths: temporaryPaths)
         let process = Process()
         process.executableURL = executable
-        process.arguments = ["run", "-c", config.path, "--disable-color"]
-        process.currentDirectoryURL = config.deletingLastPathComponent()
+        process.arguments = ["run", "-c", config.path, "--api-socket", temporaryPaths.nativeAPISocket.path, "--disable-color"]
+        process.currentDirectoryURL = temporaryDirectory
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         do {
             try process.run()
             _ = setpgid(process.processIdentifier, process.processIdentifier)
         } catch {
-            try? FileManager.default.removeItem(at: config.deletingLastPathComponent())
-            return Dictionary(uniqueKeysWithValues: nodes.map { ($0.runtimeTag, DelayRecord(delay: nil)) })
+            try? FileManager.default.removeItem(at: temporaryDirectory)
+            return unavailable(nodes)
         }
 
-        let client = ClashAPIClient(controllerPort: port, secret: secret)
-        return await withTaskCancellationHandler {
-            defer {
-                Self.stop(process)
-                try? FileManager.default.removeItem(at: config.deletingLastPathComponent())
-            }
-            guard await Self.waitUntilReady(client: client, process: process) else {
-                return Dictionary(uniqueKeysWithValues: nodes.map { ($0.runtimeTag, DelayRecord(delay: nil)) })
-            }
-            return await concurrentTest(nodes: nodes, maximumConcurrency: maximumConcurrency, onResult: onResult) { node in
-                await client.delay(
-                    node: node.runtimeTag,
-                    testURL: Self.testURL,
-                    timeoutMilliseconds: Self.timeoutMilliseconds
-                )
-            }
-        } onCancel: {
+        defer {
             Self.stop(process)
+            if ProcessInfo.processInfo.environment["NEKOPILOT_KEEP_VALIDATION"] != "1" {
+                try? FileManager.default.removeItem(at: temporaryDirectory)
+            }
         }
+        guard await Self.waitUntilReady(client: client, process: process) else {
+            AppLogger.shared.warning("offline URL Test core did not become ready")
+            return unavailable(nodes)
+        }
+        return await test(client: client, nodes: nodes, onResult: onResult)
     }
 
-    private static func waitUntilReady(client: ClashAPIClient, process: Process) async -> Bool {
+    private func test(
+        client: NativeControlClient,
+        nodes: [ProxyNode],
+        onResult: URLTestProgressHandler?
+    ) async -> [String: DelayRecord] {
+        let startedAt = Date()
+        guard (try? await client.runURLTest()) != nil else { return unavailable(nodes) }
+        var results: [String: DelayRecord] = [:]
+        for _ in 0 ..< 35 where !Task.isCancelled {
+            do {
+                let current = try await client.delayResults(nodes: nodes.map(\.runtimeTag))
+                for node in nodes {
+                    guard let result = current[node.runtimeTag] else { continue }
+                    if result.measuredAt >= startedAt.addingTimeInterval(-1), results[node.runtimeTag] != result {
+                        results[node.runtimeTag] = result
+                        if let onResult { await onResult(node.runtimeTag, result) }
+                    }
+                }
+            } catch {
+                AppLogger.shared.warning("native URL Test status read failed: \(error.localizedDescription)")
+            }
+            if results.count == nodes.count { break }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        for node in nodes where results[node.runtimeTag] == nil {
+            let result = DelayRecord(delay: nil)
+            results[node.runtimeTag] = result
+            if let onResult { await onResult(node.runtimeTag, result) }
+        }
+        return results
+    }
+
+    private func unavailable(_ nodes: [ProxyNode]) -> [String: DelayRecord] {
+        Dictionary(uniqueKeysWithValues: nodes.map { ($0.runtimeTag, DelayRecord(delay: nil)) })
+    }
+
+    private static func waitUntilReady(client: NativeControlClient, process: Process) async -> Bool {
         for _ in 0 ..< 50 {
             guard process.isRunning, !Task.isCancelled else { return false }
             if await client.isReady() { return true }
@@ -95,56 +112,5 @@ public actor URLTester {
         if kill(-pid, SIGTERM) != 0 { kill(pid, SIGTERM) }
         for _ in 0 ..< 10 where process.isRunning { usleep(50_000) }
         if process.isRunning, kill(-pid, SIGKILL) != 0 { kill(pid, SIGKILL) }
-    }
-
-    private static func availableLoopbackPort() -> Int? {
-        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
-        guard descriptor >= 0 else { return nil }
-        defer { close(descriptor) }
-        var address = sockaddr_in()
-        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = 0
-        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
-        let didBind = withUnsafePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-        guard didBind == 0 else { return nil }
-        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-        let didRead = withUnsafeMutablePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                getsockname(descriptor, $0, &length)
-            }
-        }
-        guard didRead == 0 else { return nil }
-        return Int(UInt16(bigEndian: address.sin_port))
-    }
-
-    private func concurrentTest(
-        nodes: [ProxyNode],
-        maximumConcurrency: Int,
-        onResult: URLTestProgressHandler?,
-        operation: @escaping @Sendable (ProxyNode) async -> Int?
-    ) async -> [String: DelayRecord] {
-        let limit = max(1, min(maximumConcurrency, nodes.count))
-        return await withTaskGroup(of: (String, DelayRecord).self) { group in
-            var iterator = nodes.makeIterator()
-            for _ in 0 ..< limit {
-                if let node = iterator.next() {
-                    group.addTask { (node.runtimeTag, DelayRecord(delay: await operation(node))) }
-                }
-            }
-            var result: [String: DelayRecord] = [:]
-            while let value = await group.next() {
-                result[value.0] = value.1
-                if !Task.isCancelled { await onResult?(value.0, value.1) }
-                if let node = iterator.next() {
-                    group.addTask { (node.runtimeTag, DelayRecord(delay: await operation(node))) }
-                }
-            }
-            return result
-        }
     }
 }

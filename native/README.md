@@ -4,7 +4,7 @@ This directory is the production implementation.
 
 - SwiftUI renders Home, Nodes, Rules, and Settings.
 - AppKit owns the single menu-bar item, window lifecycle, deep links, sleep/wake, and termination handshake.
-- Swift actors own SQLite persistence, process supervision, system-proxy ownership, and the Clash control API.
+- Swift actors own SQLite persistence, process supervision, system-proxy ownership, and native gRPC control.
 - The unmodified Go sing-box executable is the only protocol, routing, DNS, and URL-test engine.
 
 The bundle identifier remains `dev.nekopilot.desktop`; existing data is read from:
@@ -23,7 +23,7 @@ swift run --package-path native NekoPilotCoreChecks
 
 ## Pinned sing-box core
 
-`scripts/build-sing-box-macos-arm64.sh` downloads the archive for the pinned upstream commit, verifies the archive SHA-256, requires the exact Go and macOS SDK versions, builds upstream `./cmd/sing-box` with the upstream release tags in isolated Go caches, and rejects any binary whose `LC_BUILD_VERSION` requires newer than macOS 13.0.
+`scripts/build-sing-box-macos-arm64.sh` downloads the archive for the pinned upstream commit, verifies the archive SHA-256, requires the exact Go and macOS SDK versions, builds the upstream core with NekoPilot's minimal `StartedService` gRPC host, and rejects any binary whose `LC_BUILD_VERSION` requires newer than macOS 13.0. The host exposes official sing-box gRPC on a user-private Unix socket; it is not an HTTP Clash controller and contains no proxy implementation.
 
 CI builds the core twice from the same inputs and requires identical hashes. No forked Go proxy implementation or prebuilt sidecar is accepted as a Release input.
 
@@ -32,6 +32,10 @@ native/scripts/build-sing-box-macos-arm64.sh
 ```
 
 Set `NEKOPILOT_VERIFY_REPRODUCIBLE=1` to run the same double-build check locally.
+
+## China rule sets
+
+`Resources/rules/geoip-cn.srs` and `Resources/rules/geosite-cn.srs` are standard local sing-box binary rule sets. They are bundled for offline startup, loaded directly by the runtime configuration, and refreshed every seven days only after the downloaded candidate passes native sing-box validation. Updates are atomically promoted, so a failed refresh leaves the active assets unchanged.
 
 ## Apple Silicon package
 

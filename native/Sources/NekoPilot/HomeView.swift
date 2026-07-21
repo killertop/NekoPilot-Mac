@@ -17,10 +17,6 @@ struct HomeView: View {
                 nodesSection
                     .padding(.top, 17)
 
-                if model.status.isRunning {
-                    TrafficRow(state: model.trafficState)
-                        .padding(.top, 14)
-                }
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 20)
@@ -245,20 +241,4 @@ struct HomeView: View {
         return formatter
     }()
 
-}
-
-private struct TrafficRow: View {
-    @ObservedObject var state: TrafficState
-
-    var body: some View {
-        HStack(spacing: 14) {
-            Text("↑ \(formattedBytesPerSecond(state.snapshot.upload))")
-                .frame(width: 96, alignment: .trailing)
-            Text("↓ \(formattedBytesPerSecond(state.snapshot.download))")
-                .frame(width: 96, alignment: .leading)
-        }
-        .font(.system(size: 12, weight: .regular, design: .monospaced))
-        .foregroundStyle(.secondary)
-        .frame(maxWidth: .infinity)
-    }
 }

@@ -10,8 +10,8 @@ The application is split into a native control plane and an upstream proxy data 
 SwiftUI views
     ↓ user intent and observable state
 AppKit + Swift control plane
-    ↓ generated configuration, process lifecycle, SIGHUP, Clash API
-unmodified upstream Go sing-box
+    ↓ generated configuration, process lifecycle, private Unix gRPC
+upstream Go sing-box plus a thin NekoPilot gRPC host
     ↓
 network protocols, routing, DNS, URL Test
 ```
@@ -32,7 +32,7 @@ Swift actors form the application control plane and own:
 - sing-box configuration generation and validation;
 - system-proxy ownership, safe restore, and crash markers;
 - sing-box process supervision and bounded network-readiness retry;
-- Clash API control, node selection, traffic state, and delay-history persistence.
+- native gRPC control, node selection, traffic state, and delay-history persistence.
 
 Swift does not implement a proxy transport, packet tunnel, routing engine, DNS engine, or URL Test algorithm.
 
@@ -45,9 +45,11 @@ sing-box exclusively owns:
 - VLESS, Trojan, VMess, Shadowsocks, AnyTLS, Hysteria2, TUIC, and other supported transports;
 - outbound routing and route-rule execution;
 - DNS resolution and DNS routing;
-- URL Test execution and Clash-compatible runtime control.
+- URL Test execution and runtime state.
 
-NekoPilot communicates with sing-box through generated JSON configuration, process signals, and its authenticated local Clash API. No forked proxy engine or downloaded prebuilt executable is accepted as a Release input.
+NekoPilot communicates with sing-box through generated JSON configuration and the official `StartedService` gRPC interface over a per-user Unix socket (mode `0600`). There is no HTTP controller, controller port, API secret, or Clash service. The small Go host only exposes the required upstream lifecycle, selector, and URL Test calls; it does not implement any proxy protocol or routing logic.
+
+China routing uses only standard local binary `rule_set` assets: bundled `geoip-cn.srs` and `geosite-cn.srs` provide an offline baseline; a seven-day updater downloads, validates with the embedded sing-box checker, then atomically replaces both assets. The runtime configuration always loads those local files and never needs to fetch route sets at startup.
 
 ## Explicitly unsupported architecture
 
