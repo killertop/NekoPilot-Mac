@@ -13,8 +13,6 @@ public enum URLTestExecution: Sendable {
 }
 
 public actor URLTester {
-    // This is a sing-box URL Test RTT, rather than a TCP handshake time.
-    public static let testURL = "https://www.gstatic.com/generate_204"
     private static let nativeBatchSize = 10
     private static let maximumOfflineWorkers = 4
     private static let pollInterval: UInt64 = 200_000_000
