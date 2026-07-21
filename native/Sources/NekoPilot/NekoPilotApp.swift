@@ -19,7 +19,7 @@ struct NekoPilotApp: App {
             }
         }
         .defaultSize(width: 371, height: 600)
-        .windowResizability(.contentMinSize)
+        .windowResizability(.contentSize)
         .commands {
             CommandGroup(replacing: .newItem) { }
             CommandGroup(replacing: .appTermination) {

@@ -9,53 +9,56 @@ struct NodeManagementView: View {
     @State private var editTarget: NekoPilotCore.Subscription?
     @State private var detailTarget: NekoPilotCore.Subscription?
     @State private var refreshErrorTarget: NekoPilotCore.Subscription?
+    @State private var deleteTarget: NekoPilotCore.Subscription?
 
     var body: some View {
-        ScrollView(showsIndicators: false) {
-            LazyVStack(spacing: 14) {
-                if model.subscriptions.isEmpty {
-                    EmptyStateView(
-                        icon: "tray",
-                        title: L10n.text("没有节点来源", "No Node Sources"),
-                        message: L10n.text("支持机场订阅 URL 和 VLESS、AnyTLS 等单节点链接", "Add a subscription URL or a VLESS/AnyTLS link")
-                    )
-                    .padding(.vertical, 32)
-                } else {
-                    SectionTitle(L10n.text("节点来源", "Node Sources")) {
-                        HStack(spacing: 12) {
-                            if model.subscriptions.contains(where: { $0.sourceType == .subscription }) {
-                                Button {
-                                    Task { await model.refreshAllSubscriptions() }
-                                } label: {
-                                    HStack(spacing: 5) {
-                                        if model.isRefreshingAllSubscriptions {
-                                            ProgressView().controlSize(.mini)
-                                        } else {
-                                            Image(systemName: "arrow.clockwise")
+        TimelineView(.periodic(from: Date(), by: 60)) { context in
+            ScrollView {
+                LazyVStack(spacing: 14) {
+                    if model.subscriptions.isEmpty {
+                        EmptyStateView(
+                            icon: "tray",
+                            title: L10n.text("没有节点来源", "No Node Sources"),
+                            message: L10n.text("支持机场订阅 URL 和 VLESS、AnyTLS 等单节点链接", "Add a subscription URL or a VLESS/AnyTLS link")
+                        )
+                        .padding(.vertical, 32)
+                    } else {
+                        SectionTitle(L10n.text("节点来源", "Node Sources")) {
+                            HStack(spacing: 12) {
+                                if model.subscriptions.contains(where: { $0.sourceType == .subscription }) {
+                                    Button {
+                                        Task { await model.refreshAllSubscriptions() }
+                                    } label: {
+                                        HStack(spacing: 5) {
+                                            if model.isRefreshingAllSubscriptions {
+                                                ProgressView().controlSize(.mini)
+                                            } else {
+                                                Image(systemName: "arrow.clockwise")
+                                            }
+                                            Text(model.isRefreshingAllSubscriptions ? L10n.text("正在更新", "Updating") : L10n.text("更新全部", "Update All"))
                                         }
-                                        Text(model.isRefreshingAllSubscriptions ? L10n.text("正在更新", "Updating") : L10n.text("更新全部", "Update All"))
+                                        .font(AppTypography.bodyEmphasized)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(Color.accentColor)
+                                    .disabled(model.isRefreshingAllSubscriptions || !model.refreshingSubscriptionIDs.isEmpty)
                                 }
-                                    .font(AppTypography.bodyEmphasized)
-                                }
-                                .buttonStyle(.plain)
-                                .foregroundStyle(Color.accentColor)
-                                .disabled(model.isRefreshingAllSubscriptions || !model.refreshingSubscriptionIDs.isEmpty)
-                            }
 
-                            addNodeHeaderButton
+                                addNodeHeaderButton
+                            }
                         }
+
+                        sourceList(now: context.date)
                     }
 
-                    sourceList
+                    if model.subscriptions.isEmpty { addNodeButton }
                 }
-
-                if model.subscriptions.isEmpty { addNodeButton }
+                .padding(.horizontal, AppVisual.pageHorizontalPadding)
+                .padding(.top, AppVisual.pageTopPadding)
+                .padding(.bottom, AppVisual.pageBottomPadding)
+                .frame(maxWidth: AppVisual.pageMaximumWidth)
+                .frame(maxWidth: .infinity)
             }
-            .padding(.horizontal, AppVisual.pageHorizontalPadding)
-            .padding(.top, AppVisual.pageTopPadding)
-            .padding(.bottom, AppVisual.pageBottomPadding)
-            .frame(maxWidth: AppVisual.pageMaximumWidth)
-            .frame(maxWidth: .infinity)
         }
         .sheet(isPresented: $showingAdd) {
             AddNodeSheet(model: model, isPresented: $showingAdd)
@@ -86,6 +89,28 @@ struct NodeManagementView: View {
                 )
             )
         }
+        .alert(
+            L10n.text("删除节点来源？", "Delete Node Source?"),
+            isPresented: Binding(
+                get: { deleteTarget != nil },
+                set: { if !$0 { deleteTarget = nil } }
+            ),
+            presenting: deleteTarget
+        ) { target in
+            Button(L10n.text("取消", "Cancel"), role: .cancel) {
+                deleteTarget = nil
+            }
+            Button(L10n.text("删除", "Delete"), role: .destructive) {
+                deleteTarget = nil
+                Task { await model.delete(target) }
+            }
+        } message: { target in
+            let count = model.nodeCountsBySource[target.identifier, default: 0]
+            Text(L10n.text(
+                "将删除“\(target.name.isEmpty ? target.identifier : target.name)”及其 \(count) 个节点，此操作无法撤销。",
+                "This removes “\(target.name.isEmpty ? target.identifier : target.name)” and its \(count) node(s). This cannot be undone."
+            ))
+        }
     }
 
     private var addNodeButton: some View {
@@ -114,10 +139,10 @@ struct NodeManagementView: View {
         .accessibilityLabel(L10n.text("添加节点", "Add Node"))
     }
 
-    private var sourceList: some View {
+    private func sourceList(now: Date) -> some View {
         LazyVStack(spacing: 0) {
             ForEach(model.subscriptions) { subscription in
-                sourceRow(subscription)
+                sourceRow(subscription, now: now)
                 if subscription.id != model.subscriptions.last?.id { AppDivider(leading: 64) }
             }
         }
@@ -130,7 +155,7 @@ struct NodeManagementView: View {
         .shadow(color: AppVisual.cardShadow(colorScheme), radius: 2, y: 1)
     }
 
-    private func sourceRow(_ subscription: NekoPilotCore.Subscription) -> some View {
+    private func sourceRow(_ subscription: NekoPilotCore.Subscription, now: Date) -> some View {
         HStack(spacing: 10) {
             Button { detailTarget = subscription } label: {
                 HStack(spacing: 12) {
@@ -148,7 +173,7 @@ struct NodeManagementView: View {
                             .font(AppTypography.rowTitle)
                             .foregroundStyle(.primary)
                             .lineLimit(1)
-                        Text(sourceSubtitle(subscription))
+                        Text(sourceSubtitle(subscription, now: now))
                             .font(AppTypography.secondary)
                             .foregroundStyle(sourceSubtitleColor(subscription))
                             .lineLimit(1)
@@ -177,6 +202,10 @@ struct NodeManagementView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(model.isRefreshingAllSubscriptions || model.refreshingSubscriptionIDs.contains(subscription.identifier))
+                .accessibilityLabel(L10n.text(
+                    "更新 \(subscription.name.isEmpty ? subscription.identifier : subscription.name)",
+                    "Update \(subscription.name.isEmpty ? subscription.identifier : subscription.name)"
+                ))
             }
 
             if model.subscriptionRefreshErrors[subscription.identifier] != nil {
@@ -195,21 +224,18 @@ struct NodeManagementView: View {
 
             Menu {
                 Button {
-                    detailTarget = subscription
-                } label: {
-                    Label(L10n.text("详情", "Details"), systemImage: "info.circle")
-                }
-                Button {
                     editTarget = subscription
                 } label: {
                     Label(L10n.text("编辑", "Edit"), systemImage: "pencil")
                 }
+                .disabled(model.isRefreshingAllSubscriptions || model.refreshingSubscriptionIDs.contains(subscription.identifier))
                 Divider()
                 Button(role: .destructive) {
-                    Task { await model.delete(subscription) }
+                    deleteTarget = subscription
                 } label: {
                     Label(L10n.text("删除", "Delete"), systemImage: "trash")
                 }
+                .disabled(model.isRefreshingAllSubscriptions || model.refreshingSubscriptionIDs.contains(subscription.identifier))
             } label: {
                 Image(systemName: "slider.horizontal.3")
                     .font(.system(size: 13, weight: .medium))
@@ -232,7 +258,7 @@ struct NodeManagementView: View {
         .frame(minHeight: 62)
     }
 
-    private func sourceSubtitle(_ subscription: NekoPilotCore.Subscription) -> String {
+    private func sourceSubtitle(_ subscription: NekoPilotCore.Subscription, now: Date) -> String {
         if model.subscriptionRefreshErrors[subscription.identifier] != nil {
             return L10n.text("更新失败", "Update failed")
         }
@@ -240,7 +266,7 @@ struct NodeManagementView: View {
         if subscription.sourceType == .localLink {
             return L10n.text("本地节点，不自动更新", "Local node, no automatic updates")
         }
-        let time = Self.relativeDateFormatter.localizedString(for: subscription.lastUpdateTime, relativeTo: Date())
+        let time = Self.relativeDateFormatter.localizedString(for: subscription.lastUpdateTime, relativeTo: now)
         return L10n.text("\(count) 个节点 · 更新于 \(time)", "\(count) node(s) · updated \(time)")
     }
 
@@ -334,6 +360,7 @@ private struct AddNodeSheet: View {
     @State private var input = ""
     @State private var name = ""
     @State private var importing = false
+    @FocusState private var inputFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -352,6 +379,7 @@ private struct AddNodeSheet: View {
                 .textFieldStyle(.roundedBorder)
             TextEditor(text: $input)
                 .font(AppTypography.monoBody)
+                .focused($inputFocused)
                 .frame(minHeight: 120)
                 .padding(8)
                 .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
@@ -376,6 +404,7 @@ private struct AddNodeSheet: View {
         }
         .padding(AppVisual.sheetPadding)
         .frame(width: AppVisual.sheetWidth)
+        .onAppear { inputFocused = true }
     }
 }
 
@@ -386,6 +415,7 @@ private struct EditSourceSheet: View {
     @State private var name: String
     @State private var input: String
     @State private var saving = false
+    @FocusState private var nameFocused: Bool
 
     init(model: AppModel, subscription: NekoPilotCore.Subscription, isPresented: Binding<Bool>) {
         self.model = model
@@ -411,7 +441,9 @@ private struct EditSourceSheet: View {
             )
             .font(AppTypography.body)
             .foregroundStyle(.secondary)
-            TextField(L10n.text("名称", "Name"), text: $name).textFieldStyle(.roundedBorder)
+            TextField(L10n.text("名称", "Name"), text: $name)
+                .textFieldStyle(.roundedBorder)
+                .focused($nameFocused)
             TextEditor(text: $input)
                 .font(AppTypography.monoBody)
                 .frame(minHeight: 110)
@@ -441,6 +473,7 @@ private struct EditSourceSheet: View {
         }
         .padding(AppVisual.sheetPadding)
         .frame(width: AppVisual.sheetWidth)
+        .onAppear { nameFocused = true }
     }
 }
 
@@ -475,7 +508,7 @@ private struct SourceDetailSheet: View {
                 .padding(.top, 18)
                 .padding(.bottom, 14)
 
-                ScrollView(showsIndicators: false) {
+                ScrollView {
                     VStack(spacing: 14) {
                         AppCard {
                             VStack(spacing: 0) {

@@ -9,7 +9,9 @@ final class StatusItemController: NSObject {
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
     private let toggleItem = NSMenuItem()
+    private let copyItem = NSMenuItem()
     private var cancellables = Set<AnyCancellable>()
+    private var copyFeedbackTask: Task<Void, Never>?
     private lazy var baseTemplateImage = loadTemplateImage()
 
     init(model: AppModel) {
@@ -26,6 +28,8 @@ final class StatusItemController: NSObject {
     }
 
     func remove() {
+        copyFeedbackTask?.cancel()
+        copyFeedbackTask = nil
         cancellables.removeAll()
         statusItem.menu = nil
         NSStatusBar.system.removeStatusItem(statusItem)
@@ -39,9 +43,10 @@ final class StatusItemController: NSObject {
         toggleItem.action = #selector(toggleConnection)
         menu.addItem(toggleItem)
         menu.addItem(.separator())
-        let copy = NSMenuItem(title: L10n.copyProxyEnvironment, action: #selector(copyEnvironment), keyEquivalent: "")
-        copy.target = self
-        menu.addItem(copy)
+        copyItem.title = L10n.copyProxyEnvironment
+        copyItem.action = #selector(copyEnvironment)
+        copyItem.target = self
+        menu.addItem(copyItem)
         menu.addItem(.separator())
         let quit = NSMenuItem(title: L10n.quit, action: #selector(quit), keyEquivalent: "q")
         quit.target = self
@@ -74,7 +79,8 @@ final class StatusItemController: NSObject {
         }
         statusItem.button?.image = statusImage(dotColor: dotColor)
         statusItem.button?.contentTintColor = nil
-        statusItem.button?.toolTip = "NekoPilot"
+        statusItem.button?.toolTip = "NekoPilot · \(status.localizedTitle)"
+        copyItem.isEnabled = status.isRunning
     }
 
     private func loadTemplateImage() -> NSImage? {
@@ -140,6 +146,14 @@ final class StatusItemController: NSObject {
         """
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(value, forType: .string)
+        copyFeedbackTask?.cancel()
+        copyItem.title = L10n.text("已复制", "Copied")
+        copyFeedbackTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard !Task.isCancelled else { return }
+            self?.copyItem.title = L10n.copyProxyEnvironment
+            self?.copyFeedbackTask = nil
+        }
     }
 
     @objc private func quit() {

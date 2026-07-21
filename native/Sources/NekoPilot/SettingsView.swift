@@ -10,7 +10,7 @@ struct SettingsView: View {
     @State private var showingUserAgent = false
 
     var body: some View {
-        ScrollView(showsIndicators: false) {
+        ScrollView {
             LazyVStack(spacing: 16) {
                 primaryCard
                 secondaryCard
@@ -69,14 +69,14 @@ struct SettingsView: View {
                 AppDivider(leading: 52)
                 toggleRow(
                     icon: "power",
-                    iconColor: .orange,
+                    iconColor: .secondary,
                     title: L10n.text("开机启动", "Launch at Login"),
                     value: Binding(get: { login.enabled }, set: { login.setEnabled($0) })
                 )
                 AppDivider(leading: 52)
                 toggleRow(
                     icon: "wifi.router",
-                    iconColor: .purple,
+                    iconColor: .orange,
                     title: L10n.text("局域网连接", "LAN Connections"),
                     subtitle: L10n.text("让同一局域网设备使用本机代理", "Let LAN devices use this proxy"),
                     value: Binding(
@@ -88,7 +88,7 @@ struct SettingsView: View {
                 Button { showingPort = true } label: {
                     settingRow(
                         icon: "cable.connector",
-                        iconColor: .orange,
+                        iconColor: .accentColor,
                         title: L10n.text("代理端口", "Proxy Port"),
                         subtitle: L10n.text("HTTP/SOCKS 混合入站端口", "Mixed HTTP/SOCKS inbound port"),
                         trailing: "\(model.proxyPort)",
@@ -106,7 +106,7 @@ struct SettingsView: View {
                 Button { showingDirectDNS = true } label: {
                     settingRow(
                         icon: "server.rack",
-                        iconColor: .teal,
+                        iconColor: .accentColor,
                         title: L10n.text("直连 DNS", "Direct DNS"),
                         subtitle: L10n.text("打开直连 DNS 设置", "Open direct DNS settings"),
                         chevron: true
@@ -116,7 +116,7 @@ struct SettingsView: View {
                 AppDivider(leading: 52)
                 toggleRow(
                     icon: "tag",
-                    iconColor: .purple,
+                    iconColor: .accentColor,
                     title: L10n.text("显示协议类型", "Show Protocol Type"),
                     subtitle: L10n.text("在节点列表中显示每个节点的协议类型", "Show protocol labels in the node list"),
                     value: Binding(
@@ -128,7 +128,7 @@ struct SettingsView: View {
                 Button { showingUserAgent = true } label: {
                     settingRow(
                         icon: "wrench.and.screwdriver",
-                        iconColor: .purple,
+                        iconColor: .accentColor,
                         title: L10n.text("User Agent 设置", "User Agent Settings"),
                         subtitle: SubscriptionUserAgentPreset.summary(for: model.userAgent),
                         chevron: true
@@ -139,7 +139,7 @@ struct SettingsView: View {
                 AppDivider(leading: 52)
                 toggleRow(
                     icon: "network",
-                    iconColor: .teal,
+                    iconColor: .accentColor,
                     title: L10n.text("自动设置系统代理", "Set System Proxy Automatically"),
                     subtitle: L10n.text("连接时接管 HTTP、HTTPS 和 SOCKS", "Manage HTTP, HTTPS, and SOCKS while connected"),
                     value: Binding(
@@ -210,6 +210,8 @@ struct SettingsView: View {
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .controlSize(.small)
+                .accessibilityLabel(title)
+                .accessibilityHint(subtitle ?? "")
         }
         .padding(.horizontal, 16)
         .frame(minHeight: subtitle == nil ? 52 : 64)
@@ -261,6 +263,7 @@ private struct ProxyPortSheet: View {
     @Binding var isPresented: Bool
     @State private var port: String
     @State private var saving = false
+    @FocusState private var portFocused: Bool
 
     init(model: AppModel, isPresented: Binding<Bool>) {
         self.model = model
@@ -276,9 +279,11 @@ private struct ProxyPortSheet: View {
             TextField("16789", text: $port)
                 .textFieldStyle(.roundedBorder)
                 .font(AppTypography.monoBody)
+                .focused($portFocused)
             HStack {
                 Spacer()
                 Button(L10n.text("取消", "Cancel")) { isPresented = false }
+                    .keyboardShortcut(.cancelAction)
                 Button {
                     guard let value = Int(port) else { return }
                     Task {
@@ -296,6 +301,7 @@ private struct ProxyPortSheet: View {
         }
         .padding(AppVisual.sheetPadding)
         .frame(width: AppVisual.sheetWidth)
+        .onAppear { portFocused = true }
     }
 }
 
@@ -304,6 +310,7 @@ private struct DirectDNSSheet: View {
     @Binding var isPresented: Bool
     @State private var value: String
     @State private var saving = false
+    @FocusState private var valueFocused: Bool
 
     init(model: AppModel, isPresented: Binding<Bool>) {
         self.model = model
@@ -329,6 +336,7 @@ private struct DirectDNSSheet: View {
             TextField("223.5.5.5", text: $value)
                 .textFieldStyle(.roundedBorder)
                 .font(AppTypography.monoBody)
+                .focused($valueFocused)
             HStack {
                 Spacer()
                 Button(L10n.text("取消", "Cancel")) { isPresented = false }
@@ -347,6 +355,7 @@ private struct DirectDNSSheet: View {
         }
         .padding(AppVisual.sheetPadding)
         .frame(width: AppVisual.sheetWidth)
+        .onAppear { valueFocused = true }
     }
 }
 
@@ -357,6 +366,7 @@ private struct UserAgentSheet: View {
     @State private var selected: SubscriptionUserAgentPreset
     @State private var customValue: String
     @State private var saving = false
+    @FocusState private var customFocused: Bool
 
     init(model: AppModel, isPresented: Binding<Bool>) {
         self.model = model
@@ -369,7 +379,7 @@ private struct UserAgentSheet: View {
     var body: some View {
         ZStack {
             AppVisual.background(colorScheme).ignoresSafeArea()
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(spacing: 0) {
                 HStack {
                     Text(L10n.text("User Agent 设置", "User Agent Settings"))
                         .font(AppTypography.dialogTitle)
@@ -382,60 +392,73 @@ private struct UserAgentSheet: View {
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(L10n.text("关闭", "Close"))
                 }
+                .padding(.horizontal, AppVisual.sheetPadding)
+                .padding(.top, AppVisual.sheetPadding)
+                .padding(.bottom, 12)
 
-                AppCard {
-                    VStack(spacing: 0) {
-                        ForEach(SubscriptionUserAgentPreset.allCases) { preset in
-                            Button { selected = preset } label: {
-                                HStack(spacing: 11) {
-                                    Image(systemName: selected == preset ? "checkmark.circle.fill" : "circle")
-                                        .font(.system(size: 17, weight: .regular))
-                                        .foregroundStyle(selected == preset ? Color.accentColor : AppVisual.tertiaryLabel(colorScheme))
-                                        .frame(width: 22)
-                                    Text(preset.title)
-                                        .font(AppTypography.rowTitle)
-                                        .foregroundStyle(.primary)
-                                    Spacer(minLength: 0)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        AppCard {
+                            VStack(spacing: 0) {
+                                ForEach(SubscriptionUserAgentPreset.allCases) { preset in
+                                    Button { selected = preset } label: {
+                                        HStack(spacing: 11) {
+                                            Image(systemName: selected == preset ? "checkmark.circle.fill" : "circle")
+                                                .font(.system(size: 17, weight: .regular))
+                                                .foregroundStyle(selected == preset ? Color.accentColor : AppVisual.tertiaryLabel(colorScheme))
+                                                .frame(width: 22)
+                                            Text(preset.title)
+                                                .font(AppTypography.rowTitle)
+                                                .foregroundStyle(.primary)
+                                            Spacer(minLength: 0)
+                                        }
+                                        .padding(.horizontal, 13)
+                                        .frame(height: 42)
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel(preset.title)
+                                    .accessibilityValue(selected == preset ? L10n.text("已选择", "Selected") : (preset.detail ?? ""))
+                                    .accessibilityAddTraits(selected == preset ? .isSelected : [])
+                                    if preset != SubscriptionUserAgentPreset.allCases.last { AppDivider(leading: 48) }
                                 }
-                                .padding(.horizontal, 13)
-                                .frame(height: 42)
-                                .contentShape(Rectangle())
                             }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel(preset.title)
-                            .accessibilityValue(preset.detail ?? "")
-                            if preset != SubscriptionUserAgentPreset.allCases.last { AppDivider(leading: 48) }
                         }
+
+                        if selected == .custom {
+                            TextField(L10n.text("输入自定义 User Agent", "Enter a custom User Agent"), text: $customValue)
+                                .textFieldStyle(.roundedBorder)
+                                .font(AppTypography.monoBody)
+                                .focused($customFocused)
+                                .accessibilityLabel(L10n.text("输入自定义 User Agent", "Enter a custom User Agent"))
+                        } else if let detail = selected.detail {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(L10n.text("当前请求标识", "Current request identifier"))
+                                    .font(AppTypography.captionEmphasized)
+                                    .foregroundStyle(.secondary)
+                                Text(detail)
+                                    .font(AppTypography.monoCaption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                                    .textSelection(.enabled)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 2)
+                        }
+
+                        Text(L10n.text(
+                            "仅用于获取机场订阅；部分服务会根据客户端标识返回不同格式。",
+                            "Used only for subscription requests. Some providers return different formats based on this identifier."
+                        ))
+                        .font(AppTypography.caption)
+                        .foregroundStyle(.secondary)
                     }
+                    .padding(.horizontal, AppVisual.sheetPadding)
+                    .padding(.bottom, 12)
                 }
+                .frame(maxHeight: 360)
 
-                if selected == .custom {
-                    TextField(L10n.text("输入自定义 User Agent", "Enter a custom User Agent"), text: $customValue)
-                        .textFieldStyle(.roundedBorder)
-                        .font(AppTypography.monoBody)
-                        .accessibilityLabel(L10n.text("输入自定义 User Agent", "Enter a custom User Agent"))
-                } else if let detail = selected.detail {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(L10n.text("当前请求标识", "Current request identifier"))
-                            .font(AppTypography.captionEmphasized)
-                            .foregroundStyle(.secondary)
-                        Text(detail)
-                            .font(AppTypography.monoCaption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                            .textSelection(.enabled)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 2)
-                }
-
-                Text(L10n.text(
-                    "仅用于获取机场订阅；部分服务会根据客户端标识返回不同格式。",
-                    "Used only for subscription requests. Some providers return different formats based on this identifier."
-                ))
-                .font(AppTypography.caption)
-                .foregroundStyle(.secondary)
-
+                AppDivider(leading: 0)
                 HStack {
                     Spacer()
                     Button(L10n.text("取消", "Cancel")) { isPresented = false }
@@ -453,10 +476,17 @@ private struct UserAgentSheet: View {
                     .keyboardShortcut(.defaultAction)
                     .disabled(saving || (selected == .custom && customValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
                 }
+                .padding(.horizontal, AppVisual.sheetPadding)
+                .frame(height: 52)
             }
-            .padding(AppVisual.sheetPadding)
         }
         .frame(width: AppVisual.sheetWidth)
+        .frame(maxHeight: AppVisual.sheetMaximumHeight)
+        .onChange(of: selected) { value in
+            if value == .custom {
+                DispatchQueue.main.async { customFocused = true }
+            }
+        }
     }
 }
 

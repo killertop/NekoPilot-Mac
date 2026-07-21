@@ -13,10 +13,10 @@ enum AppVisual {
     static let tabBarHeight: CGFloat = 56
     static let cardRadius: CGFloat = 14
 
-    /// Content width for attached sheets. Padding is applied outside this frame,
-    /// so 300pt keeps the rendered sheet below 90% of the 371pt main window and
-    /// leaves a visible margin on both sides at the minimum app size.
-    static let sheetWidth: CGFloat = 300
+    /// Total width for attached sheets, including their internal padding.
+    /// 324pt keeps the sheet below 90% of the 371pt default window while giving
+    /// forms enough room for localized labels and long proxy values.
+    static let sheetWidth: CGFloat = 324
     static let sheetPadding: CGFloat = 16
     static let sheetMaximumHeight: CGFloat = 480
 
@@ -40,8 +40,8 @@ enum AppVisual {
             : Color(red: 118 / 255, green: 118 / 255, blue: 128 / 255).opacity(0.12)
     }
 
-    static func tertiaryLabel(_ scheme: ColorScheme) -> Color {
-        scheme == .dark ? Color.white.opacity(0.3) : Color(red: 60 / 255, green: 60 / 255, blue: 67 / 255).opacity(0.3)
+    static func tertiaryLabel(_: ColorScheme) -> Color {
+        Color(nsColor: .tertiaryLabelColor)
     }
 
     static func inactiveTab(_ scheme: ColorScheme) -> Color {

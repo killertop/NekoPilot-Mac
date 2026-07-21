@@ -11,9 +11,11 @@ struct RulesView: View {
     @State private var addKind: RuleKind = .domain
     @State private var search = ""
     @State private var feedback: String?
+    @State private var undoRule: RoutingRule?
+    @State private var undoDismissTask: Task<Void, Never>?
 
     var body: some View {
-        ScrollView(showsIndicators: false) {
+        ScrollView {
             LazyVStack(spacing: 6) {
                 SectionTitle("\(L10n.text("自定义规则", "Custom Rules")) · \(model.rules.count)") {
                     Button { showingHelp = true } label: {
@@ -70,6 +72,26 @@ struct RulesView: View {
                     }
                 }
 
+                if let undoRule {
+                    HStack(spacing: 10) {
+                        Text(L10n.text("已删除 \(undoRule.value)", "Deleted \(undoRule.value)"))
+                            .font(AppTypography.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 6)
+                        Button(L10n.text("撤销", "Undo")) {
+                            restoreDeletedRule(undoRule)
+                        }
+                        .buttonStyle(.plain)
+                        .font(AppTypography.bodyEmphasized)
+                        .foregroundStyle(Color.accentColor)
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 42)
+                    .background(AppVisual.card(colorScheme), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+
                 if let feedback {
                     Text(feedback)
                         .font(AppTypography.captionEmphasized)
@@ -113,6 +135,10 @@ struct RulesView: View {
                 editingRule = nil
             }
         }
+        .onDisappear {
+            undoDismissTask?.cancel()
+            undoDismissTask = nil
+        }
     }
 
     private var visibleRules: [RoutingRule] {
@@ -148,18 +174,41 @@ struct RulesView: View {
             .accessibilityLabel(L10n.text("编辑规则", "Edit Rule"))
 
             Button(role: .destructive) {
-                Task { await model.deleteRule(rule) }
+                delete(rule)
             } label: {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 16))
-                    .foregroundStyle(AppVisual.tertiaryLabel(colorScheme))
-                    .frame(width: 24, height: 28)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 30)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(L10n.text("删除规则", "Delete Rule"))
         }
         .padding(.horizontal, 12)
         .frame(height: 44)
+    }
+
+    private func delete(_ rule: RoutingRule) {
+        Task {
+            guard await model.deleteRule(rule) else { return }
+            undoDismissTask?.cancel()
+            withAnimation(.easeOut(duration: 0.16)) { undoRule = rule }
+            undoDismissTask = Task {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeIn(duration: 0.16)) { undoRule = nil }
+                undoDismissTask = nil
+            }
+        }
+    }
+
+    private func restoreDeletedRule(_ rule: RoutingRule) {
+        undoDismissTask?.cancel()
+        undoDismissTask = nil
+        Task {
+            guard await model.restoreRule(rule) else { return }
+            withAnimation(.easeOut(duration: 0.16)) { undoRule = nil }
+        }
     }
 }
 
@@ -173,6 +222,7 @@ private struct AddRuleSheet: View {
     @State private var saving = false
     @State private var feedback: String?
     @State private var feedbackIsWarning = false
+    @FocusState private var inputFocused: Bool
 
     var body: some View {
         ZStack {
@@ -212,6 +262,7 @@ private struct AddRuleSheet: View {
                         }
                         TextEditor(text: $input)
                             .font(AppTypography.monoBody)
+                            .focused($inputFocused)
                             .scrollContentBackground(.hidden)
                             .padding(5)
                     }
@@ -254,6 +305,7 @@ private struct AddRuleSheet: View {
             .padding(AppVisual.sheetPadding)
         }
         .frame(width: AppVisual.sheetWidth)
+        .onAppear { inputFocused = true }
     }
 
     private var placeholder: String { kind.placeholder }
@@ -292,6 +344,7 @@ private struct EditRuleSheet: View {
     @State private var kind: RuleKind
     @State private var value: String
     @State private var saving = false
+    @FocusState private var valueFocused: Bool
 
     init(
         model: AppModel,
@@ -341,6 +394,7 @@ private struct EditRuleSheet: View {
                 TextField(kind.placeholder, text: $value)
                     .font(AppTypography.monoBody)
                     .textFieldStyle(.roundedBorder)
+                    .focused($valueFocused)
                 RulePreview(action: action, kind: kind, value: value.isEmpty ? kind.placeholder : value)
                 RulePriorityHint()
                 HStack {
@@ -364,6 +418,7 @@ private struct EditRuleSheet: View {
             .padding(AppVisual.sheetPadding)
         }
         .frame(width: AppVisual.sheetWidth)
+        .onAppear { valueFocused = true }
     }
 }
 
@@ -389,7 +444,7 @@ private struct RuleHelpSheet: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
 
-                ScrollView(showsIndicators: false) {
+                ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
                         helpSection(L10n.text("动作", "Action")) {
                             helpRow {

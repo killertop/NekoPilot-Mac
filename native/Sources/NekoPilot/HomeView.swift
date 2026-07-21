@@ -6,22 +6,23 @@ struct HomeView: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(spacing: 0) {
-                powerHero
-                    .padding(.top, AppVisual.pageTopPadding)
+        TimelineView(.periodic(from: Date(), by: 60)) { context in
+            ScrollView {
+                VStack(spacing: 0) {
+                    powerHero
+                        .padding(.top, AppVisual.pageTopPadding)
 
-                connectionStatus
-                    .padding(.top, 16)
+                    connectionStatus
+                        .padding(.top, 16)
 
-                nodesSection
-                    .padding(.top, 17)
-
+                    nodesSection(now: context.date)
+                        .padding(.top, 17)
+                }
+                .padding(.horizontal, AppVisual.pageHorizontalPadding)
+                .padding(.bottom, AppVisual.pageBottomPadding)
+                .frame(maxWidth: AppVisual.pageMaximumWidth)
+                .frame(maxWidth: .infinity)
             }
-            .padding(.horizontal, AppVisual.pageHorizontalPadding)
-            .padding(.bottom, AppVisual.pageBottomPadding)
-            .frame(maxWidth: AppVisual.pageMaximumWidth)
-            .frame(maxWidth: .infinity)
         }
     }
 
@@ -100,12 +101,12 @@ struct HomeView: View {
         .frame(height: 20)
     }
 
-    private var nodesSection: some View {
+    private func nodesSection(now: Date) -> some View {
         VStack(spacing: 6) {
-            SectionTitle(nodesSectionTitle) {
+            SectionTitle(nodesSectionTitle(now: now)) {
                 Button {
                     if model.isURLTesting {
-                        model.cancelURLTest()
+                        Task { await model.cancelURLTest() }
                     } else {
                         model.runURLTest()
                     }
@@ -129,6 +130,12 @@ struct HomeView: View {
                 .buttonStyle(.plain)
                 .disabled(model.nodes.isEmpty)
                 .accessibilityLabel(model.isURLTesting ? L10n.text("停止测速", "Stop Speed Test") : L10n.text("开始测速", "Start Speed Test"))
+                .accessibilityHint(model.isURLTesting
+                    ? L10n.text("保留已经完成的测速结果", "Keeps results that have already completed")
+                    : L10n.text("逐步更新并按延迟排序节点", "Updates and sorts nodes by latency as results arrive"))
+                .help(model.isURLTesting
+                    ? L10n.text("停止并保留已完成结果", "Stop and keep completed results")
+                    : L10n.text("开始测速", "Start speed test"))
             }
 
             AppCard {
@@ -141,7 +148,7 @@ struct HomeView: View {
                 } else {
                     LazyVStack(spacing: 0) {
                         ForEach(model.nodeRows) { row in
-                            nodeRow(row)
+                            nodeRow(row, now: now)
                             if row.id != model.nodeRows.last?.id { AppDivider() }
                         }
                     }
@@ -150,7 +157,7 @@ struct HomeView: View {
         }
     }
 
-    private func nodeRow(_ row: NodeListRow) -> some View {
+    private func nodeRow(_ row: NodeListRow, now: Date) -> some View {
         let node = row.node
         let selected = model.selectedNode == node.runtimeTag
         return Button {
@@ -181,7 +188,7 @@ struct HomeView: View {
                 }
 
                 Spacer(minLength: 4)
-                delayLabel(node)
+                delayLabel(node, now: now)
                     .frame(minWidth: 46, alignment: .trailing)
 
                 Image(systemName: "checkmark")
@@ -200,15 +207,15 @@ struct HomeView: View {
     }
 
     @ViewBuilder
-    private func delayLabel(_ node: ProxyNode) -> some View {
+    private func delayLabel(_ node: ProxyNode, now: Date) -> some View {
         if let delay = model.delayHistory[node.runtimeTag]?.delay {
             Text("\(delay)ms")
                 .font(AppTypography.bodyEmphasized)
-                .foregroundStyle(isStale(node) ? Color.secondary : Color.primary)
+                .foregroundStyle(isStale(node, now: now) ? Color.secondary : Color.primary)
         } else if model.delayHistory[node.runtimeTag] != nil {
             Text(L10n.text("超时", "Timeout"))
                 .font(AppTypography.secondary)
-                .foregroundStyle(AppVisual.tertiaryLabel(colorScheme))
+                .foregroundStyle(.secondary)
         } else {
             Text("—")
                 .font(AppTypography.body)
@@ -216,16 +223,16 @@ struct HomeView: View {
         }
     }
 
-    private var nodesSectionTitle: String {
+    private func nodesSectionTitle(now: Date) -> String {
         let title = L10n.text("全部节点", "All Nodes")
         guard let date = model.delayHistory.values.map(\.measuredAt).max() else { return title }
-        let relative = Self.relativeFormatter.localizedString(for: date, relativeTo: Date())
+        let relative = Self.relativeFormatter.localizedString(for: date, relativeTo: now)
         return "\(title) · \(relative)"
     }
 
-    private func isStale(_ node: ProxyNode) -> Bool {
+    private func isStale(_ node: ProxyNode, now: Date) -> Bool {
         guard let measuredAt = model.delayHistory[node.runtimeTag]?.measuredAt else { return false }
-        return Date().timeIntervalSince(measuredAt) > 30 * 60
+        return now.timeIntervalSince(measuredAt) > 30 * 60
     }
 
     private static let relativeFormatter: RelativeDateTimeFormatter = {

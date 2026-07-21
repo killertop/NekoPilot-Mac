@@ -295,14 +295,25 @@ final class AppModel: ObservableObject {
         rebuildSortedNodes()
     }
 
-    func cancelURLTest() {
+    /// Stops an explicit user test while retaining every completed result.
+    /// Untested nodes keep their previous history, and the merged snapshot is
+    /// persisted so leaving and relaunching the app cannot show different data.
+    func cancelURLTest() async {
+        guard isURLTesting else { return }
+        urlTestProgressFlushTask?.cancel()
+        urlTestProgressFlushTask = nil
+        flushURLTestProgress(generation: urlTestGeneration)
         urlTestGeneration += 1
         urlTestTask?.cancel()
         urlTestTask = nil
-        urlTestProgressFlushTask?.cancel()
-        urlTestProgressFlushTask = nil
         pendingURLTestProgress.removeAll(keepingCapacity: true)
         isURLTesting = false
+        rebuildSortedNodes()
+        do {
+            try await repository.replaceDelayHistory(delayHistory)
+        } catch {
+            show(error)
+        }
     }
 
     func importNode(_ input: String, name: String?) async -> Bool {
@@ -430,10 +441,20 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func deleteRule(_ rule: RoutingRule) async {
+    @discardableResult
+    func deleteRule(_ rule: RoutingRule) async -> Bool {
         let previous = rules
         rules.removeAll { $0.id == rule.id }
-        _ = await persistRules(previous: previous)
+        return await persistRules(previous: previous)
+    }
+
+    @discardableResult
+    func restoreRule(_ rule: RoutingRule) async -> Bool {
+        guard !rules.contains(where: { $0.id == rule.id }) else { return true }
+        let previous = rules
+        rules.append(rule)
+        rules = RuleMutation.sorted(rules)
+        return await persistRules(previous: previous)
     }
 
     func updateRule(

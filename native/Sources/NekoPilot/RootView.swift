@@ -29,7 +29,14 @@ struct RootView: View {
                 .background(AppVisual.background(colorScheme))
             }
         }
-        .frame(minWidth: 360, idealWidth: 371, minHeight: 560, idealHeight: 600)
+        .frame(
+            minWidth: 360,
+            idealWidth: 371,
+            maxWidth: 520,
+            minHeight: 560,
+            idealHeight: 600,
+            maxHeight: 760
+        )
         .alert(
             L10n.text("操作失败", "Operation Failed"),
             isPresented: Binding(
@@ -119,9 +126,6 @@ struct RootView: View {
                 )
             )
         }
-        .onChange(of: model.selectedTab) { tab in
-            if tab != .home { model.cancelURLTest() }
-        }
     }
 
     private func tabButton(_ tab: MainTab, icon: String, selectedIcon: String, title: String) -> some View {
@@ -131,7 +135,7 @@ struct RootView: View {
         } label: {
             VStack(spacing: 2) {
                 Image(systemName: isSelected ? selectedIcon : icon)
-                    .font(.system(size: 19, weight: .regular))
+                    .font(.system(size: 19, weight: isSelected ? .semibold : .regular))
                     .frame(height: 22)
                 Text(title)
                     .font(AppTypography.caption)
@@ -143,5 +147,7 @@ struct RootView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)
+        .accessibilityValue(isSelected ? L10n.text("已选择", "Selected") : "")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
