@@ -97,17 +97,89 @@ public actor ConfigurationCompiler {
         }
     }
 
+    /// Builds disposable workers that expose only a loopback proxy inbound.
+    /// Each worker owns one selector subset and one private cache, so callers
+    /// can inspect node egress without switching the live core or its users.
+    public func makeLocationProbeConfigurations(
+        selectedNodeGroups: [[String]],
+        apiEndpoints: [LocalAPIEndpoint],
+        proxyPorts: [Int]
+    ) async throws -> [URL] {
+        guard selectedNodeGroups.count == apiEndpoints.count,
+              selectedNodeGroups.count == proxyPorts.count,
+              !selectedNodeGroups.isEmpty,
+              selectedNodeGroups.allSatisfy({ !$0.isEmpty }),
+              proxyPorts.allSatisfy({ (1 ... 65_535).contains($0) }),
+              Set(proxyPorts).count == proxyPorts.count,
+              Set(apiEndpoints.map(\.port)).isDisjoint(with: proxyPorts),
+              let selectedNode = selectedNodeGroups.first?.first else {
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "位置探测配置无效",
+                "The location-probe configuration is invalid"
+            ))
+        }
+
+        // Like URL Test, location discovery must never overwrite the live
+        // runtime configuration with disposable ports or API credentials.
+        let baseConfig = try await makeConfiguration(
+            selectedNode: selectedNode,
+            apiEndpoint: apiEndpoints[0],
+            healthProbePort: nil
+        )
+        var configurations: [URL] = []
+        do {
+            for index in selectedNodeGroups.indices {
+                var config = baseConfig
+                configureAPIService(config: &config, endpoint: apiEndpoints[index])
+                try restrictExitGateway(to: selectedNodeGroups[index], in: &config)
+                configurations.append(try makeIsolatedLocationProbeConfiguration(
+                    from: config,
+                    proxyPort: proxyPorts[index]
+                ))
+            }
+            return configurations
+        } catch {
+            for config in configurations {
+                try? FileManager.default.removeItem(at: config.deletingLastPathComponent())
+            }
+            throw error
+        }
+    }
+
     private func makeIsolatedOfflineTestConfiguration(
         from baseConfig: [String: JSONValue]
     ) throws -> URL {
         var config = baseConfig
         config.removeValue(forKey: "inbounds")
+        return try writeIsolatedConfiguration(config, directoryPrefix: "NekoPilot-URLTest")
+    }
+
+    private func makeIsolatedLocationProbeConfiguration(
+        from baseConfig: [String: JSONValue],
+        proxyPort: Int
+    ) throws -> URL {
+        var config = baseConfig
+        config["inbounds"] = .array([.object([
+            "tag": .string(NodeLocationProbeEndpoint.inboundTag),
+            "type": .string("mixed"),
+            "listen": .string("127.0.0.1"),
+            "listen_port": .number(Double(proxyPort)),
+        ])])
+        try forceLocationProbeThroughExitGateway(in: &config)
+        return try writeIsolatedConfiguration(config, directoryPrefix: "NekoPilot-LocationProbe")
+    }
+
+    private func writeIsolatedConfiguration(
+        _ baseConfig: [String: JSONValue],
+        directoryPrefix: String
+    ) throws -> URL {
+        var config = baseConfig
         if var log = config["log"]?.objectValue {
             log["disabled"] = .bool(true)
             config["log"] = .object(log)
         }
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("NekoPilot-URLTest-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("\(directoryPrefix)-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         if var experimental = config["experimental"]?.objectValue,
            var cacheFile = experimental["cache_file"]?.objectValue {
@@ -120,6 +192,38 @@ public actor ConfigurationCompiler {
         let file = directory.appendingPathComponent("config.json")
         try AtomicFile.write(try JSONValue.encodeObject(config), to: file)
         return file
+    }
+
+    private func forceLocationProbeThroughExitGateway(
+        in config: inout [String: JSONValue]
+    ) throws {
+        guard var route = config["route"]?.objectValue,
+              var routeRules = route["rules"]?.arrayValue,
+              var dns = config["dns"]?.objectValue,
+              var dnsRules = dns["rules"]?.arrayValue else {
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "位置探测配置缺少路由",
+                "The location-probe configuration has no routing rules"
+            ))
+        }
+
+        // This must precede custom direct rules, private-IP rules and the
+        // China rule sets. A failed node therefore fails closed instead of
+        // revealing the Mac's own egress location.
+        routeRules.insert(.object([
+            "inbound": .array([.string(NodeLocationProbeEndpoint.inboundTag)]),
+            "outbound": .string("ExitGateway"),
+        ]), at: 0)
+        route["rules"] = .array(routeRules)
+        config["route"] = .object(route)
+
+        dnsRules.insert(.object([
+            "inbound": .array([.string(NodeLocationProbeEndpoint.inboundTag)]),
+            "action": .string("route"),
+            "server": .string("dns_proxy"),
+        ]), at: 0)
+        dns["rules"] = .array(dnsRules)
+        config["dns"] = .object(dns)
     }
 
     private func makeConfiguration(
@@ -174,6 +278,29 @@ public actor ConfigurationCompiler {
         }
         selector["outbounds"] = .array(included.map(JSONValue.string))
         outbounds[selectorIndex] = .object(selector)
+
+        // Disposable workers must not carry credentials for unrelated nodes.
+        // Preserve each selected node's recursive detour chain plus the two
+        // built-in outbounds needed by routing and DNS.
+        let outboundByTag = Dictionary(
+            uniqueKeysWithValues: outbounds.compactMap { value -> (String, [String: JSONValue])? in
+                guard let outbound = value.objectValue,
+                      let tag = outbound["tag"]?.stringValue else { return nil }
+                return (tag, outbound)
+            }
+        )
+        var requiredTags = Set(included)
+        var pendingTags = included
+        while let tag = pendingTags.popLast() {
+            guard let detour = outboundByTag[tag]?["detour"]?.stringValue,
+                  requiredTags.insert(detour).inserted else { continue }
+            pendingTags.append(detour)
+        }
+        requiredTags.formUnion(["direct", "ExitGateway"])
+        outbounds = outbounds.filter { value in
+            guard let tag = value.objectValue?["tag"]?.stringValue else { return false }
+            return requiredTags.contains(tag)
+        }
         config["outbounds"] = .array(outbounds)
     }
 

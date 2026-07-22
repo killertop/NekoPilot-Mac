@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 enum CoreL10n {
@@ -67,8 +68,33 @@ public struct ProxyNode: Identifiable, Equatable, Sendable {
     public let runtimeTag: String
     public let protocolName: String
     public let outbound: [String: JSONValue]
+    public let locationFingerprint: String
 
     public var id: String { runtimeTag }
+
+    /// A stable identity for the endpoint configuration that determines a
+    /// server's location. Runtime-only values injected by NekoPilot are
+    /// excluded, while recursive detour dependencies are included so relay
+    /// changes cannot inherit a stale egress country.
+    private static func makeLocationFingerprint(
+        from outbound: [String: JSONValue],
+        dependencies: [[String: JSONValue]]
+    ) -> String {
+        func canonicalized(_ value: [String: JSONValue]) -> JSONValue {
+            var value = value
+            value.removeValue(forKey: "tag")
+            value.removeValue(forKey: "domain_resolver")
+            return .object(value)
+        }
+        let material: [String: JSONValue] = [
+            "outbound": canonicalized(outbound),
+            "detour_chain": .array(dependencies.map(canonicalized)),
+        ]
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let encoded = (try? encoder.encode(material)) ?? Data()
+        return SHA256.hash(data: encoded).map { String(format: "%02x", $0) }.joined()
+    }
 
     public init(
         sourceIdentifier: String,
@@ -76,7 +102,8 @@ public struct ProxyNode: Identifiable, Equatable, Sendable {
         originalTag: String,
         runtimeTag: String,
         protocolName: String,
-        outbound: [String: JSONValue]
+        outbound: [String: JSONValue],
+        locationDependencies: [[String: JSONValue]] = []
     ) {
         self.sourceIdentifier = sourceIdentifier
         self.sourceName = sourceName
@@ -84,6 +111,10 @@ public struct ProxyNode: Identifiable, Equatable, Sendable {
         self.runtimeTag = runtimeTag
         self.protocolName = protocolName
         self.outbound = outbound
+        locationFingerprint = Self.makeLocationFingerprint(
+            from: outbound,
+            dependencies: locationDependencies
+        )
     }
 }
 
@@ -119,6 +150,30 @@ public struct DelayRecord: Codable, Equatable, Sendable {
     public init(delay: Int?, measuredAt: Date = Date()) {
         self.delay = delay
         self.measuredAt = measuredAt
+    }
+}
+
+/// A cached server-location lookup for one concrete runtime node.
+///
+/// `countryCode == nil` represents a recent unsuccessful lookup. A separate
+/// `locatedAt` timestamp lets callers retain the last successful location
+/// while `lastAttemptAt` throttles retries after transient failures.
+public struct NodeLocationRecord: Equatable, Sendable {
+    public let countryCode: String?
+    public let fingerprint: String
+    public let locatedAt: Date?
+    public let lastAttemptAt: Date
+
+    public init(
+        countryCode: String?,
+        fingerprint: String,
+        locatedAt: Date?,
+        lastAttemptAt: Date
+    ) {
+        self.countryCode = countryCode
+        self.fingerprint = fingerprint
+        self.locatedAt = locatedAt
+        self.lastAttemptAt = lastAttemptAt
     }
 }
 

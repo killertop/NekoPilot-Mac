@@ -4,6 +4,29 @@ import Testing
 
 @Suite("Settings store", .serialized)
 struct SettingsStoreTests {
+    @Test("Server location display defaults off and persists only booleans")
+    func serverLocationDisplaySetting() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NekoPilot-Settings-Test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("preferences.json")
+        let settings = try SettingsStore(fileURL: file)
+
+        #expect(await settings.bool(SettingsStore.Key.showServerLocation) == false)
+        try await settings.set(.bool(true), for: SettingsStore.Key.showServerLocation)
+        #expect(await settings.bool(SettingsStore.Key.showServerLocation) == true)
+        let reopened = try SettingsStore(fileURL: file)
+        #expect(await reopened.bool(SettingsStore.Key.showServerLocation) == true)
+
+        do {
+            try await reopened.set(.string("true"), for: SettingsStore.Key.showServerLocation)
+            Issue.record("Expected the non-boolean location setting to be rejected")
+        } catch {
+            #expect(error as? NekoPilotError == .invalidSetting(SettingsStore.Key.showServerLocation))
+        }
+    }
+
     @Test("Legacy delay history migrates once and is removed from preferences")
     func legacyDelayHistoryMigratesOnce() async throws {
         let directory = FileManager.default.temporaryDirectory

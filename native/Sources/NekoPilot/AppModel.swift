@@ -22,6 +22,9 @@ enum URLTestStopPolicy: Equatable {
 
 @MainActor
 final class AppModel: ObservableObject {
+    private static let successfulLocationLifetime: TimeInterval = 30 * 24 * 60 * 60
+    private static let failedLocationRetryDelay: TimeInterval = 6 * 60 * 60
+
     @Published var status: EngineStatus = .stopped
     @Published var nodes: [ProxyNode] = []
     @Published private(set) var sortedNodes: [ProxyNode] = []
@@ -37,6 +40,11 @@ final class AppModel: ObservableObject {
     @Published var rules: [RoutingRule] = []
     @Published var autoSwitch = true
     @Published var showProtocol = false
+    @Published var showServerLocation = false
+    @Published private(set) var nodeLocations: [String: NodeLocationRecord] = [:]
+    @Published private(set) var isNodeLocationProbing = false
+    @Published private(set) var nodeLocationProbeCompleted = 0
+    @Published private(set) var nodeLocationProbeTotal = 0
     @Published var allowLAN = false
     @Published var skipSystemProxy = false
     @Published var proxyPort = SettingsStore.defaultProxyPort
@@ -59,6 +67,7 @@ final class AppModel: ObservableObject {
     let systemProxy: SystemProxyManager
     let engine: EngineSupervisor
     let tester: URLTester
+    let locationProbe: NodeLocationProbe
     let selection: NodeSelectionCoordinator
     let automaticSwitching: AutoNodeSwitchService
     let ruleSetUpdater: RuleSetUpdater
@@ -68,6 +77,8 @@ final class AppModel: ObservableObject {
     private var selectionTask: Task<Void, Never>?
     private var automaticSwitchTask: Task<Void, Never>?
     private var urlTestTask: Task<Void, Never>?
+    private var nodeLocationTask: Task<Void, Never>?
+    private var nodeLocationPredecessorTask: Task<Void, Never>?
     private var trafficTask: Task<Void, Never>?
     private var urlTestProgressFlushTask: Task<Void, Never>?
     private var wakeTask: Task<Void, Never>?
@@ -76,6 +87,8 @@ final class AppModel: ObservableObject {
     private var selectionGeneration = 0
     private var dataRefreshGeneration = 0
     private var urlTestGeneration = 0
+    private var nodeLocationGeneration = 0
+    private var nodeLocationSettingGeneration = 0
     private var urlTestBaselineHistory: [String: DelayRecord]?
     private var pendingURLTestProgress: [String: DelayRecord] = [:]
     private var ruleUpdateGeneration = 0
@@ -105,6 +118,7 @@ final class AppModel: ObservableObject {
             ownershipURL: paths.engineOwnership
         )
         tester = URLTester(compiler: compiler)
+        locationProbe = NodeLocationProbe(compiler: compiler)
         selection = NodeSelectionCoordinator(engine: engine, settings: settings)
         automaticSwitching = AutoNodeSwitchService(
             engine: engine,
@@ -126,6 +140,8 @@ final class AppModel: ObservableObject {
         automaticSwitchTask?.cancel()
         trafficTask?.cancel()
         urlTestTask?.cancel()
+        nodeLocationTask?.cancel()
+        nodeLocationPredecessorTask?.cancel()
         urlTestProgressFlushTask?.cancel()
         wakeTask?.cancel()
         ruleUpdateTask?.cancel()
@@ -194,6 +210,10 @@ final class AppModel: ObservableObject {
 
     func refreshData() async {
         guard storageAvailable, !isShuttingDown else { return }
+        // Node-source mutations may keep a runtime tag while changing its
+        // endpoint. Stop the old generation before reading the new snapshot;
+        // completed results stay in SQLite and are picked up below.
+        let interruptedLocationTask = cancelNodeLocationProbe(resetProgress: false)
         dataRefreshGeneration += 1
         let generation = dataRefreshGeneration
         do {
@@ -218,6 +238,21 @@ final class AppModel: ObservableObject {
                 refreshedHistory[tag] = record
             }
             delayHistory = refreshedHistory
+            do {
+                nodeLocations = try await repository.nodeLocationCache(retaining: nodes)
+            } catch {
+                // Location metadata is optional presentation state. A cache
+                // read must never prevent the freshly imported nodes from
+                // becoming usable.
+                AppLogger.shared.warning("server-location cache refresh failed: \(error.localizedDescription)")
+                let currentNodes = nodes.reduce(into: [String: String]()) {
+                    $0[$1.runtimeTag] = $1.locationFingerprint
+                }
+                nodeLocations = nodeLocations.filter { tag, record in
+                    currentNodes[tag] == record.fingerprint
+                }
+            }
+            guard generation == dataRefreshGeneration, !isShuttingDown else { return }
             if selectedNode == nil || !nodes.contains(where: { $0.runtimeTag == selectedNode }) {
                 selectedNode = nodes.first?.runtimeTag
                 // A user selection may interleave while the actor-backed
@@ -235,7 +270,9 @@ final class AppModel: ObservableObject {
             rebuildSortedNodes()
             await automaticSwitching.nodesDidChange()
             if status.isRunning { startTrafficMonitoring() }
+            scheduleNodeLocationProbeIfNeeded(waitingFor: interruptedLocationTask)
         } catch {
+            scheduleNodeLocationProbeIfNeeded(waitingFor: interruptedLocationTask)
             show(error)
         }
     }
@@ -308,6 +345,11 @@ final class AppModel: ObservableObject {
 
     func runURLTest() {
         guard !isURLTesting, !nodes.isEmpty else { return }
+        // Explicit speed tests have priority over optional location discovery.
+        // Wait for cancelled workers to exit before creating another isolated
+        // sing-box pool, otherwise the two background features can briefly
+        // double their process and memory footprint.
+        let interruptedLocationTask = cancelNodeLocationProbe()
         urlTestTask?.cancel()
         urlTestGeneration += 1
         let generation = urlTestGeneration
@@ -319,6 +361,7 @@ final class AppModel: ObservableObject {
         pendingURLTestProgress.removeAll(keepingCapacity: true)
         urlTestTask = Task { [weak self] in
             guard let self else { return }
+            await interruptedLocationTask?.value
             guard generation == urlTestGeneration, isURLTesting else { return }
             await automaticSwitching.setExplicitTestActive(true)
             guard generation == urlTestGeneration, isURLTesting else { return }
@@ -327,6 +370,7 @@ final class AppModel: ObservableObject {
                     isURLTesting = false
                     urlTestTask = nil
                     urlTestBaselineHistory = nil
+                    scheduleNodeLocationProbeIfNeeded()
                 }
             }
             let results = await tester.test(
@@ -389,7 +433,10 @@ final class AppModel: ObservableObject {
         pendingURLTestProgress.removeAll(keepingCapacity: true)
         urlTestBaselineHistory = nil
         isURLTesting = false
-        defer { rebuildSortedNodes() }
+        defer {
+            rebuildSortedNodes()
+            scheduleNodeLocationProbeIfNeeded()
+        }
         do {
             let validTags = Set(nodes.map(\.runtimeTag))
             switch policy {
@@ -544,6 +591,42 @@ final class AppModel: ObservableObject {
             try await settings.set(.bool(value), for: SettingsStore.Key.showProtocol)
         } catch {
             showProtocol = previous
+            show(error)
+        }
+    }
+
+    func setShowServerLocation(_ value: Bool) async {
+        nodeLocationSettingGeneration += 1
+        let settingGeneration = nodeLocationSettingGeneration
+        let previous = showServerLocation
+        showServerLocation = value
+        let interrupted = value ? nil : (cancelNodeLocationProbe() ?? nodeLocationPredecessorTask)
+        do {
+            try await settings.set(.bool(value), for: SettingsStore.Key.showServerLocation)
+            guard settingGeneration == nodeLocationSettingGeneration, !isShuttingDown else { return }
+            if value {
+                do {
+                    nodeLocations = try await repository.nodeLocationCache(retaining: nodes)
+                } catch {
+                    AppLogger.shared.warning("server-location cache load failed: \(error.localizedDescription)")
+                }
+                guard settingGeneration == nodeLocationSettingGeneration, showServerLocation else { return }
+                scheduleNodeLocationProbeIfNeeded(forceRetryFailures: !previous)
+            } else {
+                await interrupted?.value
+                guard settingGeneration == nodeLocationSettingGeneration,
+                      !showServerLocation,
+                      nodeLocationTask == nil else { return }
+                nodeLocationPredecessorTask = nil
+            }
+        } catch {
+            guard settingGeneration == nodeLocationSettingGeneration else { return }
+            showServerLocation = previous
+            if previous {
+                scheduleNodeLocationProbeIfNeeded()
+            } else {
+                cancelNodeLocationProbe()
+            }
             show(error)
         }
     }
@@ -739,6 +822,11 @@ final class AppModel: ObservableObject {
             testing?.cancel()
             urlTestTask = nil
         }
+        // Location discovery is optional and owns only disposable workers.
+        // Start cancellation now, finish the critical engine/system-proxy
+        // cleanup first, then wait for the disposable workers so the process
+        // cannot exit while a child sing-box instance is still unwinding.
+        let locating = cancelNodeLocationProbe() ?? nodeLocationPredecessorTask
         statusTask?.cancel()
         selectionTask?.cancel()
         automaticSwitchTask?.cancel()
@@ -757,6 +845,8 @@ final class AppModel: ObservableObject {
         await engine.shutdown()
         AppLogger.shared.info("shutdown: proxy engine stopped")
         await testing?.value
+        await locating?.value
+        nodeLocationPredecessorTask = nil
         // Rule-set refresh owns no child process or system state. URLSession
         // cancellation is enough here; waiting for a remote server timeout
         // would make the app appear stuck after all critical cleanup finished.
@@ -770,6 +860,149 @@ final class AppModel: ObservableObject {
 
     private func rebuildNodeCounts() {
         nodeCountsBySource = NodeListPresentation.countsBySource(nodes)
+    }
+
+    @discardableResult
+    private func cancelNodeLocationProbe(resetProgress: Bool = true) -> Task<Void, Never>? {
+        nodeLocationGeneration += 1
+        let interrupted = nodeLocationTask
+        interrupted?.cancel()
+        if let interrupted { nodeLocationPredecessorTask = interrupted }
+        nodeLocationTask = nil
+        isNodeLocationProbing = false
+        if resetProgress {
+            nodeLocationProbeCompleted = 0
+            nodeLocationProbeTotal = 0
+        }
+        return interrupted
+    }
+
+    private func scheduleNodeLocationProbeIfNeeded(
+        waitingFor interruptedTask: Task<Void, Never>? = nil,
+        forceRetryFailures: Bool = false
+    ) {
+        // Always cancel the task that is active *now*. A refresh may have
+        // captured an older task before suspending on repository I/O while a
+        // toggle or completed URL Test started a newer one in the meantime.
+        // The active task already waits for its predecessor, so waiting for it
+        // serializes the complete cleanup chain and keeps every worker tracked.
+        let activeTask = cancelNodeLocationProbe(resetProgress: false)
+        let previousTask = activeTask ?? nodeLocationPredecessorTask ?? interruptedTask
+        guard showServerLocation, !isURLTesting, !isShuttingDown, !nodes.isEmpty else {
+            nodeLocationProbeCompleted = 0
+            nodeLocationProbeTotal = 0
+            return
+        }
+
+        let now = Date()
+        let candidates = nodes.filter { node in
+            guard let record = nodeLocations[node.runtimeTag],
+                  record.fingerprint == node.locationFingerprint else { return true }
+            if record.countryCode != nil, let locatedAt = record.locatedAt {
+                guard now.timeIntervalSince(locatedAt) >= Self.successfulLocationLifetime else {
+                    return false
+                }
+                // A failed refresh keeps the previous successful country for
+                // display. Its newer attempt timestamp still applies the
+                // six-hour retry backoff.
+                return forceRetryFailures
+                    || now.timeIntervalSince(record.lastAttemptAt) >= Self.failedLocationRetryDelay
+            }
+            return forceRetryFailures
+                || now.timeIntervalSince(record.lastAttemptAt) >= Self.failedLocationRetryDelay
+        }
+
+        guard !candidates.isEmpty else {
+            isNodeLocationProbing = false
+            nodeLocationProbeCompleted = 0
+            nodeLocationProbeTotal = 0
+            return
+        }
+
+        nodeLocationGeneration += 1
+        let generation = nodeLocationGeneration
+        nodeLocationProbeCompleted = 0
+        nodeLocationProbeTotal = candidates.count
+        isNodeLocationProbing = true
+        nodeLocationTask = Task { [weak self] in
+            guard let self else { return }
+            await previousTask?.value
+            guard !Task.isCancelled,
+                  generation == nodeLocationGeneration,
+                  showServerLocation,
+                  !isURLTesting,
+                  !isShuttingDown else { return }
+            nodeLocationPredecessorTask = nil
+            // Candidate failover may start its own isolated URL-Test workers.
+            // Pause it while location workers are alive to keep the background
+            // process budget bounded and resume it on every cancellation path.
+            await automaticSwitching.setExplicitTestActive(true)
+            guard !Task.isCancelled,
+                  generation == nodeLocationGeneration,
+                  showServerLocation,
+                  !isURLTesting,
+                  !isShuttingDown else {
+                await automaticSwitching.setExplicitTestActive(false)
+                return
+            }
+            _ = await locationProbe.probe(nodes: candidates) { [weak self] tag, record in
+                await self?.acceptNodeLocation(tag: tag, record: record, generation: generation)
+            }
+            await automaticSwitching.setExplicitTestActive(false)
+            guard !Task.isCancelled, generation == nodeLocationGeneration else { return }
+            do {
+                let persisted = try await repository.nodeLocationCache(retaining: nodes)
+                guard !Task.isCancelled,
+                      generation == nodeLocationGeneration,
+                      showServerLocation,
+                      !isURLTesting,
+                      !isShuttingDown else { return }
+                // Two workers may finish persistence callbacks in a different
+                // order from their UI continuations. Reloading once after the
+                // group completes makes the published snapshot authoritative.
+                nodeLocations = persisted
+            } catch {
+                AppLogger.shared.warning("server-location cache reload failed: \(error.localizedDescription)")
+            }
+            isNodeLocationProbing = false
+            nodeLocationTask = nil
+        }
+    }
+
+    private func acceptNodeLocation(
+        tag: String,
+        record: NodeLocationRecord,
+        generation: Int
+    ) async {
+        guard generation == nodeLocationGeneration,
+              showServerLocation,
+              !isURLTesting,
+              !isShuttingDown,
+              let currentNode = nodes.first(where: { $0.runtimeTag == tag }),
+              currentNode.locationFingerprint == record.fingerprint else { return }
+
+        nodeLocationProbeCompleted = min(nodeLocationProbeCompleted + 1, nodeLocationProbeTotal)
+        do {
+            let persisted = try await repository.mergeNodeLocation(record, for: currentNode)
+            guard generation == nodeLocationGeneration,
+                  showServerLocation,
+                  !isURLTesting,
+                  !isShuttingDown,
+                  nodes.contains(where: {
+                      $0.runtimeTag == tag && $0.locationFingerprint == record.fingerprint
+                  }) else { return }
+            if let persisted {
+                let current = nodeLocations[tag]
+                if current == nil || current!.lastAttemptAt <= persisted.lastAttemptAt {
+                    nodeLocations[tag] = persisted
+                }
+            }
+        } catch {
+            // Country labels are optional metadata. Report the failure in the
+            // diagnostic log without interrupting proxy use or showing one
+            // alert per node.
+            AppLogger.shared.warning("server-location result persistence failed: \(error.localizedDescription)")
+        }
     }
 
     private func startTrafficMonitoring() {
@@ -828,6 +1061,18 @@ final class AppModel: ObservableObject {
         NodeListPresentation.displayName(for: node)
     }
 
+    func displayNameWithServerLocation(for node: ProxyNode) -> String {
+        let name = displayName(for: node)
+        guard showServerLocation,
+              let record = nodeLocations[node.runtimeTag],
+              record.fingerprint == node.locationFingerprint,
+              let code = record.countryCode?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(),
+              code.count == 2,
+              let country = Locale.autoupdatingCurrent.localizedString(forRegionCode: code),
+              !country.isEmpty else { return name }
+        return "\(country) · \(name)"
+    }
+
     func sourceName(for node: ProxyNode) -> String {
         subscriptions.first(where: { $0.identifier == node.sourceIdentifier })?.name ?? node.sourceIdentifier
     }
@@ -853,6 +1098,31 @@ final class AppModel: ObservableObject {
         }
     }
 
+    var serverLocationSummary: String {
+        if isNodeLocationProbing, nodeLocationProbeTotal > 0 {
+            return L10n.text(
+                "正在通过每个节点的代理出口识别 · \(nodeLocationProbeCompleted)/\(nodeLocationProbeTotal)",
+                "Identifying through each node's proxy exit · \(nodeLocationProbeCompleted)/\(nodeLocationProbeTotal)"
+            )
+        }
+        let identified = nodes.reduce(into: 0) { count, node in
+            guard let record = nodeLocations[node.runtimeTag],
+                  record.fingerprint == node.locationFingerprint,
+                  record.countryCode?.isEmpty == false else { return }
+            count += 1
+        }
+        if showServerLocation, !nodes.isEmpty {
+            return L10n.text(
+                "已通过代理出口识别 \(identified)/\(nodes.count) 个节点",
+                "Identified \(identified)/\(nodes.count) nodes through their proxy exits"
+            )
+        }
+        return L10n.text(
+            "通过每个节点的代理出口向 Cloudflare 查询国家或地区",
+            "Query Cloudflare for a country or region through each node's proxy exit"
+        )
+    }
+
     private func displayName(forTag tag: String) -> String {
         nodes.first(where: { $0.runtimeTag == tag }).map(displayName(for:)) ?? tag
     }
@@ -861,6 +1131,7 @@ final class AppModel: ObservableObject {
         autoSwitch = await settings.bool(SettingsStore.Key.autoSwitch, default: true)
         await selection.setAutomaticSwitchingEnabled(autoSwitch)
         showProtocol = await settings.bool(SettingsStore.Key.showProtocol)
+        showServerLocation = await settings.bool(SettingsStore.Key.showServerLocation, default: false)
         allowLAN = await settings.bool(SettingsStore.Key.allowLAN)
         skipSystemProxy = await settings.bool(SettingsStore.Key.skipSystemProxy)
         proxyPort = await settings.proxyPort()

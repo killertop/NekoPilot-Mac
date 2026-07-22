@@ -121,6 +121,58 @@ public actor SubscriptionRepository {
         return retained
     }
 
+    /// Loads cached server locations and atomically removes entries that no
+    /// longer describe a current node. A runtime tag alone is insufficient:
+    /// subscriptions can reuse a tag after changing the actual endpoint.
+    public func nodeLocationCache(
+        retaining nodes: [ProxyNode]
+    ) throws -> [String: NodeLocationRecord] {
+        let validNodes = Self.locationNodesByTag(nodes)
+        return try database.transaction {
+            var retained: [String: NodeLocationRecord] = [:]
+            for stored in try storedNodeLocations() {
+                guard let current = validNodes[stored.runtimeTag],
+                      current.sourceIdentifier == stored.sourceIdentifier,
+                      current.fingerprint == stored.record.fingerprint else {
+                    try deleteNodeLocation(runtimeTag: stored.runtimeTag)
+                    continue
+                }
+                retained[stored.runtimeTag] = stored.record
+            }
+            return retained
+        }
+    }
+
+    /// Persists one progressive probe result in O(1). Full pruning and a
+    /// canonical snapshot reload happen once after the worker group finishes.
+    public func mergeNodeLocation(
+        _ proposed: NodeLocationRecord,
+        for node: ProxyNode
+    ) throws -> NodeLocationRecord? {
+        guard proposed.fingerprint == node.locationFingerprint else { return nil }
+        return try database.transaction {
+            var existing: NodeLocationRecord?
+            if let stored = try storedNodeLocation(runtimeTag: node.runtimeTag) {
+                if stored.sourceIdentifier == node.sourceIdentifier,
+                   stored.record.fingerprint == proposed.fingerprint {
+                    existing = stored.record
+                } else {
+                    try deleteNodeLocation(runtimeTag: node.runtimeTag)
+                }
+            }
+            if let existing, existing.lastAttemptAt > proposed.lastAttemptAt {
+                return existing
+            }
+            let record = try Self.mergedLocation(existing: existing, proposed: proposed)
+            try upsertNodeLocation(
+                runtimeTag: node.runtimeTag,
+                sourceIdentifier: node.sourceIdentifier,
+                record: record
+            )
+            return record
+        }
+    }
+
     private static func encodeMeasurementTime(_ date: Date) -> Int64 {
         Int64((date.timeIntervalSince1970 * 1_000).rounded())
     }
@@ -131,6 +183,123 @@ public actor SubscriptionRepository {
             ? TimeInterval(storedValue) / 1_000
             : TimeInterval(storedValue)
         return Date(timeIntervalSince1970: seconds)
+    }
+
+    private struct StoredNodeLocation {
+        let runtimeTag: String
+        let sourceIdentifier: String
+        let record: NodeLocationRecord
+    }
+
+    private func storedNodeLocations() throws -> [StoredNodeLocation] {
+        try database.query(
+            """
+            SELECT runtime_tag, source_identifier, fingerprint,
+                   country_code, located_at, last_attempt_at
+            FROM node_location_cache
+            """
+        ) { Self.decodeStoredNodeLocation($0) }
+    }
+
+    private func storedNodeLocation(runtimeTag: String) throws -> StoredNodeLocation? {
+        try database.query(
+            """
+            SELECT runtime_tag, source_identifier, fingerprint,
+                   country_code, located_at, last_attempt_at
+            FROM node_location_cache WHERE runtime_tag = ? LIMIT 1
+            """,
+            bindings: [.text(runtimeTag)],
+            row: Self.decodeStoredNodeLocation
+        ).first
+    }
+
+    private static func decodeStoredNodeLocation(_ row: OpaquePointer) -> StoredNodeLocation {
+        let locatedAt = sqlite3_column_type(row, 4) == SQLITE_NULL
+            ? nil
+            : decodeMeasurementTime(SQLiteDatabase.integer(row, 4))
+        return StoredNodeLocation(
+            runtimeTag: SQLiteDatabase.text(row, 0) ?? "",
+            sourceIdentifier: SQLiteDatabase.text(row, 1) ?? "",
+            record: NodeLocationRecord(
+                countryCode: SQLiteDatabase.text(row, 3),
+                fingerprint: SQLiteDatabase.text(row, 2) ?? "",
+                locatedAt: locatedAt,
+                lastAttemptAt: decodeMeasurementTime(SQLiteDatabase.integer(row, 5))
+            )
+        )
+    }
+
+    private static func mergedLocation(
+        existing: NodeLocationRecord?,
+        proposed: NodeLocationRecord
+    ) throws -> NodeLocationRecord {
+        let countryCode = try normalizedCountryCode(proposed.countryCode)
+        let preservesSuccessfulLocation = countryCode == nil
+            && existing?.fingerprint == proposed.fingerprint
+            && existing?.countryCode != nil
+        let locatedAt = preservesSuccessfulLocation
+            ? existing?.locatedAt
+            : countryCode.map { _ in proposed.locatedAt ?? proposed.lastAttemptAt }
+        return NodeLocationRecord(
+            countryCode: preservesSuccessfulLocation ? existing?.countryCode : countryCode,
+            fingerprint: proposed.fingerprint,
+            locatedAt: locatedAt,
+            lastAttemptAt: proposed.lastAttemptAt
+        )
+    }
+
+    private func upsertNodeLocation(
+        runtimeTag: String,
+        sourceIdentifier: String,
+        record: NodeLocationRecord
+    ) throws {
+        try database.execute(
+            """
+            INSERT INTO node_location_cache(
+                runtime_tag, source_identifier, fingerprint,
+                country_code, located_at, last_attempt_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(runtime_tag) DO UPDATE SET
+                source_identifier = excluded.source_identifier,
+                fingerprint = excluded.fingerprint,
+                country_code = excluded.country_code,
+                located_at = excluded.located_at,
+                last_attempt_at = excluded.last_attempt_at
+            """,
+            bindings: [
+                .text(runtimeTag),
+                .text(sourceIdentifier),
+                .text(record.fingerprint),
+                record.countryCode.map(SQLiteDatabase.Binding.text) ?? .null,
+                record.locatedAt.map { .integer(Self.encodeMeasurementTime($0)) } ?? .null,
+                .integer(Self.encodeMeasurementTime(record.lastAttemptAt)),
+            ]
+        )
+    }
+
+    private func deleteNodeLocation(runtimeTag: String) throws {
+        try database.execute(
+            "DELETE FROM node_location_cache WHERE runtime_tag = ?",
+            bindings: [.text(runtimeTag)]
+        )
+    }
+
+    private static func locationNodesByTag(
+        _ nodes: [ProxyNode]
+    ) -> [String: (sourceIdentifier: String, fingerprint: String)] {
+        nodes.reduce(into: [:]) { result, node in
+            result[node.runtimeTag] = (node.sourceIdentifier, node.locationFingerprint)
+        }
+    }
+
+    private static func normalizedCountryCode(_ value: String?) throws -> String? {
+        guard let value else { return nil }
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard normalized.unicodeScalars.count == 2,
+              normalized.unicodeScalars.allSatisfy({ (65 ... 90).contains($0.value) }) else {
+            throw NekoPilotError.invalidSetting("node_location_country_code")
+        }
+        return normalized
     }
 
     public func upsert(
@@ -233,6 +402,16 @@ public actor SubscriptionRepository {
         let config = try JSONValue.decodeObject(from: data)
         let outbounds = config["outbounds"]?.arrayValue ?? []
         let ignored = Set(["selector", "urltest", "direct", "block", "dns"])
+        let dependencyOutbounds = outbounds.compactMap(\.objectValue).reduce(
+            into: [String: [String: JSONValue]]()
+        ) { result, outbound in
+            guard let type = outbound["type"]?.stringValue,
+                  !ignored.contains(type),
+                  let tag = outbound["tag"]?.stringValue,
+                  !tag.isEmpty,
+                  result[tag] == nil else { return }
+            result[tag] = outbound
+        }
         var seen = Set<String>()
         return outbounds.compactMap { value in
             guard var outbound = value.objectValue,
@@ -250,9 +429,29 @@ public actor SubscriptionRepository {
                 originalTag: original,
                 runtimeTag: runtime,
                 protocolName: type,
-                outbound: outbound
+                outbound: outbound,
+                locationDependencies: Self.locationDependencies(
+                    for: original,
+                    in: dependencyOutbounds
+                )
             )
         }
+    }
+
+    private static func locationDependencies(
+        for originalTag: String,
+        in outbounds: [String: [String: JSONValue]]
+    ) -> [[String: JSONValue]] {
+        var dependencies: [[String: JSONValue]] = []
+        var visited = Set([originalTag])
+        var current = outbounds[originalTag]
+        while let detour = current?["detour"]?.stringValue,
+              visited.insert(detour).inserted,
+              let dependency = outbounds[detour] {
+            dependencies.append(dependency)
+            current = dependency
+        }
+        return dependencies
     }
 
     private static func createSchema(_ database: SQLiteDatabase) throws {
@@ -285,6 +484,23 @@ public actor SubscriptionRepository {
                 measured_at INTEGER NOT NULL
             )
             """
+        )
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS node_location_cache (
+                runtime_tag TEXT PRIMARY KEY,
+                source_identifier TEXT NOT NULL,
+                fingerprint TEXT NOT NULL,
+                country_code TEXT,
+                located_at INTEGER,
+                last_attempt_at INTEGER NOT NULL,
+                FOREIGN KEY (source_identifier) REFERENCES subscriptions(identifier) ON DELETE CASCADE,
+                CHECK (country_code IS NULL OR length(country_code) = 2)
+            )
+            """
+        )
+        try database.execute(
+            "CREATE INDEX IF NOT EXISTS idx_node_location_source ON node_location_cache(source_identifier)"
         )
     }
 }

@@ -116,6 +116,17 @@ struct SettingsView: View {
                     )
                 )
                 AppDivider(leading: 52)
+                toggleRow(
+                    icon: "mappin.and.ellipse",
+                    iconColor: AppVisual.standardSettingIcon,
+                    title: L10n.text("显示服务器位置", "Show Server Location"),
+                    subtitle: model.serverLocationSummary,
+                    value: Binding(
+                        get: { model.showServerLocation },
+                        set: { value in Task { await model.setShowServerLocation(value) } }
+                    )
+                )
+                AppDivider(leading: 52)
                 Button { showingUserAgent = true } label: {
                     settingRow(
                         icon: "wrench.and.screwdriver",

@@ -6,6 +6,7 @@ public actor SettingsStore {
         public static let allowLAN = "allow_lan"
         public static let autoSwitch = "auto_switch"
         public static let showProtocol = "show_protocol"
+        public static let showServerLocation = "show_server_location"
         public static let skipSystemProxy = "skip_system_proxy"
         public static let proxyPort = "proxy_port"
         public static let directDNS = "direct_dns"
@@ -195,7 +196,8 @@ public actor SettingsStore {
             guard let number = value.numberValue, number.isFinite, number >= 0 else {
                 throw NekoPilotError.invalidSetting(key)
             }
-        case Key.allowLAN, Key.autoSwitch, Key.showProtocol, Key.skipSystemProxy, Key.defaultProxyRulesSeeded:
+        case Key.allowLAN, Key.autoSwitch, Key.showProtocol, Key.showServerLocation,
+             Key.skipSystemProxy, Key.defaultProxyRulesSeeded:
             guard value.boolValue != nil else { throw NekoPilotError.invalidSetting(key) }
         case Key.selectedNode:
             guard let string = value.stringValue, string.utf8.count <= 16 * 1024 else {

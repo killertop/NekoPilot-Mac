@@ -244,7 +244,7 @@ struct HomeView: View {
                         .fixedSize()
                 }
 
-                Text(row.displayName)
+                Text(model.displayNameWithServerLocation(for: node))
                     .font(AppTypography.rowTitle)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
@@ -275,7 +275,7 @@ struct HomeView: View {
         }
         .buttonStyle(.plain)
         .disabled(model.status.isBusy)
-        .help("\(row.displayName) · \(row.sourceName)")
+        .help("\(model.displayNameWithServerLocation(for: node)) · \(row.sourceName)")
     }
 
     @ViewBuilder
