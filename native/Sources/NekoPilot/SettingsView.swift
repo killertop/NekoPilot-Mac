@@ -204,9 +204,10 @@ struct SettingsView: View {
                     Text(subtitle)
                         .font(AppTypography.secondary)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            .layoutPriority(1)
             Spacer(minLength: 8)
             Toggle("", isOn: value)
                 .labelsHidden()
@@ -240,8 +241,9 @@ struct SettingsView: View {
                 Text(subtitle)
                     .font(AppTypography.secondary)
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            .layoutPriority(1)
             Spacer(minLength: 8)
             if let trailing {
                 Text(trailing)
@@ -442,7 +444,7 @@ private struct UserAgentSheet: View {
                                 Text(detail)
                                     .font(AppTypography.monoCaption)
                                     .foregroundStyle(.secondary)
-                                    .lineLimit(2)
+                                    .fixedSize(horizontal: false, vertical: true)
                                     .textSelection(.enabled)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)

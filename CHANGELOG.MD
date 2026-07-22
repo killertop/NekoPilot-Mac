@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+## 1.3.4 - 2026-07-22
+
+### 界面 / Interface
+
+- 设置页所有备注文案改为完整换行显示，行高随内容增长；自动选择节点、局域网、协议类型、系统代理与 User Agent 等说明不再出现省略号。 / Settings descriptions now wrap without truncation and rows grow with their content, including automatic selection, LAN, protocol, system-proxy, and User Agent details.
+
 ## 1.3.3 - 2026-07-22
 
 ### 界面 / Interface
