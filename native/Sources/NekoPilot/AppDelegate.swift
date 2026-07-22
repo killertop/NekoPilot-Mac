@@ -40,6 +40,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // first native window has appeared so the Dock icon can still be
         // hidden without suppressing the window.
         NSApp.setActivationPolicy(.accessory)
+        // Changing from a regular app to an accessory app can make AppKit
+        // relinquish activation even though the initial window was just made
+        // key. Reassert the presentation after the policy transition has
+        // completed so a user-initiated first launch reliably opens in front.
+        DispatchQueue.main.async { [weak self] in
+            self?.presentMainWindow()
+        }
         model.initialize()
     }
 

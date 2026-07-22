@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+## 1.4.5 - 2026-07-22
+
+### 窗口 / Window
+
+- 首次创建主窗口并切换为菜单栏应用后，在下一次主线程循环重新激活窗口，避免激活策略切换使首次启动界面落到其他应用后方；不改变关闭窗口后驻留菜单栏的行为。 / Re-activate the main window on the next main-thread cycle after switching to menu-bar mode, preventing the activation-policy transition from placing the first-launch window behind other apps while preserving menu-bar residency after closing the window.
+
 ## 1.4.4 - 2026-07-22
 
 ### 界面 / Interface
