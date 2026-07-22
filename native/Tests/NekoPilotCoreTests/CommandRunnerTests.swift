@@ -52,4 +52,75 @@ struct CommandRunnerTests {
         }
         #expect(Date().timeIntervalSince(startedAt) < 4)
     }
+
+    @Test("Caller cancellation remains CancellationError")
+    func callerCancellationIsPreserved() async {
+        let task = Task {
+            try await CommandRunner.run(
+                executable: URL(fileURLWithPath: "/bin/sleep"),
+                arguments: ["5"],
+                timeout: 10
+            )
+        }
+        try? await Task.sleep(nanoseconds: 30_000_000)
+        let startedAt = Date()
+        task.cancel()
+        do {
+            _ = try await task.value
+            Issue.record("Expected cancellation")
+        } catch is CancellationError {
+            #expect(Date().timeIntervalSince(startedAt) < 1)
+        } catch {
+            Issue.record("Expected CancellationError, received \(error)")
+        }
+    }
+
+    @Test("Inherited pipe writers are covered by the command timeout")
+    func inheritedWriterCannotExtendTimeout() async {
+        let startedAt = Date()
+        do {
+            _ = try await CommandRunner.run(
+                executable: URL(fileURLWithPath: "/bin/sh"),
+                arguments: ["-c", "(trap '' TERM; sleep 5) & printf parent-exited"],
+                timeout: 0.1
+            )
+            Issue.record("Expected inherited writer to time out")
+        } catch {
+            #expect(!(error is CancellationError))
+            #expect(Date().timeIntervalSince(startedAt) < 1)
+        }
+    }
+
+    @Test("A concurrent command does not inherit another command's pipe writers")
+    func concurrentSpawnDoesNotInheritPipeWriters() async throws {
+        for index in 0 ..< 12 {
+            let quickTask = Task {
+                try await CommandRunner.run(
+                    executable: URL(fileURLWithPath: "/bin/sh"),
+                    arguments: ["-c", "sleep 0.03; printf quick-\(index)"],
+                    timeout: 0.5
+                )
+            }
+            let longTask = Task {
+                try await CommandRunner.run(
+                    executable: URL(fileURLWithPath: "/bin/sleep"),
+                    arguments: ["5"],
+                    timeout: 5
+                )
+            }
+
+            let result: CommandResult
+            do {
+                result = try await quickTask.value
+            } catch {
+                longTask.cancel()
+                _ = try? await longTask.value
+                throw error
+            }
+            longTask.cancel()
+            _ = try? await longTask.value
+            #expect(result.status == 0)
+            #expect(result.output == "quick-\(index)")
+        }
+    }
 }

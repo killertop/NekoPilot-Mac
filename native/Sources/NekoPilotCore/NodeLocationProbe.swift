@@ -148,20 +148,11 @@ public actor NodeLocationProbe {
     ) async -> [String: NodeLocationRecord] {
         let temporaryDirectory = job.config.deletingLastPathComponent()
         let client = NativeControlClient(endpoint: job.apiEndpoint)
-        let process = Process()
-        process.executableURL = job.executable
-        process.arguments = ["run", "-c", job.config.path, "--disable-color"]
-        process.currentDirectoryURL = temporaryDirectory
-        // A diagnostic may contain a server address. Location discovery keeps
-        // both streams private and records only the parsed country code.
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
+        let process: LocationWorkerProcess
         do {
-            try process.run()
-            _ = setpgid(process.processIdentifier, process.processIdentifier)
-            try? writeOwnership(
-                process: process,
+            process = try launchOwnedWorker(
                 executable: job.executable,
+                arguments: ["run", "-c", job.config.path, "--disable-color"],
                 directory: temporaryDirectory
             )
         } catch {
@@ -282,7 +273,10 @@ public actor NodeLocationProbe {
         }
     }
 
-    private static func waitUntilReady(job: LocationProbeJob, process: Process) async -> Bool {
+    private static func waitUntilReady(
+        job: LocationProbeJob,
+        process: LocationWorkerProcess
+    ) async -> Bool {
         for _ in 0 ..< 50 {
             guard process.isRunning, !Task.isCancelled else { return false }
             if PortProbe.isListening(job.apiEndpoint.port), PortProbe.isListening(job.proxyPort) {
@@ -293,26 +287,263 @@ public actor NodeLocationProbe {
         return false
     }
 
-    private static func stop(_ process: Process) {
-        guard process.isRunning else { return }
-        let pid = process.processIdentifier
-        if kill(-pid, SIGTERM) != 0 { kill(pid, SIGTERM) }
-        for _ in 0 ..< 10 where process.isRunning { usleep(50_000) }
-        if process.isRunning, kill(-pid, SIGKILL) != 0 { kill(pid, SIGKILL) }
+    /// Starts a worker behind a one-shot stdin gate. The launcher cannot exec
+    /// sing-box until its ownership marker has been committed. If this app
+    /// exits between `posix_spawn()` and the marker write, EOF closes the gate
+    /// and the launcher exits without ever starting the credential-bearing
+    /// worker. `POSIX_SPAWN_SETPGROUP` creates its process group atomically,
+    /// avoiding macOS's post-exec `setpgid` EACCES race.
+    static func launchOwnedWorker(
+        executable: URL,
+        arguments: [String],
+        directory: URL,
+        ownershipWriter: ((LocationWorkerProcess, URL, URL, URL) throws -> Void)? = nil
+    ) throws -> LocationWorkerProcess {
+        let launcher = URL(fileURLWithPath: "/bin/sh")
+        let launcherArguments = [
+            "-c",
+            "cd \"$1\" || exit 1; shift; read -r launch_token || exit 0; " +
+                "[ \"$launch_token\" = start ] || exit 0; exec 0<&-; " +
+                "trap '' TERM; " +
+                "(trap - TERM; exec \"$@\") & worker_pid=$!; " +
+                "wait \"$worker_pid\"; worker_status=$?; " +
+                "kill -KILL -- \"-$$\"; exit \"$worker_status\"",
+            "nekopilot-location-launcher",
+            directory.path,
+            executable.path,
+        ] + arguments
+        let launch = try spawnGatedLauncher(
+            executable: launcher,
+            arguments: launcherArguments
+        )
+        var gateDescriptor: Int32? = launch.gateDescriptor
+
+        guard let childIdentity = recordLaunchIdentity(
+            pid: launch.pid,
+            launcher: launcher
+        ) else {
+            close(launch.gateDescriptor)
+            terminateAndReap(pid: launch.pid)
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "无法确认位置探测进程身份",
+                "Could not verify the location-probe process identity"
+            ))
+        }
+        let process = LocationWorkerProcess(
+            pid: launch.pid,
+            launchIdentity: childIdentity,
+            expectedExecutablePath: executable.path
+        )
+
+        do {
+            if let ownershipWriter {
+                try ownershipWriter(process, launcher, executable, directory)
+            } else {
+                try writeOwnership(
+                    process: process,
+                    executable: executable,
+                    directory: directory
+                )
+            }
+            try writeAll(Data("start\n".utf8), to: launch.gateDescriptor)
+            close(launch.gateDescriptor)
+            gateDescriptor = nil
+            return process
+        } catch {
+            // Closing without the token makes a still-waiting launcher exit;
+            // stop is the fallback if it failed after consuming the token.
+            if let gateDescriptor { close(gateDescriptor) }
+            stop(process)
+            throw error
+        }
+    }
+
+    private static func spawnGatedLauncher(
+        executable: URL,
+        arguments: [String]
+    ) throws -> GatedWorkerLaunch {
+        try ProcessSpawnGate.withLock {
+            try spawnGatedLauncherLocked(
+                executable: executable,
+                arguments: arguments
+            )
+        }
+    }
+
+    private static func spawnGatedLauncherLocked(
+        executable: URL,
+        arguments: [String]
+    ) throws -> GatedWorkerLaunch {
+        var gateDescriptors: [Int32] = [0, 0]
+        guard Darwin.pipe(&gateDescriptors) == 0 else { throw posixError(errno) }
+        guard setCloseOnExec(gateDescriptors) else {
+            gateDescriptors.forEach { close($0) }
+            throw posixError(errno)
+        }
+        guard fcntl(gateDescriptors[1], F_SETNOSIGPIPE, 1) == 0 else {
+            gateDescriptors.forEach { close($0) }
+            throw posixError(errno)
+        }
+
+        var actions: posix_spawn_file_actions_t?
+        var attributes: posix_spawnattr_t?
+        var actionsInitialized = false
+        var attributesInitialized = false
+        defer {
+            if actionsInitialized { posix_spawn_file_actions_destroy(&actions) }
+            if attributesInitialized { posix_spawnattr_destroy(&attributes) }
+        }
+
+        var setupError = posix_spawn_file_actions_init(&actions)
+        if setupError == 0 { actionsInitialized = true }
+        if setupError == 0 {
+            setupError = posix_spawn_file_actions_adddup2(
+                &actions,
+                gateDescriptors[0],
+                STDIN_FILENO
+            )
+        }
+        for descriptor in gateDescriptors where setupError == 0 {
+            setupError = posix_spawn_file_actions_addclose(&actions, descriptor)
+        }
+        if setupError == 0 {
+            setupError = "/dev/null".withCString { path in
+                posix_spawn_file_actions_addopen(
+                    &actions,
+                    STDOUT_FILENO,
+                    path,
+                    O_WRONLY,
+                    0
+                )
+            }
+        }
+        if setupError == 0 {
+            setupError = "/dev/null".withCString { path in
+                posix_spawn_file_actions_addopen(
+                    &actions,
+                    STDERR_FILENO,
+                    path,
+                    O_WRONLY,
+                    0
+                )
+            }
+        }
+        if setupError == 0 {
+            setupError = posix_spawnattr_init(&attributes)
+            if setupError == 0 { attributesInitialized = true }
+        }
+        if setupError == 0 { setupError = posix_spawnattr_setpgroup(&attributes, 0) }
+        if setupError == 0 {
+            let flags = POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT
+            setupError = posix_spawnattr_setflags(&attributes, Int16(flags))
+        }
+        guard setupError == 0 else {
+            gateDescriptors.forEach { close($0) }
+            throw posixError(setupError)
+        }
+
+        let argumentStrings = [executable.path] + arguments
+        let environmentStrings = ProcessInfo.processInfo.environment.map { "\($0.key)=\($0.value)" }
+        var pid: pid_t = 0
+        let spawnError = withCStringArray(argumentStrings) { argumentPointers in
+            withCStringArray(environmentStrings) { environmentPointers in
+                executable.path.withCString { path in
+                    posix_spawn(
+                        &pid,
+                        path,
+                        &actions,
+                        &attributes,
+                        argumentPointers,
+                        environmentPointers
+                    )
+                }
+            }
+        }
+        close(gateDescriptors[0])
+        guard spawnError == 0 else {
+            close(gateDescriptors[1])
+            throw posixError(spawnError)
+        }
+        return GatedWorkerLaunch(pid: pid, gateDescriptor: gateDescriptors[1])
+    }
+
+    private static func withCStringArray<Result>(
+        _ strings: [String],
+        body: (UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>) -> Result
+    ) -> Result {
+        var pointers = strings.map { strdup($0) as UnsafeMutablePointer<CChar>? }
+        pointers.append(nil)
+        defer { pointers.dropLast().forEach { free($0) } }
+        return pointers.withUnsafeMutableBufferPointer { buffer in
+            body(buffer.baseAddress!)
+        }
+    }
+
+    private static func setCloseOnExec(_ descriptors: [Int32]) -> Bool {
+        for descriptor in descriptors {
+            let flags = fcntl(descriptor, F_GETFD)
+            if flags < 0 || fcntl(descriptor, F_SETFD, flags | FD_CLOEXEC) < 0 {
+                return false
+            }
+        }
+        return true
+    }
+
+    private static func writeAll(_ data: Data, to descriptor: Int32) throws {
+        try data.withUnsafeBytes { bytes in
+            guard let baseAddress = bytes.baseAddress else { return }
+            var offset = 0
+            while offset < bytes.count {
+                let count = Darwin.write(
+                    descriptor,
+                    baseAddress.advanced(by: offset),
+                    bytes.count - offset
+                )
+                if count > 0 {
+                    offset += count
+                } else if count < 0, errno == EINTR {
+                    continue
+                } else {
+                    throw posixError(count < 0 ? errno : EIO)
+                }
+            }
+        }
+    }
+
+    private static func recordLaunchIdentity(
+        pid: pid_t,
+        launcher: URL
+    ) -> ProcessIdentityRecord? {
+        for _ in 0 ..< 20 {
+            if let identity = ProcessIdentity.record(
+                pid: pid,
+                expectedExecutablePath: launcher.path
+            ) {
+                return identity
+            }
+            usleep(1_000)
+        }
+        return nil
+    }
+
+    private static func posixError(_ code: Int32) -> NekoPilotError {
+        .processFailed(String(cString: strerror(code)))
+    }
+
+    private static func stop(_ process: LocationWorkerProcess) {
+        process.stop()
     }
 
     private static func writeOwnership(
-        process: Process,
+        process: LocationWorkerProcess,
         executable: URL,
         directory: URL
     ) throws {
-        guard let child = ProcessIdentity.record(
-            pid: process.processIdentifier,
-            expectedExecutablePath: executable.path
-        ) else { return }
         let marker = LocationWorkerOwnership(
             ownerProcess: ProcessIdentity.current(),
-            childProcess: child
+            childProcess: process.launchIdentity,
+            expectedExecutablePath: executable.path,
+            ownsProcessGroup: true
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
@@ -336,19 +567,31 @@ public actor NodeLocationProbe {
             if let data = try? Data(contentsOf: markerURL),
                let marker = try? JSONDecoder().decode(LocationWorkerOwnership.self, from: data) {
                 if let owner = marker.ownerProcess, ProcessIdentity.matches(owner) { continue }
-                if ProcessIdentity.matches(marker.childProcess) {
-                    terminateProcessGroup(pid: marker.childProcess.pid)
-                    for _ in 0 ..< 10 where ProcessIdentity.matches(marker.childProcess) {
-                        try? await Task.sleep(nanoseconds: 50_000_000)
+                let identityMatches = workerIdentityMatches(marker)
+                let ownsProcessGroup = marker.ownsProcessGroup == true ||
+                    (identityMatches && getpgid(marker.childProcess.pid) == marker.childProcess.pid)
+                if identityMatches, ownsProcessGroup {
+                    _ = kill(-marker.childProcess.pid, SIGTERM)
+                    await waitForProcessGroupExit(pid: marker.childProcess.pid)
+                    if processGroupExists(pid: marker.childProcess.pid) {
+                        _ = kill(-marker.childProcess.pid, SIGKILL)
+                        await waitForProcessGroupExit(pid: marker.childProcess.pid)
                     }
-                    if ProcessIdentity.matches(marker.childProcess) {
-                        terminateProcessGroup(pid: marker.childProcess.pid, force: true)
-                        for _ in 0 ..< 10 where ProcessIdentity.matches(marker.childProcess) {
-                            try? await Task.sleep(nanoseconds: 50_000_000)
-                        }
+                } else if identityMatches {
+                    // Compatibility for an old marker whose child never made
+                    // it into a dedicated group. Revalidate its full identity
+                    // before each exact-PID signal.
+                    _ = kill(marker.childProcess.pid, SIGTERM)
+                    await waitForWorkerExit(marker)
+                    if workerIdentityMatches(marker) {
+                        _ = kill(marker.childProcess.pid, SIGKILL)
+                        await waitForWorkerExit(marker)
                     }
                 }
-                if !ProcessIdentity.matches(marker.childProcess) {
+                let ownedProcessRemains = ownsProcessGroup
+                    ? processGroupExists(pid: marker.childProcess.pid)
+                    : workerIdentityMatches(marker)
+                if !ownedProcessRemains {
                     try? fileManager.removeItem(at: directory)
                 }
                 continue
@@ -364,18 +607,156 @@ public actor NodeLocationProbe {
             }
         }
     }
+
+    static func workerIdentityMatches(_ marker: LocationWorkerOwnership) -> Bool {
+        guard let actual = ProcessIdentity.record(pid: marker.childProcess.pid),
+              actual.pid == marker.childProcess.pid,
+              actual.startSeconds == marker.childProcess.startSeconds,
+              actual.startMicroseconds == marker.childProcess.startMicroseconds else {
+            return false
+        }
+        let actualPath = URL(fileURLWithPath: actual.executablePath).standardizedFileURL.path
+        let launcherPath = URL(fileURLWithPath: marker.childProcess.executablePath)
+            .standardizedFileURL.path
+        if actualPath == launcherPath { return true }
+        guard let expectedExecutablePath = marker.expectedExecutablePath else { return false }
+        return actualPath == URL(fileURLWithPath: expectedExecutablePath).standardizedFileURL.path
+    }
+
+    static func processGroupExists(pid: pid_t) -> Bool {
+        guard pid > 1 else { return false }
+        if kill(-pid, 0) == 0 { return true }
+        return errno == EPERM
+    }
+
+    private static func waitForProcessGroupExit(pid: pid_t) async {
+        for _ in 0 ..< 10 where processGroupExists(pid: pid) {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+
+    private static func waitForWorkerExit(_ marker: LocationWorkerOwnership) async {
+        for _ in 0 ..< 10 where workerIdentityMatches(marker) {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
 }
 
-private struct LocationWorkerOwnership: Codable, Sendable {
+private struct GatedWorkerLaunch {
+    let pid: pid_t
+    let gateDescriptor: Int32
+}
+
+/// Owns the direct child returned by posix_spawn. Leader exit is observed with
+/// WNOWAIT so the PID/PGID cannot be reused before the entire owned group has
+/// received its cleanup signal and the leader is explicitly reaped.
+final class LocationWorkerProcess: @unchecked Sendable {
+    let pid: pid_t
+    let launchIdentity: ProcessIdentityRecord
+    let expectedExecutablePath: String
+    private let lock = NSLock()
+    private var reaped = false
+    private var groupCleanupAttempted = false
+
+    init(
+        pid: pid_t,
+        launchIdentity: ProcessIdentityRecord,
+        expectedExecutablePath: String
+    ) {
+        self.pid = pid
+        self.launchIdentity = launchIdentity
+        self.expectedExecutablePath = expectedExecutablePath
+    }
+
+    var processIdentifier: pid_t { pid }
+
+    var isRunning: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !reaped else { return false }
+        var info = siginfo_t()
+        while true {
+            let result = waitid(
+                P_PID,
+                id_t(pid),
+                &info,
+                WEXITED | WNOHANG | WNOWAIT
+            )
+            if result == 0 { return info.si_pid == 0 }
+            if errno == ECHILD {
+                reaped = true
+                return false
+            }
+            if errno == EINTR { continue }
+            return false
+        }
+    }
+
+    func waitUntilExit() {
+        lock.lock()
+        defer { lock.unlock() }
+        waitForLeaderExitLocked()
+        cleanupGroupLocked()
+        reapLocked()
+    }
+
+    func stop() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !reaped else { return }
+        cleanupGroupLocked()
+        reapLocked()
+    }
+
+    private func waitForLeaderExitLocked() {
+        guard !reaped else { return }
+        var info = siginfo_t()
+        while waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT) == -1 {
+            if errno == EINTR { continue }
+            if errno == ECHILD { reaped = true }
+            return
+        }
+    }
+
+    private func cleanupGroupLocked() {
+        guard !groupCleanupAttempted else { return }
+        groupCleanupAttempted = true
+        // The leader remains waitable until reapLocked, so its PID cannot be
+        // reused while this owned PGID is signalled.
+        _ = kill(-pid, SIGKILL)
+    }
+
+    private func reapLocked() {
+        guard !reaped else { return }
+        var rawStatus: Int32 = 0
+        while waitpid(pid, &rawStatus, 0) == -1 {
+            if errno == EINTR { continue }
+            if errno == ECHILD { reaped = true }
+            return
+        }
+        reaped = true
+    }
+}
+
+private func terminateAndReap(pid: pid_t) {
+    guard pid > 1 else { return }
+    _ = kill(-pid, SIGKILL)
+    var rawStatus: Int32 = 0
+    while waitpid(pid, &rawStatus, 0) == -1 {
+        if errno != EINTR { return }
+    }
+}
+
+struct LocationWorkerOwnership: Codable, Sendable {
     static let filename = ".worker-ownership.json"
     let ownerProcess: ProcessIdentityRecord?
     let childProcess: ProcessIdentityRecord
-}
-
-private func terminateProcessGroup(pid: Int32, force: Bool = false) {
-    guard pid > 1 else { return }
-    let signal = force ? SIGKILL : SIGTERM
-    if kill(-pid, signal) != 0 { _ = kill(pid, signal) }
+    /// Added for gated launches. Older markers decode with nil and continue to
+    /// match their child using the executable path recorded in childProcess.
+    let expectedExecutablePath: String?
+    /// New posix_spawn workers always own an atomic process group. Nil keeps
+    /// older markers decodable and routes them through identity-safe fallback.
+    let ownsProcessGroup: Bool?
 }
 
 private struct LocationWorkerEndpoint: Sendable {
