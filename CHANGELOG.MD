@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+## 1.4.3 - 2026-07-22
+
+### 稳定性与性能 / Reliability and Performance
+
+- 睡眠与唤醒现在按事件顺序等待自动选择状态变更，消除短时睡眠后旧任务回写暂停状态的竞态；原生覆盖式滚动条把不存在的水平/垂直 scroller 视为已配置，避免 SwiftUI 刷新时重复设置 AppKit 属性。新增真实配置编译回归测试，确保可见代理规则在流量与 DNS 路由中始终优先于中国 `.srs`。 / Sleep and wake now await automatic-selection lifecycle changes in event order, eliminating stale suspension writes after a short sleep. Native overlay scrollers treat missing horizontal or vertical scrollers as already configured, avoiding repeated AppKit mutations during SwiftUI updates. A real configuration-compilation regression test now guarantees that visible proxy rules precede the China `.srs` rules for both traffic and DNS routing.
+
 ## 1.4.2 - 2026-07-22
 
 ### 规则 / Rules

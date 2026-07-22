@@ -646,22 +646,25 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func handleSleep() {
+    func handleSleep() async {
         wakeTask?.cancel()
         wakeTask = nil
         sleepStartedAt = Date()
         wasRunningBeforeSleep = status.isRunning
         lifecycleGeneration += 1
-        Task { [weak self] in await self?.automaticSelection.setLifecycleSuspended(true) }
+        // Awaiting the actor call preserves event order: a subsequent wake can
+        // enqueue only after this suspension request, so it always owns the
+        // final lifecycle state instead of racing an untracked sleep Task.
+        await automaticSelection.setLifecycleSuspended(true)
     }
 
-    func handleWake() {
+    func handleWake() async {
         lifecycleGeneration += 1
         let generation = lifecycleGeneration
         guard wasRunningBeforeSleep,
               let sleepStartedAt,
               Date().timeIntervalSince(sleepStartedAt) >= 30 else {
-            Task { [weak self] in await self?.automaticSelection.setLifecycleSuspended(false) }
+            await automaticSelection.setLifecycleSuspended(false)
             return
         }
         wakeTask?.cancel()

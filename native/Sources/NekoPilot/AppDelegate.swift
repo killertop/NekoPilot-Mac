@@ -101,11 +101,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func willSleep() {
-        Task { @MainActor [weak self] in self?.model?.handleSleep() }
+        Task { @MainActor [weak self] in await self?.model?.handleSleep() }
     }
 
     @objc private func didWake() {
-        Task { @MainActor [weak self] in self?.model?.handleWake() }
+        Task { @MainActor [weak self] in await self?.model?.handleWake() }
     }
 
     func showMainWindow() {

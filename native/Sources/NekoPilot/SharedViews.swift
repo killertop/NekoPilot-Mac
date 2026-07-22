@@ -111,11 +111,15 @@ private final class AppOverlayScrollerConfigurationView: NSView {
     }
 
     private func configure(_ scrollView: NSScrollView) {
+        let verticalScrollerIsConfigured = scrollView.verticalScroller
+            .map { $0.controlSize == .small } ?? true
+        let horizontalScrollerIsConfigured = scrollView.horizontalScroller
+            .map { $0.controlSize == .small } ?? true
         let alreadyConfigured = configuredScrollView === scrollView
             && scrollView.scrollerStyle == .overlay
             && scrollView.autohidesScrollers
-            && scrollView.verticalScroller?.controlSize == .small
-            && scrollView.horizontalScroller?.controlSize == .small
+            && verticalScrollerIsConfigured
+            && horizontalScrollerIsConfigured
         guard !alreadyConfigured else { return }
         configuredScrollView = scrollView
         scrollView.scrollerStyle = .overlay
