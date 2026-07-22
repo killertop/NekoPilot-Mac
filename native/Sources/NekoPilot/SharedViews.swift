@@ -82,6 +82,9 @@ enum AppTypography {
 /// macOS' legacy "always show scroll bars" preference. The native overlay
 /// scroller retains system animation, input, contrast, and accessibility.
 private final class AppOverlayScrollerConfigurationView: NSView {
+    private weak var configuredScrollView: NSScrollView?
+    private var configurationScheduled = false
+
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
         configureEnclosingScrollView()
@@ -93,13 +96,32 @@ private final class AppOverlayScrollerConfigurationView: NSView {
     }
 
     func configureEnclosingScrollView() {
-        DispatchQueue.main.async { [weak self] in
-            guard let scrollView = self?.enclosingScrollView else { return }
-            scrollView.scrollerStyle = .overlay
-            scrollView.autohidesScrollers = true
-            scrollView.verticalScroller?.controlSize = .small
-            scrollView.horizontalScroller?.controlSize = .small
+        if let scrollView = enclosingScrollView {
+            configure(scrollView)
+            return
         }
+        guard !configurationScheduled else { return }
+        configurationScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.configurationScheduled = false
+            guard let scrollView = self.enclosingScrollView else { return }
+            self.configure(scrollView)
+        }
+    }
+
+    private func configure(_ scrollView: NSScrollView) {
+        let alreadyConfigured = configuredScrollView === scrollView
+            && scrollView.scrollerStyle == .overlay
+            && scrollView.autohidesScrollers
+            && scrollView.verticalScroller?.controlSize == .small
+            && scrollView.horizontalScroller?.controlSize == .small
+        guard !alreadyConfigured else { return }
+        configuredScrollView = scrollView
+        scrollView.scrollerStyle = .overlay
+        scrollView.autohidesScrollers = true
+        scrollView.verticalScroller?.controlSize = .small
+        scrollView.horizontalScroller?.controlSize = .small
     }
 }
 

@@ -6,6 +6,7 @@ import NekoPilotCore
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private weak var model: AppModel?
+    private var mainWindow: NSWindow?
     private var statusItemController: StatusItemController?
     private var terminationPending = false
     private var terminationFinished = false
@@ -30,7 +31,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func attach(_ model: AppModel) {
         guard self.model == nil else { return }
         self.model = model
-        statusItemController = StatusItemController(model: model)
+        statusItemController = StatusItemController(model: model) { [weak self] in
+            self?.showMainWindow()
+        }
         presentMainWindow()
         // SwiftUI does not create its initial WindowGroup while the process is
         // already an accessory app on current macOS. Switch only after the
@@ -111,11 +114,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func presentMainWindow() {
         NSApp.activate(ignoringOtherApps: true)
-        for window in NSApp.windows where window.canBecomeMain {
-            window.collectionBehavior.insert(.moveToActiveSpace)
-            window.makeKeyAndOrderFront(nil)
-            return
-        }
+        let window = mainWindow ?? NSApp.windows.first(where: { $0.canBecomeMain })
+        guard let window else { return }
+        mainWindow = window
+        // A closed window is removed from NSApp.windows. Retain it explicitly
+        // and prevent AppKit from releasing its SwiftUI content so the menu-bar
+        // action can order the same control window front again.
+        window.isReleasedWhenClosed = false
+        window.collectionBehavior.insert(.moveToActiveSpace)
+        window.makeKeyAndOrderFront(nil)
     }
 
     private func acquireInstanceLock() -> Bool {

@@ -95,6 +95,25 @@ struct NodeSelectionCoordinatorTests {
         #expect(await probe.persisted == ["C"])
     }
 
+    @Test("Disabling during persistence rolls back the automatic choice")
+    func disablingAutomaticSelectionDuringPersistenceRollsBack() async throws {
+        let probe = PersistenceGateProbe()
+        let coordinator = NodeSelectionCoordinator(
+            applySelection: { node in await probe.apply(node) },
+            persistSelection: { node in await probe.persist(node) },
+            loadPersistedSelection: { "Previous" }
+        )
+
+        let automatic = Task { try await coordinator.submitAutomatic(node: "A") }
+        await probe.waitUntilFirstPersistenceStarted()
+        await coordinator.setAutomaticSelectionEnabled(false)
+        await probe.releaseFirstPersistence()
+
+        #expect(try await automatic.value == false)
+        #expect(await probe.applied == ["A", "Previous"])
+        #expect(await probe.persisted == ["A", "Previous"])
+    }
+
     @Test("A persistence failure restores the last committed runtime node")
     func persistenceFailureRollsBackRuntime() async {
         let probe = SelectionProbe()
@@ -112,6 +131,37 @@ struct NodeSelectionCoordinatorTests {
         }
         #expect(await probe.applied == ["Next", "Previous"])
         #expect(await probe.persisted.isEmpty)
+    }
+}
+
+private actor PersistenceGateProbe {
+    private(set) var applied: [String] = []
+    private(set) var persisted: [String] = []
+    private var firstPersistenceStarted = false
+    private var firstPersistenceWaiter: CheckedContinuation<Void, Never>?
+    private var firstPersistenceGate: CheckedContinuation<Void, Never>?
+
+    func apply(_ node: String) {
+        applied.append(node)
+    }
+
+    func persist(_ node: String) async {
+        persisted.append(node)
+        guard !firstPersistenceStarted else { return }
+        firstPersistenceStarted = true
+        firstPersistenceWaiter?.resume()
+        firstPersistenceWaiter = nil
+        await withCheckedContinuation { firstPersistenceGate = $0 }
+    }
+
+    func waitUntilFirstPersistenceStarted() async {
+        if firstPersistenceStarted { return }
+        await withCheckedContinuation { firstPersistenceWaiter = $0 }
+    }
+
+    func releaseFirstPersistence() {
+        firstPersistenceGate?.resume()
+        firstPersistenceGate = nil
     }
 }
 

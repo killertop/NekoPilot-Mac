@@ -10,12 +10,14 @@ final class StatusItemController: NSObject {
     private let menu = NSMenu()
     private let toggleItem = NSMenuItem()
     private let copyItem = NSMenuItem()
+    private let showWindowAction: () -> Void
     private var cancellables = Set<AnyCancellable>()
     private var copyFeedbackTask: Task<Void, Never>?
     private lazy var baseTemplateImage = loadTemplateImage()
 
-    init(model: AppModel) {
+    init(model: AppModel, showWindowAction: @escaping () -> Void) {
         self.model = model
+        self.showWindowAction = showWindowAction
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
         configureMenu()
@@ -153,11 +155,7 @@ final class StatusItemController: NSObject {
     }
 
     @objc private func showWindow() {
-        NSApp.activate(ignoringOtherApps: true)
-        for window in NSApp.windows where window.canBecomeMain {
-            window.makeKeyAndOrderFront(nil)
-            break
-        }
+        showWindowAction()
     }
 
     @objc private func toggleConnection() {

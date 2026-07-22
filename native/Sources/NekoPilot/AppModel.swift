@@ -272,7 +272,16 @@ final class AppModel: ObservableObject {
         selectedNode = node.runtimeTag
         do {
             let applied = try await selection.submit(node: node.runtimeTag)
-            if applied, autoSelect {
+            if !applied {
+                // An authoritative automatic request may reject this optimistic
+                // manual selection. Restore the last committed value now; a
+                // successful automatic request will publish its winner through
+                // the selection stream when it finishes.
+                let committed = (await settings.string(SettingsStore.Key.selectedNode)).nilIfEmpty
+                if selectionGeneration == generation {
+                    selectedNode = committed ?? previous
+                }
+            } else if autoSelect {
                 lastAutomaticSelectionUpdate = nil
                 await automaticSelection.manualSelectionDidApply()
             }

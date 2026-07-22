@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+## 1.4.1 - 2026-07-22
+
+### 稳定性与性能 / Reliability and Performance
+
+- 修复自动选择与手动点击并发时首页短暂或长期显示未实际应用节点的问题；关闭自动选择即使发生在设置持久化期间，也会撤销并恢复最后提交的节点。滚动条配置按原生滚动视图实例去重，避免测速刷新期间重复调度主线程任务。 / Fixed stale Home selection when manual taps race with authoritative automatic selection. Disabling automatic selection now revokes and restores the last committed node even during preference persistence. Native scroller configuration is deduplicated per scroll-view instance to avoid redundant main-thread scheduling during live speed-test updates.
+- 主窗口关闭按钮现在只隐藏并保留 SwiftUI 窗口实例；菜单栏“显示窗口”、Dock 重开和外部链接统一通过应用层重新激活该窗口，不再出现首次关闭后无法恢复。 / The main window's close button now hides and retains the SwiftUI window instance. Show Window, Dock reopen, and external links all reactivate it through the app delegate, fixing the first-close failure to restore the window.
+
 ## 1.4.0 - 2026-07-22
 
 ### 界面 / Interface

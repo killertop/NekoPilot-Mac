@@ -120,6 +120,17 @@ public actor NodeSelectionCoordinator {
                     continue
                 }
                 try await persistSelection(request.node)
+                if request.origin == .automatic, !automaticSelectionEnabled {
+                    // The preference write can suspend. Re-check after it so
+                    // disabling automatic selection cannot commit and publish
+                    // one final automatic node behind the user's switch.
+                    if pending == nil, let previousNode, previousNode != request.node {
+                        try await applySelection(previousNode)
+                        try await persistSelection(previousNode)
+                    }
+                    request.continuation.resume(returning: false)
+                    continue
+                }
                 if pending != nil {
                     request.continuation.resume(returning: false)
                     continue
