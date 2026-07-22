@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+## 1.3.8 - 2026-07-22
+
+### 菜单栏 / Menu Bar
+
+- 按实际菜单栏截图校正图标光学重心：保持 `18×18pt` 画布、`16pt` 主体和状态标记尺寸不变，将完整图形下移 `0.5pt`，使其与系统及其他应用图标的视觉基线一致。 / Corrected the menu-bar icon's optical alignment from an actual screenshot: the 18×18pt canvas, 16pt mark, and status badge sizes remain unchanged while the complete composition moves down 0.5pt to align visually with system and other app icons.
+
 ## 1.3.7 - 2026-07-22
 
 ### 菜单栏 / Menu Bar

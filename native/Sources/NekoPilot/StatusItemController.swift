@@ -114,12 +114,15 @@ final class StatusItemController: NSObject {
             NSColor.black.setStroke()
             NSColor.black.setFill()
             baseTemplateImage.draw(
-                in: NSRect(x: 1, y: 2, width: 16, height: 16),
+                // The shield is geometrically centered but visually top-heavy.
+                // Lower the complete mark by 0.5pt to match the optical baseline
+                // of standard macOS menu-bar icons without changing its size.
+                in: NSRect(x: 1, y: 1.5, width: 16, height: 16),
                 from: .zero,
                 operation: .sourceOver,
                 fraction: 1
             )
-            let badgeRect = NSRect(x: 12.75, y: 2, width: 4, height: 4)
+            let badgeRect = NSRect(x: 12.75, y: 1.5, width: 4, height: 4)
             switch status {
             case .running:
                 NSBezierPath(ovalIn: badgeRect).fill()
