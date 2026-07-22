@@ -255,6 +255,7 @@ final class AppModel: ObservableObject {
             let target = preferredNodeForConnection()
             if selectedNode != target {
                 selectedNode = target
+                rebuildSortedNodes()
                 try await settings.set(target.map(JSONValue.string), for: SettingsStore.Key.selectedNode)
             }
             try await engine.start(selectedNode: target)
@@ -281,13 +282,17 @@ final class AppModel: ObservableObject {
                 let committed = (await settings.string(SettingsStore.Key.selectedNode)).nilIfEmpty
                 if selectionGeneration == generation {
                     selectedNode = committed ?? previous
+                    rebuildSortedNodes()
                 }
             } else if autoSelect {
                 lastAutomaticSelectionUpdate = nil
                 await automaticSelection.manualSelectionDidApply()
             }
         } catch {
-            if selectionGeneration == generation { selectedNode = previous }
+            if selectionGeneration == generation {
+                selectedNode = previous
+                rebuildSortedNodes()
+            }
             show(error)
         }
     }

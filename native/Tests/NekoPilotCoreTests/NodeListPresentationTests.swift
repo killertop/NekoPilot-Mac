@@ -67,6 +67,32 @@ struct NodeListPresentationTests {
         ])
     }
 
+    @Test("Pinning preserves strict ordering when duplicate runtime tags are present")
+    func pinningDuplicateRuntimeTagsFallsBackToStableOrdering() {
+        let slower = ProxyNode(
+            sourceIdentifier: "source",
+            sourceName: "Source",
+            originalTag: "VLESS · Slower",
+            runtimeTag: "@np:source:duplicate",
+            protocolName: "vless",
+            outbound: [:]
+        )
+        let faster = ProxyNode(
+            sourceIdentifier: "source",
+            sourceName: "Source",
+            originalTag: "VLESS · Faster",
+            runtimeTag: "@np:source:duplicate",
+            protocolName: "vless",
+            outbound: [:]
+        )
+
+        #expect(NodeListPresentation.sorted(
+            [slower, faster],
+            using: [slower.runtimeTag: DelayRecord(delay: 80)],
+            pinning: slower.runtimeTag
+        ).map(\.originalTag) == ["VLESS · Faster", "VLESS · Slower"])
+    }
+
     @Test("Connection recommendation uses only fresh reachable history")
     func preferredConnectionNodeUsesFreshHistory() {
         let now = Date(timeIntervalSince1970: 10_000)

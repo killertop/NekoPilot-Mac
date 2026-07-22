@@ -44,8 +44,9 @@ public enum NodeListPresentation {
         pinning selectedNode: String? = nil
     ) -> [ProxyNode] {
         nodes.sorted { lhs, rhs in
-            if lhs.runtimeTag == selectedNode { return true }
-            if rhs.runtimeTag == selectedNode { return false }
+            let leftIsPinned = lhs.runtimeTag == selectedNode
+            let rightIsPinned = rhs.runtimeTag == selectedNode
+            if leftIsPinned != rightIsPinned { return leftIsPinned }
             let left = delays[lhs.runtimeTag]?.delay
             let right = delays[rhs.runtimeTag]?.delay
             switch (left, right) {
