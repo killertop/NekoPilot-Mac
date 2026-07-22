@@ -115,9 +115,10 @@ final class StatusItemController: NSObject {
             NSColor.black.setFill()
             baseTemplateImage.draw(
                 // The shield is geometrically centered but visually top-heavy.
-                // Lower the complete mark by 0.5pt to match the optical baseline
-                // of standard macOS menu-bar icons without changing its size.
-                in: NSRect(x: 1, y: 1.5, width: 16, height: 16),
+                // Lower the top-heavy shield by 1.5pt to match the optical
+                // baseline of standard macOS menu-bar icons without changing
+                // its size. The status badge has its own balanced position.
+                in: NSRect(x: 1, y: 0.5, width: 16, height: 16),
                 from: .zero,
                 operation: .sourceOver,
                 fraction: 1

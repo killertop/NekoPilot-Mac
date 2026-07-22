@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+## 1.3.9 - 2026-07-22
+
+### 菜单栏 / Menu Bar
+
+- 依据未连接状态的新截图独立校正盾牌主体：其光学中心再下移 `1pt`，消除状态点曾掩盖的上偏；状态标记保持原位，避免连接状态整体偏低。 / Independently corrected the shield from a new disconnected-state screenshot: its optical center moves down another 1pt to remove the upward bias previously masked by the status badge, while the badge stays in place to avoid pulling connected states too low.
+
 ## 1.3.8 - 2026-07-22
 
 ### 菜单栏 / Menu Bar
