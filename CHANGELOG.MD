@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+## 1.4.6 - 2026-07-22
+
+### 文档 / Documentation
+
+- 将 NekoPilot 官网加入 GitHub 仓库 About、主 README、中文 README、现有 Release 页面及未来自动发布文案，统一公开项目入口与下载导航。 / Added the NekoPilot website to GitHub repository metadata, the main and Chinese READMEs, existing Release pages, and future automated release notes for a consistent public project and download entry point.
+
 ## 1.4.5 - 2026-07-22
 
 ### 窗口 / Window

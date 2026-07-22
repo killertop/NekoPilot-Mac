@@ -1,7 +1,15 @@
 # NekoPilot for Mac / NekoPilot Mac 原生代理客户端
 
 <p align="center">
-  <img src="./native/Resources/NekoPilotLogo.png" alt="NekoPilot" width="128">
+  <a href="https://nekopilot-official.sturdy-joy-3290.chatgpt.site">
+    <img src="./native/Resources/NekoPilotLogo.png" alt="NekoPilot" width="128">
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://nekopilot-official.sturdy-joy-3290.chatgpt.site"><strong>官方网站 / Official Website</strong></a>
+  ·
+  <a href="https://github.com/killertop/NekoPilot-Mac/releases"><strong>下载 / Download</strong></a>
 </p>
 
 NekoPilot 是面向 Apple 芯片 Mac 的原生代理客户端；应用壳使用 SwiftUI + AppKit，未经修改的上游 Go 原版 sing-box 是唯一代理核心。<br>
@@ -77,7 +85,7 @@ native/scripts/                 固定 sing-box 构建与 macOS 打包校验 / p
 docs/                           开发与发布文档 / development and release guides
 ```
 
-更多信息 / More information: [架构说明 / Architecture](docs/ARCHITECTURE.md)、[中文说明 / Chinese README](README_CN.md)、[开发指南 / Development Guide](docs/DEVELOPMENT.md)、[发布指南 / Release Guide](docs/RELEASE.md)。
+更多信息 / More information: [官方网站 / Official Website](https://nekopilot-official.sturdy-joy-3290.chatgpt.site)、[架构说明 / Architecture](docs/ARCHITECTURE.md)、[中文说明 / Chinese README](README_CN.md)、[开发指南 / Development Guide](docs/DEVELOPMENT.md)、[发布指南 / Release Guide](docs/RELEASE.md)。
 
 源码通过发布指南说明的 VPS 裸仓库同步；维护仓库为 [killertop/NekoPilot-Mac](https://github.com/killertop/NekoPilot-Mac)。许可证见 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。<br>
 Source publication is routed through the VPS bare repository described in the release guide. The maintained repository is [killertop/NekoPilot-Mac](https://github.com/killertop/NekoPilot-Mac). See [LICENSE](LICENSE) and [NOTICE](NOTICE).
