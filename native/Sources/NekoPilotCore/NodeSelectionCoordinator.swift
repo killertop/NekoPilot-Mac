@@ -18,6 +18,7 @@ public actor NodeSelectionCoordinator {
     private var pending: Request?
     private var processing = false
     private var activeOrigin: Origin?
+    private var automaticSelectionEnabled = true
     private var continuations: [UUID: AsyncStream<String>.Continuation] = [:]
 
     public init(engine: EngineSupervisor, settings: SettingsStore) {
@@ -41,21 +42,35 @@ public actor NodeSelectionCoordinator {
         self.loadPersistedSelection = loadPersistedSelection
     }
 
-    public func submit(node: String) async throws {
-        _ = try await submit(node: node, origin: .manual)
+    @discardableResult
+    public func submit(node: String) async throws -> Bool {
+        try await submit(node: node, origin: .manual)
     }
 
-    /// Automatic requests are deliberately lower priority than direct user
-    /// intent. `false` means a manual request was already active or superseded
-    /// this request before it became the persisted selection.
+    /// While automatic selection is enabled, its requests are authoritative.
+    /// `false` means a higher-priority automatic request was already active or
+    /// superseded this request before it became the persisted selection.
     public func submitAutomatic(node: String) async throws -> Bool {
         try await submit(node: node, origin: .automatic)
     }
 
+    public func setAutomaticSelectionEnabled(_ enabled: Bool) {
+        automaticSelectionEnabled = enabled
+        if !enabled, let request = pending, request.origin == .automatic {
+            pending = nil
+            request.continuation.resume(returning: false)
+        }
+    }
+
     private func submit(node: String, origin: Origin) async throws -> Bool {
         try await withCheckedThrowingContinuation { continuation in
-            if origin == .automatic,
-               activeOrigin == .manual || pending?.origin == .manual {
+            if origin == .automatic, !automaticSelectionEnabled {
+                continuation.resume(returning: false)
+                return
+            }
+            if origin == .manual,
+               automaticSelectionEnabled,
+               activeOrigin == .automatic || pending?.origin == .automatic {
                 continuation.resume(returning: false)
                 return
             }
@@ -86,6 +101,17 @@ public actor NodeSelectionCoordinator {
             let previousNode = await loadPersistedSelection()
             do {
                 try await applySelection(request.node)
+                if request.origin == .automatic, !automaticSelectionEnabled {
+                    // Disabling the feature while the engine call is in flight
+                    // revokes the automatic choice. A queued manual request
+                    // will immediately replace it; otherwise restore disk's
+                    // last committed runtime selection.
+                    if pending == nil, let previousNode, previousNode != request.node {
+                        try? await applySelection(previousNode)
+                    }
+                    request.continuation.resume(returning: false)
+                    continue
+                }
                 // A newer tap may arrive while the engine call is suspended.
                 // Keep the optimistic UI on the newest request instead of
                 // publishing an already superseded intermediate selection.

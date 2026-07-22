@@ -5,7 +5,6 @@ public struct AutoNodeSelectionUpdate: Sendable, Equatable {
         case kept(node: String, delay: Int)
         case considering(node: String, delay: Int, confirmations: Int)
         case switched(node: String, delay: Int)
-        case manualHold(node: String?, delay: Int?)
         case unavailable
         case failed
     }
@@ -143,7 +142,6 @@ public actor AutoNodeSelectionService {
     private var isEngineRunning = false
     private var isExplicitTestActive = false
     private var isLifecycleSuspended = false
-    private var hasManualOverride = false
     private var decisionState = AutoNodeSelectionDecisionState()
     private var updateContinuations: [UUID: AsyncStream<AutoNodeSelectionUpdate>.Continuation] = [:]
 
@@ -183,7 +181,6 @@ public actor AutoNodeSelectionService {
         isEnabled = enabled
         decisionState = AutoNodeSelectionDecisionState()
         if enabled {
-            hasManualOverride = false
             reschedule(after: Self.enableDelay)
         } else {
             invalidateCycle()
@@ -206,14 +203,11 @@ public actor AutoNodeSelectionService {
         reschedule(after: Self.interval)
     }
 
-    public func setManualOverride(_ active: Bool) {
-        guard hasManualOverride != active else { return }
-        hasManualOverride = active
+    public func manualSelectionDidApply() {
+        // Manual selection is allowed as an immediate user action, but it must
+        // not inherit a candidate confirmation from the previously selected
+        // node. The normal automatic schedule remains authoritative.
         decisionState.resetCandidate()
-        // Cancelling first guarantees an in-flight automatic request cannot be
-        // submitted after a direct user selection. Periodic history refreshes
-        // resume later, but the service will not switch while the hold is set.
-        reschedule(after: Self.interval)
     }
 
     public func setExplicitTestActive(_ active: Bool) {
@@ -313,16 +307,6 @@ public actor AutoNodeSelectionService {
               let selector = try? await nativeAPI.selector(knownNodes: Array(currentTags)),
               currentTags.contains(selector.current) else {
             publish(AutoNodeSelectionUpdate(delays: history, outcome: .failed))
-            finishCycle(generation: scheduledGeneration, nextDelay: Self.interval)
-            return
-        }
-
-        if hasManualOverride {
-            decisionState.resetCandidate()
-            publish(AutoNodeSelectionUpdate(
-                delays: history,
-                outcome: .manualHold(node: selector.current, delay: delays[selector.current]?.delay)
-            ))
             finishCycle(generation: scheduledGeneration, nextDelay: Self.interval)
             return
         }

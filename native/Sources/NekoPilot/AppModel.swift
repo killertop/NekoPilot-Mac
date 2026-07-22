@@ -46,7 +46,6 @@ final class AppModel: ObservableObject {
     @Published var pendingLANEnable = false
     @Published var availableUpdate: GitHubReleaseUpdate?
     @Published private(set) var lastAutomaticSelectionUpdate: AutoNodeSelectionUpdate?
-    @Published private(set) var isAutomaticSelectionManuallyHeld = false
     @Published private(set) var refreshingSubscriptionIDs: Set<String> = []
     @Published private(set) var subscriptionRefreshErrors: [String: String] = [:]
 
@@ -244,7 +243,6 @@ final class AppModel: ObservableObject {
         }
         if status.isRunning || status.isBusy {
             await engine.stop()
-            await clearAutomaticSelectionManualHold()
             return
         }
         guard !nodes.isEmpty else {
@@ -266,25 +264,20 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func selectNode(_ node: ProxyNode, manual: Bool = true) async {
+    func selectNode(_ node: ProxyNode) async {
         guard storageAvailable, !isShuttingDown else { return }
         let previous = selectedNode
-        let previousManualHold = isAutomaticSelectionManuallyHeld
         selectionGeneration += 1
         let generation = selectionGeneration
         selectedNode = node.runtimeTag
-        if manual, autoSelect {
-            isAutomaticSelectionManuallyHeld = true
-            await automaticSelection.setManualOverride(true)
-        }
         do {
-            try await selection.submit(node: node.runtimeTag)
+            let applied = try await selection.submit(node: node.runtimeTag)
+            if applied, autoSelect {
+                lastAutomaticSelectionUpdate = nil
+                await automaticSelection.manualSelectionDidApply()
+            }
         } catch {
             if selectionGeneration == generation { selectedNode = previous }
-            if manual, autoSelect {
-                isAutomaticSelectionManuallyHeld = previousManualHold
-                await automaticSelection.setManualOverride(previousManualHold)
-            }
             show(error)
         }
     }
@@ -505,23 +498,20 @@ final class AppModel: ObservableObject {
 
     func setAutoSelect(_ value: Bool) async {
         let previous = autoSelect
-        let previousManualHold = isAutomaticSelectionManuallyHeld
         autoSelect = value
         // Disabling must cancel an in-flight cycle before the preference write
         // touches disk; otherwise a slow filesystem could still allow one last
         // unexpected automatic switch after the user turned the feature off.
         if !value { await automaticSelection.setEnabled(false) }
+        await selection.setAutomaticSelectionEnabled(value)
         do {
             try await settings.set(.bool(value), for: SettingsStore.Key.autoSelect)
-            isAutomaticSelectionManuallyHeld = false
             lastAutomaticSelectionUpdate = nil
-            await automaticSelection.setManualOverride(false)
             if value { await automaticSelection.setEnabled(true) }
         } catch {
             autoSelect = previous
+            await selection.setAutomaticSelectionEnabled(previous)
             await automaticSelection.setEnabled(previous)
-            isAutomaticSelectionManuallyHeld = previousManualHold
-            await automaticSelection.setManualOverride(previousManualHold)
             show(error)
         }
     }
@@ -769,9 +759,6 @@ final class AppModel: ObservableObject {
         if !autoSelect {
             return L10n.text("已关闭 · 使用手动选择的节点", "Off · using the manually selected node")
         }
-        if isAutomaticSelectionManuallyHeld {
-            return L10n.text("本次连接已手动锁定", "Manually locked for this connection")
-        }
         guard let update = lastAutomaticSelectionUpdate else {
             return L10n.text("每 10 分钟评估，仅在明显更快时切换", "Evaluate every 10 minutes and switch only when clearly faster")
         }
@@ -785,8 +772,6 @@ final class AppModel: ObservableObject {
                 "候选：\(displayName(forTag: node)) · \(delay)ms（\(confirmations)/2）",
                 "Candidate: \(displayName(forTag: node)) · \(delay)ms (\(confirmations)/2)"
             )
-        case .manualHold:
-            return L10n.text("本次连接已手动锁定", "Manually locked for this connection")
         case .unavailable:
             return L10n.text("测速完成 · 暂无可用节点", "Tested · no reachable nodes")
         case .failed:
@@ -799,7 +784,7 @@ final class AppModel: ObservableObject {
     }
 
     private func preferredNodeForConnection(now: Date = Date()) -> String? {
-        guard autoSelect, !isAutomaticSelectionManuallyHeld else {
+        guard autoSelect else {
             return selectedNode ?? nodes.first?.runtimeTag
         }
         return NodeListPresentation.preferredNode(nodes, using: delayHistory, now: now)?.runtimeTag
@@ -807,14 +792,9 @@ final class AppModel: ObservableObject {
             ?? nodes.first?.runtimeTag
     }
 
-    private func clearAutomaticSelectionManualHold() async {
-        guard isAutomaticSelectionManuallyHeld else { return }
-        isAutomaticSelectionManuallyHeld = false
-        await automaticSelection.setManualOverride(false)
-    }
-
     private func loadSettings() async {
         autoSelect = await settings.bool(SettingsStore.Key.autoSelect, default: true)
+        await selection.setAutomaticSelectionEnabled(autoSelect)
         showProtocol = await settings.bool(SettingsStore.Key.showProtocol)
         allowLAN = await settings.bool(SettingsStore.Key.allowLAN)
         skipSystemProxy = await settings.bool(SettingsStore.Key.skipSystemProxy)

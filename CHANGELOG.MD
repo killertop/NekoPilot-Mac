@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+## 1.3.6 - 2026-07-22
+
+### 自动选择 / Automatic Selection
+
+- “自动选择节点”开启时不再因手动点选而锁定本次连接；手动选择可以立即生效，但周期评估和并发请求始终由稳定的自动策略优先。关闭开关后，进行中的自动请求会被撤销，手动选择立即恢复最高优先级。 / Manual taps no longer lock an active connection while Automatic Node Selection is enabled: they can apply immediately, but the stable periodic policy and concurrent automatic requests remain authoritative. Disabling the switch revokes in-flight automatic work and restores manual priority immediately.
+
 ## 1.3.5 - 2026-07-22
 
 ### 菜单栏 / Menu Bar
