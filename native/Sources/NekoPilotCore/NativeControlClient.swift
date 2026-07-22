@@ -132,6 +132,74 @@ public actor NativeControlClient {
         })
     }
 
+    /// Streams normalized one-second traffic rates grouped by the concrete
+    /// runtime outbound used by each connection. Samples are sparse and replace
+    /// the previous sample: an absent node has zero traffic for that interval.
+    public func nodeTrafficStream(
+        nodes: Set<String>,
+        interval: TimeInterval = 1
+    ) throws -> AsyncThrowingStream<[String: NodeTrafficSnapshot], Error> {
+        let intervalNanoseconds = Self.trafficIntervalNanoseconds(interval)
+        var request = Nekopilot_Api_SubscribeConnectionsRequest()
+        request.interval = Int64(intervalNanoseconds)
+        let client = APIClient(
+            channel: try activeConnection(),
+            defaultCallOptions: options()
+        )
+        let call: GRPCAsyncServerStreamingCall<
+            Nekopilot_Api_SubscribeConnectionsRequest,
+            Nekopilot_Api_ConnectionEvents
+        > = client.makeAsyncServerStreamingCall(
+            path: Self.startedService + "/SubscribeConnections",
+            request: request,
+            responseType: Nekopilot_Api_ConnectionEvents.self
+        )
+
+        return AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            let meter = NodeTrafficMeter(validOutbounds: nodes)
+            let task = Task {
+                do {
+                    try await withThrowingTaskGroup(of: Void.self) { group in
+                        group.addTask {
+                            defer { call.cancel() }
+                            for try await events in call.responseStream {
+                                try Task.checkCancellation()
+                                await meter.apply(events)
+                            }
+                        }
+                        group.addTask {
+                            var previousTick = DispatchTime.now().uptimeNanoseconds
+                            while !Task.isCancelled {
+                                try await Task.sleep(nanoseconds: intervalNanoseconds)
+                                let currentTick = DispatchTime.now().uptimeNanoseconds
+                                let elapsed = max(1, currentTick &- previousTick)
+                                previousTick = currentTick
+                                let snapshot = await meter.takeSnapshot(
+                                    elapsedNanoseconds: elapsed,
+                                    measuredAt: Date()
+                                )
+                                if case .terminated = continuation.yield(snapshot) { return }
+                            }
+                        }
+
+                        // Either the daemon stream ended or the consumer stopped.
+                        // Cancel the sibling and wait for both tasks to unwind so
+                        // the gRPC call cannot outlive its AsyncSequence.
+                        _ = try await group.next()
+                        group.cancelAll()
+                        while let _ = try await group.next() { }
+                    }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
     private func unary<Request: SwiftProtobuf.Message>(
         method: String,
         request: Request
@@ -184,6 +252,12 @@ public actor NativeControlClient {
         options.timeLimit = timeLimit
         options.customMetadata.add(name: "authorization", value: "Bearer \(endpoint.secret)")
         return options
+    }
+
+    private static func trafficIntervalNanoseconds(_ interval: TimeInterval) -> UInt64 {
+        guard interval.isFinite, interval > 0 else { return 1_000_000_000 }
+        let bounded = min(max(interval, 0.1), 60)
+        return UInt64((bounded * 1_000_000_000).rounded())
     }
 }
 

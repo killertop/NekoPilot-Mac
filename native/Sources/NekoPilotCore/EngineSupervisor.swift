@@ -11,6 +11,7 @@ public actor EngineSupervisor {
     private var process: Process?
     private var sessionID: UUID?
     private var apiEndpoint: LocalAPIEndpoint?
+    private var healthProbePort: Int?
     private var proxySessionID: UUID?
     private var epoch: UInt64 = 0
     private var isShuttingDown = false
@@ -31,6 +32,7 @@ public actor EngineSupervisor {
     }
 
     public func currentStatus() -> EngineStatus { status }
+    public func currentHealthProbePort() -> Int? { status.isRunning ? healthProbePort : nil }
 
     public func states() -> AsyncStream<EngineStatus> {
         let identifier = UUID()
@@ -83,14 +85,19 @@ public actor EngineSupervisor {
         var appliedProxySession: UUID?
         setStatus(.starting)
         do {
+            let mixedPort = await settings.proxyPort()
             let apiEndpoint = try LocalAPIEndpoint.make()
+            let healthProbePort = try makeHealthProbePort(excluding: [mixedPort, apiEndpoint.port])
             await nativeAPI.configure(endpoint: apiEndpoint)
-            let config = try await compiler.compile(selectedNode: selectedNode, apiEndpoint: apiEndpoint)
+            let config = try await compiler.compile(
+                selectedNode: selectedNode,
+                apiEndpoint: apiEndpoint,
+                healthProbePort: healthProbePort
+            )
             try await SingBoxValidator.validate(configuration: config)
             try ensureCurrent(startEpoch)
 
-            let mixedPort = await settings.proxyPort()
-            for port in [mixedPort] where PortProbe.isListening(port) {
+            for port in [mixedPort, apiEndpoint.port, healthProbePort] where PortProbe.isListening(port) {
                 throw NekoPilotError.portOccupied(port)
             }
             let executable = try SingBoxLocator.executable()
@@ -105,6 +112,7 @@ public actor EngineSupervisor {
             process = child
             sessionID = session
             self.apiEndpoint = apiEndpoint
+            self.healthProbePort = healthProbePort
 
             guard await waitUntilReady(endpoint: apiEndpoint, epoch: startEpoch) else {
                 try ensureCurrent(startEpoch)
@@ -214,7 +222,8 @@ public actor EngineSupervisor {
             }
             let config = try await compiler.compile(
                 selectedNode: selectedNode,
-                apiEndpoint: apiEndpoint
+                apiEndpoint: apiEndpoint,
+                healthProbePort: healthProbePort
             )
             try await SingBoxValidator.validate(configuration: config)
             let reloadEpoch = epoch
@@ -257,10 +266,16 @@ public actor EngineSupervisor {
 
     public func select(node: String) async throws {
         guard !isShuttingDown else { throw CancellationError() }
-        if status.isRunning {
+        switch status {
+        case .running:
             try await nativeAPI.select(node: node)
-        } else {
+        case .stopped, .failed:
             _ = try await compiler.compile(selectedNode: node)
+        case .starting, .stopping:
+            // A selector request must never rewrite the shared runtime
+            // configuration while start/stop is still consuming it. The UI
+            // also blocks these taps; this guard keeps non-UI callers safe.
+            throw CancellationError()
         }
     }
 
@@ -366,6 +381,19 @@ public actor EngineSupervisor {
         return false
     }
 
+    private func makeHealthProbePort(excluding excludedPorts: Set<Int>) throws -> Int {
+        for _ in 0 ..< 8 {
+            let candidate = try LocalAPIEndpoint.make().port
+            if !excludedPorts.contains(candidate), !PortProbe.isListening(candidate) {
+                return candidate
+            }
+        }
+        throw NekoPilotError.processFailed(CoreL10n.text(
+            "无法分配节点健康检查端口",
+            "Could not allocate the node health-check port"
+        ))
+    }
+
     @discardableResult
     private func stopProcessOnly(expectedSession: UUID?) async -> Bool {
         guard let expectedSession else {
@@ -392,6 +420,7 @@ public actor EngineSupervisor {
         process = nil
         sessionID = nil
         apiEndpoint = nil
+        healthProbePort = nil
         removeOwnershipIfMatching(session: expectedSession)
         return true
     }
@@ -402,6 +431,7 @@ public actor EngineSupervisor {
         process = nil
         sessionID = nil
         apiEndpoint = nil
+        healthProbePort = nil
         removeOwnershipIfMatching(session: session)
         try? await systemProxy.removeOwnedProxy(expectedSession: expectedProxySession)
         guard sessionID == nil else { return }

@@ -63,26 +63,6 @@ public enum NodeListPresentation {
         }
     }
 
-    /// Chooses an instant connection candidate from recent persisted history.
-    /// Connecting never waits for a new URL Test; stale data falls back to the
-    /// user's existing selection in the application layer.
-    public static func preferredNode(
-        _ nodes: [ProxyNode],
-        using delays: [String: DelayRecord],
-        now: Date = Date(),
-        maximumAge: TimeInterval = 30 * 60
-    ) -> ProxyNode? {
-        let freshnessLimit = now.addingTimeInterval(-maximumAge)
-        return nodes.compactMap { node -> (ProxyNode, Int)? in
-            guard let record = delays[node.runtimeTag],
-                  record.measuredAt >= freshnessLimit,
-                  let delay = record.delay else { return nil }
-            return (node, delay)
-        }.sorted { lhs, rhs in
-            lhs.1 == rhs.1 ? lhs.0.runtimeTag < rhs.0.runtimeTag : lhs.1 < rhs.1
-        }.first?.0
-    }
-
     /// Builds all values needed by the home node rows in one pass. Keeping
     /// this work out of SwiftUI's body avoids repeated name and source scans
     /// while URL Test results arrive in small batches.

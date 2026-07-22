@@ -20,6 +20,44 @@ fileprivate nonisolated struct _GeneratedWithProtocGenSwiftVersion: SwiftProtobu
   typealias Version = _2
 }
 
+nonisolated enum Nekopilot_Api_ConnectionEventType: SwiftProtobuf.Enum, Swift.CaseIterable {
+  typealias RawValue = Int
+  case connectionEventNew // = 0
+  case connectionEventUpdate // = 1
+  case connectionEventClosed // = 2
+  case UNRECOGNIZED(Int)
+
+  init() {
+    self = .connectionEventNew
+  }
+
+  init?(rawValue: Int) {
+    switch rawValue {
+    case 0: self = .connectionEventNew
+    case 1: self = .connectionEventUpdate
+    case 2: self = .connectionEventClosed
+    default: self = .UNRECOGNIZED(rawValue)
+    }
+  }
+
+  var rawValue: Int {
+    switch self {
+    case .connectionEventNew: return 0
+    case .connectionEventUpdate: return 1
+    case .connectionEventClosed: return 2
+    case .UNRECOGNIZED(let i): return i
+    }
+  }
+
+  // The compiler won't synthesize support with the UNRECOGNIZED case.
+  static let allCases: [Nekopilot_Api_ConnectionEventType] = [
+    .connectionEventNew,
+    .connectionEventUpdate,
+    .connectionEventClosed,
+  ]
+
+}
+
 nonisolated struct Nekopilot_Api_ServiceStatus: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
@@ -124,9 +162,95 @@ nonisolated struct Nekopilot_Api_OutboundList: Sendable {
   init() {}
 }
 
+nonisolated struct Nekopilot_Api_SubscribeConnectionsRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var interval: Int64 = 0
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
+nonisolated struct Nekopilot_Api_ConnectionEvent: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var type: Nekopilot_Api_ConnectionEventType = .connectionEventNew
+
+  var id: String = String()
+
+  var connection: Nekopilot_Api_Connection {
+    get {_connection ?? Nekopilot_Api_Connection()}
+    set {_connection = newValue}
+  }
+  /// Returns true if `connection` has been explicitly set.
+  var hasConnection: Bool {self._connection != nil}
+  /// Clears the value of `connection`. Subsequent reads from it will return its default value.
+  mutating func clearConnection() {self._connection = nil}
+
+  var uplinkDelta: Int64 = 0
+
+  var downlinkDelta: Int64 = 0
+
+  var closedAt: Int64 = 0
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _connection: Nekopilot_Api_Connection? = nil
+}
+
+nonisolated struct Nekopilot_Api_ConnectionEvents: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var events: [Nekopilot_Api_ConnectionEvent] = []
+
+  var reset: Bool = false
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
+/// Field numbers intentionally match daemon.Connection in the pinned upstream
+/// schema. Only the values needed for per-outbound traffic accounting are
+/// generated into the Swift client.
+nonisolated struct Nekopilot_Api_Connection: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var id: String = String()
+
+  var createdAt: Int64 = 0
+
+  var closedAt: Int64 = 0
+
+  var uplinkTotal: Int64 = 0
+
+  var downlinkTotal: Int64 = 0
+
+  var outbound: String = String()
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
 // MARK: - Code below here is support for the SwiftProtobuf runtime.
 
 fileprivate nonisolated let _protobuf_package = "nekopilot.api"
+
+nonisolated extension Nekopilot_Api_ConnectionEventType: SwiftProtobuf._ProtoNameProviding {
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0CONNECTION_EVENT_NEW\0\u{1}CONNECTION_EVENT_UPDATE\0\u{1}CONNECTION_EVENT_CLOSED\0")
+}
 
 nonisolated extension Nekopilot_Api_ServiceStatus: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".ServiceStatus"
@@ -383,6 +507,185 @@ nonisolated extension Nekopilot_Api_OutboundList: SwiftProtobuf.Message, SwiftPr
 
   static func ==(lhs: Nekopilot_Api_OutboundList, rhs: Nekopilot_Api_OutboundList) -> Bool {
     if lhs.outbounds != rhs.outbounds {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Nekopilot_Api_SubscribeConnectionsRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".SubscribeConnectionsRequest"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}interval\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularInt64Field(value: &self.interval) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.interval != 0 {
+      try visitor.visitSingularInt64Field(value: self.interval, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Nekopilot_Api_SubscribeConnectionsRequest, rhs: Nekopilot_Api_SubscribeConnectionsRequest) -> Bool {
+    if lhs.interval != rhs.interval {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Nekopilot_Api_ConnectionEvent: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".ConnectionEvent"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}id\0\u{1}connection\0\u{3}uplink_delta\0\u{3}downlink_delta\0\u{3}closed_at\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularEnumField(value: &self.type) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.id) }()
+      case 3: try { try decoder.decodeSingularMessageField(value: &self._connection) }()
+      case 4: try { try decoder.decodeSingularInt64Field(value: &self.uplinkDelta) }()
+      case 5: try { try decoder.decodeSingularInt64Field(value: &self.downlinkDelta) }()
+      case 6: try { try decoder.decodeSingularInt64Field(value: &self.closedAt) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if self.type != .connectionEventNew {
+      try visitor.visitSingularEnumField(value: self.type, fieldNumber: 1)
+    }
+    if !self.id.isEmpty {
+      try visitor.visitSingularStringField(value: self.id, fieldNumber: 2)
+    }
+    try { if let v = self._connection {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
+    } }()
+    if self.uplinkDelta != 0 {
+      try visitor.visitSingularInt64Field(value: self.uplinkDelta, fieldNumber: 4)
+    }
+    if self.downlinkDelta != 0 {
+      try visitor.visitSingularInt64Field(value: self.downlinkDelta, fieldNumber: 5)
+    }
+    if self.closedAt != 0 {
+      try visitor.visitSingularInt64Field(value: self.closedAt, fieldNumber: 6)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Nekopilot_Api_ConnectionEvent, rhs: Nekopilot_Api_ConnectionEvent) -> Bool {
+    if lhs.type != rhs.type {return false}
+    if lhs.id != rhs.id {return false}
+    if lhs._connection != rhs._connection {return false}
+    if lhs.uplinkDelta != rhs.uplinkDelta {return false}
+    if lhs.downlinkDelta != rhs.downlinkDelta {return false}
+    if lhs.closedAt != rhs.closedAt {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Nekopilot_Api_ConnectionEvents: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".ConnectionEvents"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}events\0\u{1}reset\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeRepeatedMessageField(value: &self.events) }()
+      case 2: try { try decoder.decodeSingularBoolField(value: &self.reset) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.events.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.events, fieldNumber: 1)
+    }
+    if self.reset != false {
+      try visitor.visitSingularBoolField(value: self.reset, fieldNumber: 2)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Nekopilot_Api_ConnectionEvents, rhs: Nekopilot_Api_ConnectionEvents) -> Bool {
+    if lhs.events != rhs.events {return false}
+    if lhs.reset != rhs.reset {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Nekopilot_Api_Connection: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".Connection"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{4}\u{b}created_at\0\u{3}closed_at\0\u{4}\u{3}uplink_total\0\u{3}downlink_total\0\u{2}\u{2}outbound\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.id) }()
+      case 12: try { try decoder.decodeSingularInt64Field(value: &self.createdAt) }()
+      case 13: try { try decoder.decodeSingularInt64Field(value: &self.closedAt) }()
+      case 16: try { try decoder.decodeSingularInt64Field(value: &self.uplinkTotal) }()
+      case 17: try { try decoder.decodeSingularInt64Field(value: &self.downlinkTotal) }()
+      case 19: try { try decoder.decodeSingularStringField(value: &self.outbound) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.id.isEmpty {
+      try visitor.visitSingularStringField(value: self.id, fieldNumber: 1)
+    }
+    if self.createdAt != 0 {
+      try visitor.visitSingularInt64Field(value: self.createdAt, fieldNumber: 12)
+    }
+    if self.closedAt != 0 {
+      try visitor.visitSingularInt64Field(value: self.closedAt, fieldNumber: 13)
+    }
+    if self.uplinkTotal != 0 {
+      try visitor.visitSingularInt64Field(value: self.uplinkTotal, fieldNumber: 16)
+    }
+    if self.downlinkTotal != 0 {
+      try visitor.visitSingularInt64Field(value: self.downlinkTotal, fieldNumber: 17)
+    }
+    if !self.outbound.isEmpty {
+      try visitor.visitSingularStringField(value: self.outbound, fieldNumber: 19)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Nekopilot_Api_Connection, rhs: Nekopilot_Api_Connection) -> Bool {
+    if lhs.id != rhs.id {return false}
+    if lhs.createdAt != rhs.createdAt {return false}
+    if lhs.closedAt != rhs.closedAt {return false}
+    if lhs.uplinkTotal != rhs.uplinkTotal {return false}
+    if lhs.downlinkTotal != rhs.downlinkTotal {return false}
+    if lhs.outbound != rhs.outbound {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

@@ -15,11 +15,13 @@ public actor ConfigurationCompiler {
     @discardableResult
     public func compile(
         selectedNode: String?,
-        apiEndpoint: LocalAPIEndpoint? = nil
+        apiEndpoint: LocalAPIEndpoint? = nil,
+        healthProbePort: Int? = nil
     ) async throws -> URL {
         let config = try await makeConfiguration(
             selectedNode: selectedNode,
-            apiEndpoint: apiEndpoint
+            apiEndpoint: apiEndpoint,
+            healthProbePort: healthProbePort
         )
         try AtomicFile.write(try JSONValue.encodeObject(config, pretty: true), to: paths.runtimeConfig)
         return paths.runtimeConfig
@@ -75,7 +77,8 @@ public actor ConfigurationCompiler {
         // race a subsequent Connect request.
         let baseConfig = try await makeConfiguration(
             selectedNode: selectedNode,
-            apiEndpoint: apiEndpoints[0]
+            apiEndpoint: apiEndpoints[0],
+            healthProbePort: nil
         )
         var configurations: [URL] = []
         do {
@@ -121,7 +124,8 @@ public actor ConfigurationCompiler {
 
     private func makeConfiguration(
         selectedNode: String?,
-        apiEndpoint: LocalAPIEndpoint?
+        apiEndpoint: LocalAPIEndpoint?,
+        healthProbePort: Int?
     ) async throws -> [String: JSONValue] {
         var config = try Self.loadTemplate()
         let port = await settings.proxyPort()
@@ -134,9 +138,10 @@ public actor ConfigurationCompiler {
             proxyPort: port,
             allowLAN: allowLAN,
             directDNS: dns,
-            apiEndpoint: apiEndpoint
+            apiEndpoint: apiEndpoint,
+            healthProbePort: healthProbePort
         )
-        injectRules(rules, into: &config)
+        injectRules(rules, healthProbeEnabled: healthProbePort != nil, into: &config)
         let sources = try await repository.configObjects()
         try merge(sources: sources, selectedNode: selectedNode, into: &config)
         return config
@@ -187,7 +192,8 @@ public actor ConfigurationCompiler {
         proxyPort: Int,
         allowLAN: Bool,
         directDNS: String,
-        apiEndpoint: LocalAPIEndpoint?
+        apiEndpoint: LocalAPIEndpoint?,
+        healthProbePort: Int?
     ) {
         config["log"] = .object([
             // Connection-level INFO output is extremely chatty and duplicates
@@ -218,6 +224,14 @@ public actor ConfigurationCompiler {
                 inbound["listen"] = .string(allowLAN ? "0.0.0.0" : "127.0.0.1")
                 inbound["listen_port"] = .number(Double(proxyPort))
                 return .object(inbound)
+            }
+            if let healthProbePort {
+                inbounds.append(.object([
+                    "tag": .string(ProxyHealthEndpoint.inboundTag),
+                    "type": .string("mixed"),
+                    "listen": .string("127.0.0.1"),
+                    "listen_port": .number(Double(healthProbePort)),
+                ]))
             }
             config["inbounds"] = .array(inbounds)
         }
@@ -275,7 +289,11 @@ public actor ConfigurationCompiler {
         ])])
     }
 
-    private func injectRules(_ rules: [RoutingRule], into config: inout [String: JSONValue]) {
+    private func injectRules(
+        _ rules: [RoutingRule],
+        healthProbeEnabled: Bool,
+        into config: inout [String: JSONValue]
+    ) {
         guard var route = config["route"]?.objectValue,
               var routeRules = route["rules"]?.arrayValue else { return }
         routeRules.removeAll { value in
@@ -297,6 +315,19 @@ public actor ConfigurationCompiler {
                 target[kind.rawValue] = .array(unique.map(JSONValue.string))
             }
             routeRules[index] = .object(target)
+        }
+        // The failover probe enters through its own loopback-only inbound, so
+        // this route exercises ExitGateway without changing how the same
+        // destination behaves for normal user traffic.
+        if healthProbeEnabled {
+            let healthRouteRule: JSONValue = .object([
+                "inbound": .array([.string(ProxyHealthEndpoint.inboundTag)]),
+                "outbound": .string("ExitGateway"),
+            ])
+            let healthRouteIndex = routeRules.firstIndex {
+                $0.objectValue?["outbound"]?.stringValue != nil
+            } ?? routeRules.endIndex
+            routeRules.insert(healthRouteRule, at: healthRouteIndex)
         }
         route["rules"] = .array(routeRules)
         config["route"] = .object(route)
@@ -321,6 +352,14 @@ public actor ConfigurationCompiler {
                     "server": .string(action == .direct ? "system" : "dns_proxy"),
                 ]))
             }
+        }
+        if healthProbeEnabled {
+            let healthDNSRule: JSONValue = .object([
+                "inbound": .array([.string(ProxyHealthEndpoint.inboundTag)]),
+                "action": .string("route"),
+                "server": .string("dns_proxy"),
+            ])
+            customDNSRules.insert(healthDNSRule, at: 0)
         }
         dns["rules"] = .array(customDNSRules + existingDNSRules)
         config["dns"] = .object(dns)
@@ -375,9 +414,11 @@ public actor ConfigurationCompiler {
             ))
         }
         selector["outbounds"] = .array(nodes.compactMap { $0["tag"]?.stringValue }.map(JSONValue.string))
-        // Keep established sessions on their existing path when automatic
-        // selection picks a faster node; only new connections use it.
-        selector.removeValue(forKey: "interrupt_exist_connections")
+        // A selector change caused by manual selection or failover must move
+        // existing connection pools away from the old node as well. Otherwise
+        // a blocked long-lived session can remain unusable after the UI has
+        // already switched to a healthy node.
+        selector["interrupt_exist_connections"] = .bool(true)
         outbounds[selectorIndex] = .object(selector)
         outbounds.append(contentsOf: nodes.map(JSONValue.object))
         config["outbounds"] = .array(outbounds)

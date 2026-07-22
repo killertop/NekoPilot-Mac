@@ -109,14 +109,18 @@ checks.append(("repository and config compiler", {
         "compiler did not select stable runtime node"
     )
     let dnsRules = config["dns"]?.objectValue?["rules"]?.arrayValue?.compactMap(\.objectValue) ?? []
+    let directDNSRule = dnsRules.first { rule in
+        rule["domain"]?.arrayValue?.contains(.string("direct.example")) == true
+    }
     try expect(
-        dnsRules.first?["domain"]?.arrayValue?.contains(.string("direct.example")) == true &&
-            dnsRules.first?["server"]?.stringValue == "system",
+        directDNSRule?["server"]?.stringValue == "system",
         "custom direct domain did not receive highest-priority direct DNS routing"
     )
+    let proxyDNSRule = dnsRules.first { rule in
+        rule["domain_suffix"]?.arrayValue?.contains(.string(".proxy.example")) == true
+    }
     try expect(
-        dnsRules.dropFirst().first?["domain_suffix"]?.arrayValue?.contains(.string(".proxy.example")) == true &&
-            dnsRules.dropFirst().first?["server"]?.stringValue == "dns_proxy",
+        proxyDNSRule?["server"]?.stringValue == "dns_proxy",
         "custom proxy domain did not override the China direct DNS rule set"
     )
     try await SingBoxValidator.validate(configuration: output)
@@ -255,15 +259,14 @@ if ProcessInfo.processInfo.environment["NEKOPILOT_VALIDATE_REAL_EGRESS"] == "1" 
         let settings = try SettingsStore(fileURL: paths.settings)
         let repository = try SubscriptionRepository(databaseURL: paths.database)
         let compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
-        let nativeAPI = NativeControlClient()
-        let tester = URLTester(compiler: compiler, nativeAPI: nativeAPI)
+        let tester = URLTester(compiler: compiler)
         let node: ProxyNode
         if ProcessInfo.processInfo.environment["NEKOPILOT_TEST_APP_DATABASE"] != nil {
             node = try await importedStoredTestNode(repository: repository)
         } else {
             node = try await importedTestNode(repository: repository, requiresExternalNode: true)
         }
-        let result = await tester.test(nodes: [node], engineRunning: false)
+        let result = await tester.test(nodes: [node])
         let delay = result[node.runtimeTag]?.delay
         try expect(
             delay != nil,
@@ -287,10 +290,10 @@ if ProcessInfo.processInfo.environment["NEKOPILOT_VALIDATE_MULTI_NODE_URL_TEST"]
         let settings = try SettingsStore(fileURL: paths.settings)
         let repository = try SubscriptionRepository(databaseURL: paths.database)
         let compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
-        let tester = URLTester(compiler: compiler, nativeAPI: NativeControlClient())
+        let tester = URLTester(compiler: compiler)
         let nodes = try await importedStoredTestNodes(repository: repository, limit: 24)
         let startedAt = Date()
-        let results = await tester.test(nodes: nodes, engineRunning: false, execution: .isolatedWorkers)
+        let results = await tester.test(nodes: nodes)
         let elapsed = Date().timeIntervalSince(startedAt)
         try expect(results.count == nodes.count, "parallel URL Test did not return every node result")
         try expect(results.values.contains(where: { $0.delay != nil }), "parallel URL Test did not reach any real node")
@@ -334,6 +337,15 @@ if ProcessInfo.processInfo.environment["NEKOPILOT_SKIP_ENGINE_VALIDATION"] != "1
             try expect(runningStatus.isRunning, "engine did not reach running state")
             let selector = try await nativeAPI.selector(knownNodes: [selected])
             try expect(selector.nodes.contains(selected), "native selector did not expose selected node")
+            let trafficStream = try await nativeAPI.nodeTrafficStream(nodes: [selected], interval: 0.1)
+            var trafficIterator = trafficStream.makeAsyncIterator()
+            guard let idleTraffic = try await trafficIterator.next() else {
+                throw CheckFailure(description: "native connection traffic stream ended before its first sample")
+            }
+            try expect(
+                idleTraffic[selected] == nil,
+                "an idle node unexpectedly reported connection traffic"
+            )
             try await settings.replaceRules([
                 RoutingRule(action: .direct, kind: .domainSuffix, value: ".nekopilot-live-reload.invalid"),
             ])

@@ -1,3 +1,4 @@
+import Foundation
 import NekoPilotCore
 import SwiftUI
 
@@ -16,8 +17,11 @@ struct HomeView: View {
                     connectionStatus
                         .padding(.top, 16)
 
+                    trafficStatus
+                        .padding(.top, 7)
+
                     nodesSection(now: context.date)
-                        .padding(.top, 17)
+                        .padding(.top, 14)
                 }
                 .padding(.horizontal, AppVisual.pageHorizontalPadding)
                 .padding(.bottom, AppVisual.pageBottomPadding)
@@ -135,6 +139,39 @@ struct HomeView: View {
         .frame(height: 20)
     }
 
+    private var trafficStatus: some View {
+        HStack(spacing: 16) {
+            trafficValue(
+                icon: "arrow.up",
+                value: model.currentNodeTraffic.upload,
+                label: L10n.text("上传", "Upload")
+            )
+            trafficValue(
+                icon: "arrow.down",
+                value: model.currentNodeTraffic.download,
+                label: L10n.text("下载", "Download")
+            )
+        }
+        .font(AppTypography.caption)
+        .foregroundStyle(.secondary)
+        .monospacedDigit()
+        .frame(height: 18)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(L10n.text(
+            "当前节点上传 \(Self.speedText(model.currentNodeTraffic.upload))，下载 \(Self.speedText(model.currentNodeTraffic.download))",
+            "Current node upload \(Self.speedText(model.currentNodeTraffic.upload)), download \(Self.speedText(model.currentNodeTraffic.download))"
+        ))
+    }
+
+    private func trafficValue(icon: String, value: Int64, label: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.system(size: 9, weight: .semibold))
+            Text(Self.speedText(value))
+        }
+        .help("\(label) \(Self.speedText(value))")
+    }
+
     private func nodesSection(now: Date) -> some View {
         VStack(spacing: 6) {
             SectionTitle(nodesSectionTitle(now: now)) {
@@ -237,6 +274,7 @@ struct HomeView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(model.status.isBusy)
         .help("\(row.displayName) · \(row.sourceName)")
     }
 
@@ -274,5 +312,19 @@ struct HomeView: View {
         formatter.unitsStyle = .abbreviated
         return formatter
     }()
+
+    private static func speedText(_ bytesPerSecond: Int64) -> String {
+        let bytes = max(0, Double(bytesPerSecond))
+        switch bytes {
+        case 1_000_000_000...:
+            return String(format: "%.1f GB/s", locale: .current, bytes / 1_000_000_000)
+        case 1_000_000...:
+            return String(format: "%.1f MB/s", locale: .current, bytes / 1_000_000)
+        case 1_000...:
+            return String(format: "%.1f KB/s", locale: .current, bytes / 1_000)
+        default:
+            return "\(Int64(bytes)) B/s"
+        }
+    }
 
 }

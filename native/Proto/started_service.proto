@@ -44,3 +44,39 @@ message SelectOutboundRequest {
 message OutboundList {
   repeated GroupItem outbounds = 1;
 }
+
+message SubscribeConnectionsRequest {
+  int64 interval = 1;
+}
+
+enum ConnectionEventType {
+  CONNECTION_EVENT_NEW = 0;
+  CONNECTION_EVENT_UPDATE = 1;
+  CONNECTION_EVENT_CLOSED = 2;
+}
+
+message ConnectionEvent {
+  ConnectionEventType type = 1;
+  string id = 2;
+  Connection connection = 3;
+  int64 uplink_delta = 4;
+  int64 downlink_delta = 5;
+  int64 closed_at = 6;
+}
+
+message ConnectionEvents {
+  repeated ConnectionEvent events = 1;
+  bool reset = 2;
+}
+
+// Field numbers intentionally match daemon.Connection in the pinned upstream
+// schema. Only the values needed for per-outbound traffic accounting are
+// generated into the Swift client.
+message Connection {
+  string id = 1;
+  int64 created_at = 12;
+  int64 closed_at = 13;
+  int64 uplink_total = 16;
+  int64 downlink_total = 17;
+  string outbound = 19;
+}

@@ -30,11 +30,12 @@ final class AppModel: ObservableObject {
     @Published var subscriptions: [NekoPilotCore.Subscription] = []
     @Published var selectedNode: String?
     @Published var delayHistory: [String: DelayRecord] = [:]
+    @Published private(set) var currentNodeTraffic = NodeTrafficSnapshot.zero
     @Published var isURLTesting = false
     @Published var selectedTab: MainTab = .home
     @Published var errorMessage: String?
     @Published var rules: [RoutingRule] = []
-    @Published var autoSelect = true
+    @Published var autoSwitch = true
     @Published var showProtocol = false
     @Published var allowLAN = false
     @Published var skipSystemProxy = false
@@ -45,7 +46,7 @@ final class AppModel: ObservableObject {
     @Published var pendingDeepLink: PendingDeepLink?
     @Published var pendingLANEnable = false
     @Published var availableUpdate: GitHubReleaseUpdate?
-    @Published private(set) var lastAutomaticSelectionUpdate: AutoNodeSelectionUpdate?
+    @Published private(set) var lastAutomaticSwitchUpdate: AutoNodeSwitchUpdate?
     @Published private(set) var refreshingSubscriptionIDs: Set<String> = []
     @Published private(set) var subscriptionRefreshErrors: [String: String] = [:]
 
@@ -59,14 +60,15 @@ final class AppModel: ObservableObject {
     let engine: EngineSupervisor
     let tester: URLTester
     let selection: NodeSelectionCoordinator
-    let automaticSelection: AutoNodeSelectionService
+    let automaticSwitching: AutoNodeSwitchService
     let ruleSetUpdater: RuleSetUpdater
     let releaseChecker: GitHubReleaseChecker
     let networkReadiness = NetworkReadiness()
     private var statusTask: Task<Void, Never>?
     private var selectionTask: Task<Void, Never>?
-    private var automaticDelayTask: Task<Void, Never>?
+    private var automaticSwitchTask: Task<Void, Never>?
     private var urlTestTask: Task<Void, Never>?
+    private var trafficTask: Task<Void, Never>?
     private var urlTestProgressFlushTask: Task<Void, Never>?
     private var wakeTask: Task<Void, Never>?
     private var ruleUpdateTask: Task<Void, Never>?
@@ -102,9 +104,9 @@ final class AppModel: ObservableObject {
             nativeAPI: nativeAPI,
             ownershipURL: paths.engineOwnership
         )
-        tester = URLTester(compiler: compiler, nativeAPI: nativeAPI)
+        tester = URLTester(compiler: compiler)
         selection = NodeSelectionCoordinator(engine: engine, settings: settings)
-        automaticSelection = AutoNodeSelectionService(
+        automaticSwitching = AutoNodeSwitchService(
             engine: engine,
             repository: repository,
             settings: settings,
@@ -121,7 +123,8 @@ final class AppModel: ObservableObject {
     deinit {
         statusTask?.cancel()
         selectionTask?.cancel()
-        automaticDelayTask?.cancel()
+        automaticSwitchTask?.cancel()
+        trafficTask?.cancel()
         urlTestTask?.cancel()
         urlTestProgressFlushTask?.cancel()
         wakeTask?.cancel()
@@ -141,10 +144,12 @@ final class AppModel: ObservableObject {
                 if case let .failed(message) = next, errorMessage == nil {
                     errorMessage = message
                 }
-                await automaticSelection.updateConnectionState(isRunning: next.isRunning)
+                await automaticSwitching.updateConnectionState(isRunning: next.isRunning)
                 if next.isRunning {
+                    startTrafficMonitoring()
                     scheduleRuleSetRefresh()
                 } else {
+                    stopTrafficMonitoring()
                     ruleUpdateTask?.cancel()
                     ruleUpdateTask = nil
                 }
@@ -155,23 +160,20 @@ final class AppModel: ObservableObject {
             let stream = await selection.selections()
             for await node in stream {
                 guard !Task.isCancelled else { return }
+                // Invalidate any optimistic request that was waiting for the
+                // coordinator while this authoritative selection committed.
+                selectionGeneration += 1
                 selectedNode = node
+                currentNodeTraffic = .zero
                 rebuildSortedNodes()
             }
         }
-        automaticDelayTask = Task { [weak self] in
+        automaticSwitchTask = Task { [weak self] in
             guard let self else { return }
-            let stream = await automaticSelection.updates()
+            let stream = await automaticSwitching.updates()
             for await update in stream {
                 guard !Task.isCancelled else { return }
-                let availableTags = Set(nodes.map(\.runtimeTag))
-                var mergedHistory = delayHistory.filter { availableTags.contains($0.key) }
-                for (tag, record) in update.delays where availableTags.contains(tag) {
-                    if let current = mergedHistory[tag], current.measuredAt > record.measuredAt { continue }
-                    mergedHistory[tag] = record
-                }
-                delayHistory = mergedHistory
-                lastAutomaticSelectionUpdate = update
+                lastAutomaticSwitchUpdate = update
                 rebuildSortedNodes()
             }
         }
@@ -185,7 +187,7 @@ final class AppModel: ObservableObject {
             }
             await loadSettings()
             await refreshData()
-            await automaticSelection.start(enabled: autoSelect, engineRunning: status.isRunning)
+            await automaticSwitching.start(enabled: autoSwitch, engineRunning: status.isRunning)
             scheduleReleaseCheck()
         }
     }
@@ -205,7 +207,7 @@ final class AppModel: ObservableObject {
             subscriptions = refreshedSources
             rebuildNodeCounts()
             let availableTags = Set(nodes.map(\.runtimeTag))
-            if previousTags != availableTags { lastAutomaticSelectionUpdate = nil }
+            if previousTags != availableTags { lastAutomaticSwitchUpdate = nil }
             var refreshedHistory = try await repository.pruneDelayHistory(retaining: availableTags)
             guard generation == dataRefreshGeneration, !isShuttingDown else { return }
             // A source refresh can finish while an explicit URL Test is still
@@ -231,7 +233,8 @@ final class AppModel: ObservableObject {
                 guard generation == dataRefreshGeneration, !isShuttingDown else { return }
             }
             rebuildSortedNodes()
-            await automaticSelection.nodesDidChange()
+            await automaticSwitching.nodesDidChange()
+            if status.isRunning { startTrafficMonitoring() }
         } catch {
             show(error)
         }
@@ -252,13 +255,24 @@ final class AppModel: ObservableObject {
             return
         }
         do {
-            let target = preferredNodeForConnection()
+            let target = selectedNode ?? nodes.first?.runtimeTag
             if selectedNode != target {
+                let previous = selectedNode
+                selectionGeneration += 1
+                let generation = selectionGeneration
                 selectedNode = target
                 rebuildSortedNodes()
-                try await settings.set(target.map(JSONValue.string), for: SettingsStore.Key.selectedNode)
+                do {
+                    try await settings.set(target.map(JSONValue.string), for: SettingsStore.Key.selectedNode)
+                } catch {
+                    if selectionGeneration == generation {
+                        selectedNode = previous
+                        rebuildSortedNodes()
+                    }
+                    throw error
+                }
             }
-            try await engine.start(selectedNode: target)
+            try await engine.start(selectedNode: selectedNode ?? target)
         } catch is CancellationError {
             return
         } catch {
@@ -267,32 +281,27 @@ final class AppModel: ObservableObject {
     }
 
     func selectNode(_ node: ProxyNode) async {
-        guard storageAvailable, !isShuttingDown else { return }
-        let previous = selectedNode
+        guard storageAvailable, !isShuttingDown, !status.isBusy else { return }
         selectionGeneration += 1
         let generation = selectionGeneration
         selectedNode = node.runtimeTag
+        currentNodeTraffic = .zero
+        rebuildSortedNodes()
         do {
             let applied = try await selection.submit(node: node.runtimeTag)
             if !applied {
-                // An authoritative automatic request may reject this optimistic
-                // manual selection. Restore the last committed value now; a
-                // successful automatic request will publish its winner through
-                // the selection stream when it finishes.
-                let committed = (await settings.string(SettingsStore.Key.selectedNode)).nilIfEmpty
-                if selectionGeneration == generation {
-                    selectedNode = committed ?? previous
-                    rebuildSortedNodes()
-                }
-            } else if autoSelect {
-                lastAutomaticSelectionUpdate = nil
-                await automaticSelection.manualSelectionDidApply()
+                // A newer manual tap superseded this optimistic request before
+                // it committed. Reconcile from disk unless the newer request
+                // has already advanced the local generation.
+                await restoreCommittedSelection(ifCurrent: generation)
+            } else if autoSwitch {
+                lastAutomaticSwitchUpdate = nil
+                await automaticSwitching.manualSelectionDidApply()
             }
+        } catch is CancellationError {
+            await restoreCommittedSelection(ifCurrent: generation)
         } catch {
-            if selectionGeneration == generation {
-                selectedNode = previous
-                rebuildSortedNodes()
-            }
+            await restoreCommittedSelection(ifCurrent: generation)
             show(error)
         }
     }
@@ -305,14 +314,13 @@ final class AppModel: ObservableObject {
         isURLTesting = true
         urlTestBaselineHistory = delayHistory
         let snapshot = nodes
-        let running = status.isRunning
         urlTestProgressFlushTask?.cancel()
         urlTestProgressFlushTask = nil
         pendingURLTestProgress.removeAll(keepingCapacity: true)
         urlTestTask = Task { [weak self] in
             guard let self else { return }
             guard generation == urlTestGeneration, isURLTesting else { return }
-            await automaticSelection.setExplicitTestActive(true)
+            await automaticSwitching.setExplicitTestActive(true)
             guard generation == urlTestGeneration, isURLTesting else { return }
             defer {
                 if generation == urlTestGeneration {
@@ -322,16 +330,14 @@ final class AppModel: ObservableObject {
                 }
             }
             let results = await tester.test(
-                nodes: snapshot,
-                engineRunning: running,
-                execution: .isolatedWorkers
+                nodes: snapshot
             ) { [weak self] tag, record in
                 await self?.enqueueURLTestProgress(tag: tag, record: record, generation: generation)
             }
             // An older cancelled task may finish after a new user test starts.
-            // Only the current generation may release the automatic-test lock.
+            // Only the current generation may resume background health checks.
             if generation == urlTestGeneration {
-                await automaticSelection.setExplicitTestActive(false)
+                await automaticSwitching.setExplicitTestActive(false)
             }
             guard !Task.isCancelled, generation == urlTestGeneration else { return }
             flushURLTestProgress(generation: generation)
@@ -379,7 +385,7 @@ final class AppModel: ObservableObject {
         urlTestGeneration += 1
         urlTestTask?.cancel()
         urlTestTask = nil
-        await automaticSelection.setExplicitTestActive(false)
+        await automaticSwitching.setExplicitTestActive(false)
         pendingURLTestProgress.removeAll(keepingCapacity: true)
         urlTestBaselineHistory = nil
         isURLTesting = false
@@ -511,22 +517,22 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func setAutoSelect(_ value: Bool) async {
-        let previous = autoSelect
-        autoSelect = value
+    func setAutoSwitch(_ value: Bool) async {
+        let previous = autoSwitch
+        autoSwitch = value
         // Disabling must cancel an in-flight cycle before the preference write
         // touches disk; otherwise a slow filesystem could still allow one last
         // unexpected automatic switch after the user turned the feature off.
-        if !value { await automaticSelection.setEnabled(false) }
-        await selection.setAutomaticSelectionEnabled(value)
+        if !value { await automaticSwitching.setAutomaticSwitchingEnabled(false) }
+        await selection.setAutomaticSwitchingEnabled(value)
         do {
-            try await settings.set(.bool(value), for: SettingsStore.Key.autoSelect)
-            lastAutomaticSelectionUpdate = nil
-            if value { await automaticSelection.setEnabled(true) }
+            try await settings.set(.bool(value), for: SettingsStore.Key.autoSwitch)
+            lastAutomaticSwitchUpdate = nil
+            if value { await automaticSwitching.setAutomaticSwitchingEnabled(true) }
         } catch {
-            autoSelect = previous
-            await selection.setAutomaticSelectionEnabled(previous)
-            await automaticSelection.setEnabled(previous)
+            autoSwitch = previous
+            await selection.setAutomaticSwitchingEnabled(previous)
+            await automaticSwitching.setAutomaticSwitchingEnabled(previous)
             show(error)
         }
     }
@@ -661,7 +667,7 @@ final class AppModel: ObservableObject {
         // Awaiting the actor call preserves event order: a subsequent wake can
         // enqueue only after this suspension request, so it always owns the
         // final lifecycle state instead of racing an untracked sleep Task.
-        await automaticSelection.setLifecycleSuspended(true)
+        await automaticSwitching.setLifecycleSuspended(true)
     }
 
     func handleWake() async {
@@ -670,7 +676,7 @@ final class AppModel: ObservableObject {
         guard wasRunningBeforeSleep,
               let sleepStartedAt,
               Date().timeIntervalSince(sleepStartedAt) >= 30 else {
-            await automaticSelection.setLifecycleSuspended(false)
+            await automaticSwitching.setLifecycleSuspended(false)
             return
         }
         wakeTask?.cancel()
@@ -680,12 +686,12 @@ final class AppModel: ObservableObject {
             guard generation == lifecycleGeneration else { return }
             guard await networkReadiness.waitUntilReady() else {
                 AppLogger.shared.warning("wake restart deferred because network is not ready")
-                await automaticSelection.setLifecycleSuspended(false)
+                await automaticSwitching.setLifecycleSuspended(false)
                 return
             }
             guard generation == lifecycleGeneration else { return }
             await engine.restartAfterLifecycleEvent(selectedNode: selectedNode)
-            await automaticSelection.setLifecycleSuspended(false)
+            await automaticSwitching.setLifecycleSuspended(false)
         }
     }
 
@@ -735,12 +741,13 @@ final class AppModel: ObservableObject {
         }
         statusTask?.cancel()
         selectionTask?.cancel()
-        automaticDelayTask?.cancel()
+        automaticSwitchTask?.cancel()
+        stopTrafficMonitoring()
         ruleUpdateTask?.cancel()
         ruleUpdateTask = nil
         releaseCheckTask?.cancel()
         releaseCheckTask = nil
-        await automaticSelection.stop()
+        await automaticSwitching.stop()
         // Releasing the system proxy and the long-lived sing-box process is
         // the only shutdown work that must finish before the app may exit.
         // Network-backed maintenance tasks can take until their URLSession
@@ -765,6 +772,58 @@ final class AppModel: ObservableObject {
         nodeCountsBySource = NodeListPresentation.countsBySource(nodes)
     }
 
+    private func startTrafficMonitoring() {
+        trafficTask?.cancel()
+        currentNodeTraffic = .zero
+        let validNodes = Set(nodes.map(\.runtimeTag))
+        guard status.isRunning, !validNodes.isEmpty, !isShuttingDown else {
+            trafficTask = nil
+            return
+        }
+        trafficTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled, status.isRunning, !isShuttingDown {
+                do {
+                    let stream = try await nativeAPI.nodeTrafficStream(nodes: validNodes)
+                    for try await samples in stream {
+                        guard !Task.isCancelled, status.isRunning, !isShuttingDown else { return }
+                        let next = selectedNode.flatMap { samples[$0] } ?? .zero
+                        if next.upload != currentNodeTraffic.upload || next.download != currentNodeTraffic.download {
+                            currentNodeTraffic = next
+                        }
+                    }
+                } catch is CancellationError {
+                    return
+                } catch {
+                    guard status.isRunning, !isShuttingDown else { return }
+                    AppLogger.shared.warning("traffic stream interrupted: \(error.localizedDescription)")
+                }
+                guard !Task.isCancelled, status.isRunning, !isShuttingDown else { return }
+                currentNodeTraffic = .zero
+                do {
+                    try await Task.sleep(nanoseconds: 1_000_000_000)
+                } catch {
+                    return
+                }
+            }
+        }
+    }
+
+    private func stopTrafficMonitoring() {
+        trafficTask?.cancel()
+        trafficTask = nil
+        currentNodeTraffic = .zero
+    }
+
+    private func restoreCommittedSelection(ifCurrent generation: Int) async {
+        let committed = (await settings.string(SettingsStore.Key.selectedNode)).nilIfEmpty
+        guard selectionGeneration == generation else { return }
+        selectedNode = committed.flatMap { tag in
+            nodes.contains(where: { $0.runtimeTag == tag }) ? tag : nil
+        } ?? nodes.first?.runtimeTag
+        rebuildSortedNodes()
+    }
+
     func displayName(for node: ProxyNode) -> String {
         NodeListPresentation.displayName(for: node)
     }
@@ -773,27 +832,24 @@ final class AppModel: ObservableObject {
         subscriptions.first(where: { $0.identifier == node.sourceIdentifier })?.name ?? node.sourceIdentifier
     }
 
-    var automaticSelectionSummary: String {
-        if !autoSelect {
-            return L10n.text("已关闭 · 使用手动选择的节点", "Off · using the manually selected node")
+    var automaticSwitchSummary: String {
+        if !autoSwitch {
+            return L10n.text("已关闭 · 节点失效时不会自动切换", "Off · nodes will not switch automatically after failure")
         }
-        guard let update = lastAutomaticSelectionUpdate else {
-            return L10n.text("每 10 分钟评估，仅在明显更快时切换", "Evaluate every 10 minutes and switch only when clearly faster")
+        guard let update = lastAutomaticSwitchUpdate else {
+            return L10n.text("监测当前节点，失效时按已保存的延迟切换", "Monitor the current node and fail over using saved latency results")
         }
         switch update.outcome {
-        case let .kept(node, delay):
-            return L10n.text("已是最快：\(displayName(forTag: node)) · \(delay)ms", "Already fastest: \(displayName(forTag: node)) · \(delay)ms")
-        case let .switched(node, delay):
-            return L10n.text("已切换：\(displayName(forTag: node)) · \(delay)ms", "Switched: \(displayName(forTag: node)) · \(delay)ms")
-        case let .considering(node, delay, confirmations):
-            return L10n.text(
-                "候选：\(displayName(forTag: node)) · \(delay)ms（\(confirmations)/2）",
-                "Candidate: \(displayName(forTag: node)) · \(delay)ms (\(confirmations)/2)"
-            )
+        case .monitoring:
+            return L10n.text("当前节点可用 · 持续监测中", "Current node is available · monitoring")
+        case .confirming:
+            return L10n.text("正在确认当前节点是否失效", "Confirming whether the current node has failed")
+        case let .switched(_, node, _):
+            return L10n.text("已自动切换：\(displayName(forTag: node))", "Switched automatically: \(displayName(forTag: node))")
         case .unavailable:
-            return L10n.text("测速完成 · 暂无可用节点", "Tested · no reachable nodes")
+            return L10n.text("当前网络或候选节点暂不可用", "The network or candidate nodes are currently unavailable")
         case .failed:
-            return L10n.text("测速完成 · 自动切换失败", "Tested · automatic switch failed")
+            return L10n.text("节点监测暂时不可用", "Node monitoring is temporarily unavailable")
         }
     }
 
@@ -801,18 +857,9 @@ final class AppModel: ObservableObject {
         nodes.first(where: { $0.runtimeTag == tag }).map(displayName(for:)) ?? tag
     }
 
-    private func preferredNodeForConnection(now: Date = Date()) -> String? {
-        guard autoSelect else {
-            return selectedNode ?? nodes.first?.runtimeTag
-        }
-        return NodeListPresentation.preferredNode(nodes, using: delayHistory, now: now)?.runtimeTag
-            ?? selectedNode
-            ?? nodes.first?.runtimeTag
-    }
-
     private func loadSettings() async {
-        autoSelect = await settings.bool(SettingsStore.Key.autoSelect, default: true)
-        await selection.setAutomaticSelectionEnabled(autoSelect)
+        autoSwitch = await settings.bool(SettingsStore.Key.autoSwitch, default: true)
+        await selection.setAutomaticSwitchingEnabled(autoSwitch)
         showProtocol = await settings.bool(SettingsStore.Key.showProtocol)
         allowLAN = await settings.bool(SettingsStore.Key.allowLAN)
         skipSystemProxy = await settings.bool(SettingsStore.Key.skipSystemProxy)

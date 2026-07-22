@@ -122,6 +122,22 @@ public struct DelayRecord: Codable, Equatable, Sendable {
     }
 }
 
+/// One normalized one-second traffic sample for a concrete runtime outbound.
+/// Values are bytes per second, not cumulative byte counters.
+public struct NodeTrafficSnapshot: Equatable, Sendable {
+    public let upload: Int64
+    public let download: Int64
+    public let measuredAt: Date
+
+    public init(upload: Int64, download: Int64, measuredAt: Date = Date()) {
+        self.upload = max(0, upload)
+        self.download = max(0, download)
+        self.measuredAt = measuredAt
+    }
+
+    public static let zero = NodeTrafficSnapshot(upload: 0, download: 0)
+}
+
 public enum NekoPilotError: LocalizedError, Equatable {
     case noNodes
     case nodeNotFound

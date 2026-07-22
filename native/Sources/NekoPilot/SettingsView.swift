@@ -57,13 +57,13 @@ struct SettingsView: View {
         AppCard {
             VStack(spacing: 0) {
                 toggleRow(
-                    icon: "gauge.with.dots.needle.50percent",
+                    icon: "arrow.left.arrow.right",
                     iconColor: AppVisual.standardSettingIcon,
-                    title: L10n.text("自动选择节点", "Automatic Node Selection"),
-                    subtitle: model.automaticSelectionSummary,
+                    title: L10n.text("自动切换节点", "Automatic Node Switching"),
+                    subtitle: model.automaticSwitchSummary,
                     value: Binding(
-                        get: { model.autoSelect },
-                        set: { value in Task { await model.setAutoSelect(value) } }
+                        get: { model.autoSwitch },
+                        set: { value in Task { await model.setAutoSwitch(value) } }
                     )
                 )
                 AppDivider(leading: 52)

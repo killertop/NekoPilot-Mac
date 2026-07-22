@@ -3,47 +3,21 @@ import Foundation
 
 public typealias URLTestProgressHandler = @Sendable (String, DelayRecord) async -> Void
 
-public enum URLTestExecution: Sendable {
-    /// Uses the running sing-box core when one exists. This is appropriate for
-    /// the periodic automatic selector, which must not create extra cores.
-    case activeCore
-    /// Uses isolated, bounded workers so an explicit user speed test remains
-    /// responsive even when the main proxy is connected.
-    case isolatedWorkers
-}
-
 public actor URLTester {
     private static let nativeBatchSize = 10
     private static let maximumOfflineWorkers = 4
-    private static let activeCoreMaximumWait: TimeInterval = 20
     private static let pollInterval: UInt64 = 200_000_000
     private let compiler: ConfigurationCompiler
-    private let nativeAPI: NativeControlClient
 
-    public init(compiler: ConfigurationCompiler, nativeAPI: NativeControlClient) {
+    public init(compiler: ConfigurationCompiler) {
         self.compiler = compiler
-        self.nativeAPI = nativeAPI
     }
 
     public func test(
         nodes: [ProxyNode],
-        engineRunning: Bool,
-        execution: URLTestExecution = .activeCore,
         onResult: URLTestProgressHandler? = nil
     ) async -> [String: DelayRecord] {
         guard !nodes.isEmpty else { return [:] }
-        if engineRunning, execution == .activeCore {
-            return await Self.test(
-                client: nativeAPI,
-                nodes: nodes,
-                // The sing-box URL Test API starts one test for every member
-                // of ExitGateway together. Waiting once per ten nodes here
-                // made the 10-minute automatic selector appear stuck when a
-                // few dead nodes never returned a result.
-                maximumWait: Self.activeCoreMaximumWait,
-                onResult: onResult
-            )
-        }
         return await testWithOfflineWorkers(nodes: nodes, onResult: onResult)
     }
 

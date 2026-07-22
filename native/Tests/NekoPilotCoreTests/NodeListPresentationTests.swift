@@ -86,29 +86,13 @@ struct NodeListPresentationTests {
             outbound: [:]
         )
 
-        #expect(NodeListPresentation.sorted(
-            [slower, faster],
-            using: [slower.runtimeTag: DelayRecord(delay: 80)],
-            pinning: slower.runtimeTag
-        ).map(\.originalTag) == ["VLESS · Faster", "VLESS · Slower"])
-    }
-
-    @Test("Connection recommendation uses only fresh reachable history")
-    func preferredConnectionNodeUsesFreshHistory() {
-        let now = Date(timeIntervalSince1970: 10_000)
-        let nodes = [
-            node("VLESS · Old", protocolName: "vless"),
-            node("VLESS · Fresh", protocolName: "vless"),
-            node("VLESS · Timeout", protocolName: "vless"),
-        ]
-        let history = [
-            nodes[0].runtimeTag: DelayRecord(delay: 40, measuredAt: now.addingTimeInterval(-3_600)),
-            nodes[1].runtimeTag: DelayRecord(delay: 90, measuredAt: now.addingTimeInterval(-60)),
-            nodes[2].runtimeTag: DelayRecord(delay: nil, measuredAt: now),
-        ]
-
-        let preferred = NodeListPresentation.preferredNode(nodes, using: history, now: now)
-        #expect(preferred?.runtimeTag == nodes[1].runtimeTag)
+        for input in [[slower, faster], [faster, slower]] {
+            #expect(NodeListPresentation.sorted(
+                input,
+                using: [slower.runtimeTag: DelayRecord(delay: 80)],
+                pinning: slower.runtimeTag
+            ).map(\.originalTag) == ["VLESS · Faster", "VLESS · Slower"])
+        }
     }
 
     @Test("Node counts are precomputed once per source")
