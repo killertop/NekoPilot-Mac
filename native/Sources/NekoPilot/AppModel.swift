@@ -156,6 +156,7 @@ final class AppModel: ObservableObject {
             for await node in stream {
                 guard !Task.isCancelled else { return }
                 selectedNode = node
+                rebuildSortedNodes()
             }
         }
         automaticDelayTask = Task { [weak self] in
@@ -751,7 +752,7 @@ final class AppModel: ObservableObject {
     }
 
     private func rebuildSortedNodes() {
-        nodeRows = NodeListPresentation.rows(nodes, using: delayHistory)
+        nodeRows = NodeListPresentation.rows(nodes, using: delayHistory, pinning: selectedNode)
         sortedNodes = nodeRows.map(\.node)
     }
 

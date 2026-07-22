@@ -45,6 +45,28 @@ struct NodeListPresentationTests {
         ])
     }
 
+    @Test("The active node stays first while remaining nodes sort by delay")
+    func activeNodeIsPinnedBeforeLatencyOrder() {
+        let nodes = [
+            node("VLESS · Selected", protocolName: "vless"),
+            node("VLESS · Fast", protocolName: "vless"),
+            node("VLESS · Slow", protocolName: "vless"),
+        ]
+        let history = [
+            nodes[0].runtimeTag: DelayRecord(delay: 180),
+            nodes[1].runtimeTag: DelayRecord(delay: 60),
+            nodes[2].runtimeTag: DelayRecord(delay: 240),
+        ]
+
+        #expect(NodeListPresentation.sorted(
+            nodes,
+            using: history,
+            pinning: nodes[0].runtimeTag
+        ).map(\.originalTag) == [
+            "VLESS · Selected", "VLESS · Fast", "VLESS · Slow",
+        ])
+    }
+
     @Test("Connection recommendation uses only fresh reachable history")
     func preferredConnectionNodeUsesFreshHistory() {
         let now = Date(timeIntervalSince1970: 10_000)

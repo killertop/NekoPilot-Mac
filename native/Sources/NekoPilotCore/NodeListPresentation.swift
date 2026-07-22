@@ -40,9 +40,12 @@ public enum NodeListPresentation {
 
     public static func sorted(
         _ nodes: [ProxyNode],
-        using delays: [String: DelayRecord]
+        using delays: [String: DelayRecord],
+        pinning selectedNode: String? = nil
     ) -> [ProxyNode] {
         nodes.sorted { lhs, rhs in
+            if lhs.runtimeTag == selectedNode { return true }
+            if rhs.runtimeTag == selectedNode { return false }
             let left = delays[lhs.runtimeTag]?.delay
             let right = delays[rhs.runtimeTag]?.delay
             switch (left, right) {
@@ -84,9 +87,10 @@ public enum NodeListPresentation {
     /// while URL Test results arrive in small batches.
     public static func rows(
         _ nodes: [ProxyNode],
-        using delays: [String: DelayRecord]
+        using delays: [String: DelayRecord],
+        pinning selectedNode: String? = nil
     ) -> [NodeListRow] {
-        let sortedNodes = sorted(nodes, using: delays)
+        let sortedNodes = sorted(nodes, using: delays, pinning: selectedNode)
         let names = sortedNodes.map(displayName(for:))
         let counts = names.reduce(into: [String: Int]()) { result, name in
             result[name.localizedLowercase, default: 0] += 1
