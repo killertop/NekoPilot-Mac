@@ -57,30 +57,24 @@ final class StatusItemController: NSObject {
     }
 
     private func update(status: EngineStatus) {
-        let dotColor: NSColor?
         switch status {
         case .running:
-            dotColor = .systemGreen
             toggleItem.title = L10n.disconnect
             toggleItem.isEnabled = true
         case .starting:
-            dotColor = .systemOrange
             toggleItem.title = L10n.text("取消连接", "Cancel Connection")
             toggleItem.isEnabled = true
         case .stopping:
-            dotColor = .systemOrange
             toggleItem.title = L10n.stopping
             toggleItem.isEnabled = false
         case .stopped:
-            dotColor = nil
             toggleItem.title = L10n.connect
             toggleItem.isEnabled = true
         case .failed:
-            dotColor = .systemRed
             toggleItem.title = L10n.connect
             toggleItem.isEnabled = true
         }
-        statusItem.button?.image = statusImage(dotColor: dotColor)
+        statusItem.button?.image = statusImage(for: status)
         statusItem.button?.contentTintColor = nil
         statusItem.button?.toolTip = "NekoPilot · \(status.localizedTitle)"
         if !status.isRunning {
@@ -114,24 +108,43 @@ final class StatusItemController: NSObject {
         return image
     }
 
-    private func statusImage(dotColor: NSColor?) -> NSImage? {
+    private func statusImage(for status: EngineStatus) -> NSImage? {
         guard let baseTemplateImage else { return nil }
-        guard let dotColor else {
-            baseTemplateImage.isTemplate = true
-            return baseTemplateImage
-        }
-        let image = NSImage(size: NSSize(width: 20, height: 18), flipped: false) { rect in
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+            NSColor.black.setStroke()
+            NSColor.black.setFill()
             baseTemplateImage.draw(
-                in: NSRect(x: 0, y: 0, width: 18, height: 18),
+                in: NSRect(x: 1, y: 2, width: 16, height: 16),
                 from: .zero,
                 operation: .sourceOver,
                 fraction: 1
             )
-            dotColor.setFill()
-            NSBezierPath(ovalIn: NSRect(x: rect.maxX - 6, y: 1, width: 5, height: 5)).fill()
+            let badgeRect = NSRect(x: 12.75, y: 2, width: 4, height: 4)
+            switch status {
+            case .running:
+                NSBezierPath(ovalIn: badgeRect).fill()
+            case .starting, .stopping:
+                let ring = NSBezierPath(ovalIn: badgeRect.insetBy(dx: 0.4, dy: 0.4))
+                ring.lineWidth = 1.1
+                ring.stroke()
+            case .failed:
+                let inset = badgeRect.insetBy(dx: 0.6, dy: 0.6)
+                let cross = NSBezierPath()
+                cross.move(to: NSPoint(x: inset.minX, y: inset.minY))
+                cross.line(to: NSPoint(x: inset.maxX, y: inset.maxY))
+                cross.move(to: NSPoint(x: inset.minX, y: inset.maxY))
+                cross.line(to: NSPoint(x: inset.maxX, y: inset.minY))
+                cross.lineWidth = 1.15
+                cross.lineCapStyle = .round
+                cross.stroke()
+            case .stopped:
+                break
+            }
             return true
         }
-        image.isTemplate = false
+        // A single monochrome alpha mask lets macOS choose the correct menu
+        // bar foreground in light, dark, tinted, and accessibility modes.
+        image.isTemplate = true
         return image
     }
 

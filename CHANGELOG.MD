@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+## 1.3.7 - 2026-07-22
+
+### 菜单栏 / Menu Bar
+
+- 菜单栏图标改为居中的 `18×18pt` 原生自适应模板，主体收至 `16pt`；移除导致深色菜单栏主体变黑的彩色状态点，改用随系统前景色变化的实心点、空心点和叉号表达运行、处理中与失败状态。 / Rebuilt the menu-bar icon as a centered 18×18pt adaptive template with a 16pt brand mark. Replaced the colored badge that rendered the mark black on dark menu bars with system-tinted filled, ring, and cross badges for running, busy, and failed states.
+
 ## 1.3.6 - 2026-07-22
 
 ### 自动选择 / Automatic Selection
