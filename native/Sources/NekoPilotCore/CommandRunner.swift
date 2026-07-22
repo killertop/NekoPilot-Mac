@@ -61,10 +61,12 @@ enum CommandRunner {
             // Do not wait for Foundation's `waitUntilExit()` equivalent after
             // a timeout. It can remain blocked even after macOS has reaped a
             // networksetup child, which previously left the UI in
-            // "正在连接" forever. Closing the parent readers releases the
-            // detached drain tasks without keeping this operation alive.
-            try? output.fileHandleForReading.close()
-            try? errors.fileHandleForReading.close()
+            // "正在连接" forever. Do not close the readers here: both detached
+            // tasks may still be blocked in Foundation's FileHandle read, and
+            // concurrently closing the same descriptor can raise an
+            // NSFileHandleOperationException that Swift cannot catch. The
+            // child termination below closes its inherited writers, allowing
+            // both drain tasks to finish normally at EOF.
             terminate(process)
             throw NekoPilotError.processFailed(CoreL10n.text("命令执行超时", "The command timed out"))
         }

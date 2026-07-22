@@ -31,4 +31,25 @@ struct CommandRunnerTests {
             #expect(Date().timeIntervalSince(startedAt) < 1)
         }
     }
+
+    @Test("Repeated timeouts leave active pipe readers to finish at EOF")
+    func repeatedTimeoutsDoNotRacePipeReaders() async {
+        let startedAt = Date()
+        for _ in 0 ..< 12 {
+            do {
+                _ = try await CommandRunner.run(
+                    executable: URL(fileURLWithPath: "/bin/sh"),
+                    arguments: ["-c", "printf stdout; printf stderr >&2; exec /bin/sleep 5"],
+                    timeout: 0.02
+                )
+                Issue.record("Expected the sleeping command to time out")
+            } catch {
+                // Returning an ordinary Swift error is the expected timeout
+                // path. An unsafe concurrent FileHandle close aborts the test
+                // process instead, so completing every iteration is the
+                // regression assertion.
+            }
+        }
+        #expect(Date().timeIntervalSince(startedAt) < 4)
+    }
 }
