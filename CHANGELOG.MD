@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+## 1.3.3 - 2026-07-22
+
+### 界面 / Interface
+
+- 首页连接按钮整体缩小约 10%，并同步调整电源符号、圆角、阴影与运行光晕，使首屏视觉重心更轻，同时保留充足的点击区域。 / Reduced the Home connection control by about 10% and proportionally refined its symbol, corners, shadow, and active glow while preserving a generous hit target.
+
 ## 1.3.2 - 2026-07-22
 
 ### 稳定性与数据一致性 / Reliability and data consistency

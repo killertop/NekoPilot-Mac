@@ -52,32 +52,32 @@ struct HomeView: View {
             if model.status.isRunning || model.status.isBusy {
                 Circle()
                     .fill(Color.accentColor.opacity(model.status.isRunning ? 0.22 : 0.12))
-                    .frame(width: 220, height: 220)
-                    .blur(radius: 38)
+                    .frame(width: 196, height: 196)
+                    .blur(radius: 34)
             }
 
             Button {
                 Task { await model.toggleConnection() }
             } label: {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 44, style: .continuous)
+                    RoundedRectangle(cornerRadius: 40, style: .continuous)
                         .fill(tileGradient)
                         .shadow(
                             color: model.status.isRunning ? Color.accentColor.opacity(0.32) : Color.black.opacity(colorScheme == .dark ? 0.42 : 0.11),
-                            radius: model.status.isRunning ? 17 : 14,
-                            y: 8
+                            radius: model.status.isRunning ? 15 : 12,
+                            y: 7
                         )
                         .overlay {
-                            RoundedRectangle(cornerRadius: 44, style: .continuous)
+                            RoundedRectangle(cornerRadius: 40, style: .continuous)
                                 .stroke(Color.white.opacity(colorScheme == .dark ? 0.06 : 0.72), lineWidth: 1)
                         }
 
                     Image(systemName: "power")
-                        .font(.system(size: 44, weight: .regular))
+                        .font(.system(size: 40, weight: .regular))
                         .foregroundStyle(powerColor)
                 }
-                .frame(width: 160, height: 160)
-                .contentShape(RoundedRectangle(cornerRadius: 44, style: .continuous))
+                .frame(width: 144, height: 144)
+                .contentShape(RoundedRectangle(cornerRadius: 40, style: .continuous))
             }
             .buttonStyle(.plain)
             // Starting is cancellable; otherwise a slow network or system
@@ -87,7 +87,7 @@ struct HomeView: View {
             .disabled(model.status == .stopping)
             .accessibilityLabel(powerButtonAccessibilityLabel)
         }
-        .frame(height: 160)
+        .frame(height: 144)
     }
 
     private var tileGradient: LinearGradient {
