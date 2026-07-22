@@ -15,15 +15,6 @@ struct SettingsView: View {
                 primaryCard
                 secondaryCard
                 aboutCard
-
-                VStack(spacing: 2) {
-                    Text("\(L10n.text("版本", "Version")) \(version)")
-                    Text("© 2026 NekoPilot")
-                }
-                .font(AppTypography.caption)
-                .foregroundStyle(.tertiary)
-                .padding(.top, 6)
-                .padding(.bottom, 2)
             }
             .padding(.horizontal, AppVisual.pageHorizontalPadding)
             .padding(.top, AppVisual.pageTopPadding)

@@ -174,7 +174,7 @@ struct HomeView: View {
 
     private func nodesSection(now: Date) -> some View {
         VStack(spacing: 6) {
-            SectionTitle(nodesSectionTitle(now: now)) {
+            SectionTitle(L10n.text("全部节点", "All Nodes")) {
                 Button {
                     if model.isURLTesting {
                         showingStopOptions = true
@@ -295,23 +295,10 @@ struct HomeView: View {
         }
     }
 
-    private func nodesSectionTitle(now: Date) -> String {
-        let title = L10n.text("全部节点", "All Nodes")
-        guard let date = model.delayHistory.values.map(\.measuredAt).max() else { return title }
-        let relative = Self.relativeFormatter.localizedString(for: date, relativeTo: now)
-        return "\(title) · \(relative)"
-    }
-
     private func isStale(_ node: ProxyNode, now: Date) -> Bool {
         guard let measuredAt = model.delayHistory[node.runtimeTag]?.measuredAt else { return false }
         return now.timeIntervalSince(measuredAt) > 30 * 60
     }
-
-    private static let relativeFormatter: RelativeDateTimeFormatter = {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter
-    }()
 
     private static func speedText(_ bytesPerSecond: Int64) -> String {
         let bytes = max(0, Double(bytesPerSecond))
