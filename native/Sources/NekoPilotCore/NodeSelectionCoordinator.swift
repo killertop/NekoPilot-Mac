@@ -1,15 +1,22 @@
 import Foundation
 
 public actor NodeSelectionCoordinator {
+    private enum Origin {
+        case automatic
+        case manual
+    }
+
     private struct Request {
         let node: String
-        let continuation: CheckedContinuation<Void, Error>
+        let origin: Origin
+        let continuation: CheckedContinuation<Bool, Error>
     }
 
     private let applySelection: @Sendable (String) async throws -> Void
     private let persistSelection: @Sendable (String) async throws -> Void
     private var pending: Request?
     private var processing = false
+    private var activeOrigin: Origin?
     private var continuations: [UUID: AsyncStream<String>.Continuation] = [:]
 
     public init(engine: EngineSupervisor, settings: SettingsStore) {
@@ -28,11 +35,27 @@ public actor NodeSelectionCoordinator {
     }
 
     public func submit(node: String) async throws {
+        _ = try await submit(node: node, origin: .manual)
+    }
+
+    /// Automatic requests are deliberately lower priority than direct user
+    /// intent. `false` means a manual request was already active or superseded
+    /// this request before it became the persisted selection.
+    public func submitAutomatic(node: String) async throws -> Bool {
+        try await submit(node: node, origin: .automatic)
+    }
+
+    private func submit(node: String, origin: Origin) async throws -> Bool {
         try await withCheckedThrowingContinuation { continuation in
-            if let superseded = pending {
-                superseded.continuation.resume()
+            if origin == .automatic,
+               activeOrigin == .manual || pending?.origin == .manual {
+                continuation.resume(returning: false)
+                return
             }
-            pending = Request(node: node, continuation: continuation)
+            if let superseded = pending {
+                superseded.continuation.resume(returning: false)
+            }
+            pending = Request(node: node, origin: origin, continuation: continuation)
             guard !processing else { return }
             processing = true
             Task { await self.processPendingRequests() }
@@ -52,26 +75,28 @@ public actor NodeSelectionCoordinator {
     private func processPendingRequests() async {
         while let request = pending {
             pending = nil
+            activeOrigin = request.origin
             do {
                 try await applySelection(request.node)
                 // A newer tap may arrive while the engine call is suspended.
                 // Keep the optimistic UI on the newest request instead of
                 // publishing an already superseded intermediate selection.
                 if pending != nil {
-                    request.continuation.resume()
+                    request.continuation.resume(returning: false)
                     continue
                 }
                 try await persistSelection(request.node)
                 if pending != nil {
-                    request.continuation.resume()
+                    request.continuation.resume(returning: false)
                     continue
                 }
                 for continuation in continuations.values { continuation.yield(request.node) }
-                request.continuation.resume()
+                request.continuation.resume(returning: true)
             } catch {
                 request.continuation.resume(throwing: error)
             }
         }
+        activeOrigin = nil
         processing = false
     }
 

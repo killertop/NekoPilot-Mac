@@ -34,6 +34,45 @@ struct NodeSelectionCoordinatorTests {
         #expect(persisted == ["C"])
         #expect(applied == ["A", "C"])
     }
+
+    @Test("Automatic selection never queues behind an active manual choice")
+    func manualSelectionHasPriority() async throws {
+        let probe = SelectionProbe()
+        let coordinator = NodeSelectionCoordinator(
+            applySelection: { node in try await probe.apply(node) },
+            persistSelection: { node in await probe.persist(node) }
+        )
+
+        let manual = Task { try await coordinator.submit(node: "A") }
+        await probe.waitUntilFirstStarted()
+        let automaticApplied = try await coordinator.submitAutomatic(node: "B")
+        #expect(automaticApplied == false)
+        await probe.releaseFirst()
+        try await manual.value
+
+        #expect(await probe.applied == ["A"])
+        #expect(await probe.persisted == ["A"])
+    }
+
+    @Test("A manual choice supersedes an automatic request already in flight")
+    func manualSelectionWinsAfterAutomaticApplyStarts() async throws {
+        let probe = SelectionProbe()
+        let coordinator = NodeSelectionCoordinator(
+            applySelection: { node in try await probe.apply(node) },
+            persistSelection: { node in await probe.persist(node) }
+        )
+
+        let automatic = Task { try await coordinator.submitAutomatic(node: "A") }
+        await probe.waitUntilFirstStarted()
+        let manual = Task { try await coordinator.submit(node: "C") }
+        while await coordinator.pendingNodeForTesting != "C" { await Task.yield() }
+        await probe.releaseFirst()
+
+        #expect(try await automatic.value == false)
+        try await manual.value
+        #expect(await probe.applied == ["A", "C"])
+        #expect(await probe.persisted == ["C"])
+    }
 }
 
 private actor SelectionProbe {

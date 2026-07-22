@@ -118,8 +118,8 @@ struct SubscriptionRepositoryTests {
         defer { try? FileManager.default.removeItem(at: location.directory) }
         let repository = try SubscriptionRepository(databaseURL: location.database)
         try await repository.replaceDelayHistory([
-            "fast": DelayRecord(delay: 72, measuredAt: Date(timeIntervalSince1970: 1_000)),
-            "timeout": DelayRecord(delay: nil, measuredAt: Date(timeIntervalSince1970: 2_000)),
+            "fast": DelayRecord(delay: 72, measuredAt: Date(timeIntervalSince1970: 1_800_000_000)),
+            "timeout": DelayRecord(delay: nil, measuredAt: Date(timeIntervalSince1970: 1_800_001_000)),
         ])
 
         let reopened = try SubscriptionRepository(databaseURL: location.database)
@@ -127,6 +127,34 @@ struct SubscriptionRepositoryTests {
         #expect(history["fast"]?.delay == 72)
         #expect(history["timeout"]?.delay == nil)
         #expect(history["timeout"] != nil)
+    }
+
+    @Test("Delay merges keep newer measurements and prune removed nodes")
+    func delayHistoryMergeIsTimestampOrdered() async throws {
+        let location = try temporaryDatabaseLocation()
+        defer { try? FileManager.default.removeItem(at: location.directory) }
+        let repository = try SubscriptionRepository(databaseURL: location.database)
+        try await repository.replaceDelayHistory([
+            "current": DelayRecord(delay: 80, measuredAt: Date(timeIntervalSince1970: 1_800_000_000.900)),
+            "removed": DelayRecord(delay: 50, measuredAt: Date(timeIntervalSince1970: 1_800_000_000)),
+        ])
+
+        let merged = try await repository.mergeDelayHistory([
+            // Same-second completion is the real race between an explicit test
+            // and an older automatic cycle, so sub-second ordering must survive
+            // a database round trip.
+            "current": DelayRecord(delay: 200, measuredAt: Date(timeIntervalSince1970: 1_800_000_000.100)),
+            "new": DelayRecord(delay: 90, measuredAt: Date(timeIntervalSince1970: 1_800_001_000)),
+        ], retaining: Set(["current", "new"]))
+
+        #expect(merged["current"]?.delay == 80)
+        #expect(merged["new"]?.delay == 90)
+        #expect(merged["removed"] == nil)
+        let persisted = try await repository.delayHistory()
+        #expect(persisted["current"]?.delay == 80)
+        #expect(persisted["new"]?.delay == 90)
+        #expect(persisted["removed"] == nil)
+        #expect(abs((persisted["current"]?.measuredAt.timeIntervalSince1970 ?? 0) - 1_800_000_000.900) < 0.001)
     }
 
     private func configuration(tag: String) -> [String: JSONValue] {

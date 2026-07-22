@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import NekoPilotCore
 
@@ -42,6 +43,24 @@ struct NodeListPresentationTests {
         #expect(NodeListPresentation.sorted(nodes, using: history).map(\.originalTag) == [
             "VLESS · HK 2", "VLESS · HK 10", "VLESS · HK 1",
         ])
+    }
+
+    @Test("Connection recommendation uses only fresh reachable history")
+    func preferredConnectionNodeUsesFreshHistory() {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let nodes = [
+            node("VLESS · Old", protocolName: "vless"),
+            node("VLESS · Fresh", protocolName: "vless"),
+            node("VLESS · Timeout", protocolName: "vless"),
+        ]
+        let history = [
+            nodes[0].runtimeTag: DelayRecord(delay: 40, measuredAt: now.addingTimeInterval(-3_600)),
+            nodes[1].runtimeTag: DelayRecord(delay: 90, measuredAt: now.addingTimeInterval(-60)),
+            nodes[2].runtimeTag: DelayRecord(delay: nil, measuredAt: now),
+        ]
+
+        let preferred = NodeListPresentation.preferredNode(nodes, using: history, now: now)
+        #expect(preferred?.runtimeTag == nodes[1].runtimeTag)
     }
 
     @Test("Node counts are precomputed once per source")

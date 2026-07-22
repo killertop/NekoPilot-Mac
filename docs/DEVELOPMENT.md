@@ -87,6 +87,8 @@ Run the packaged `.app`, not just `swift run`, and confirm:
 - a second launch activates the existing instance instead of creating another;
 - subscription and standalone-node import persist across restart;
 - URL Test works while disconnected and connected, retains old results until the next test, and sorts nodes by delay;
+- automatic selection starts its ten-minute cadence only while connected, respects a manual choice for the current connection, and switches only after a materially faster node wins twice;
+- disabling automatic selection or starting an explicit URL Test cancels any in-flight automatic cycle, while an unavailable current node receives one bounded quick confirmation before failover;
 - selected-node connection, stop, reconnect, and node switch use the displayed node;
 - system proxy is applied only after sing-box is ready and is restored after stop, failure, sleep, and quit;
 - custom rules and bundled LAN/China direct rules are compiled into the active sing-box configuration;

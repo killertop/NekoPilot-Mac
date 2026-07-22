@@ -77,7 +77,7 @@ public actor SubscriptionRepository {
             )
         }
         return Dictionary(uniqueKeysWithValues: rows.map { tag, delay, measuredAt in
-            (tag, DelayRecord(delay: delay, measuredAt: Date(timeIntervalSince1970: TimeInterval(measuredAt))))
+            (tag, DelayRecord(delay: delay, measuredAt: Self.decodeMeasurementTime(measuredAt)))
         })
     }
 
@@ -90,11 +90,47 @@ public actor SubscriptionRepository {
                     bindings: [
                         .text(tag),
                         record.delay.map { .integer(Int64($0)) } ?? .null,
-                        .integer(Int64(record.measuredAt.timeIntervalSince1970)),
+                        .integer(Self.encodeMeasurementTime(record.measuredAt)),
                     ]
                 )
             }
         }
+    }
+
+    /// Merges concurrently produced URL Test results without allowing an older
+    /// automatic cycle to overwrite a newer explicit test. Entries belonging
+    /// to removed nodes are pruned in the same transaction snapshot.
+    @discardableResult
+    public func mergeDelayHistory(
+        _ updates: [String: DelayRecord],
+        retaining validTags: Set<String>
+    ) throws -> [String: DelayRecord] {
+        var merged = try delayHistory().filter { validTags.contains($0.key) }
+        for (tag, update) in updates where validTags.contains(tag) {
+            if let current = merged[tag], current.measuredAt > update.measuredAt { continue }
+            merged[tag] = update
+        }
+        try replaceDelayHistory(merged)
+        return merged
+    }
+
+    @discardableResult
+    public func pruneDelayHistory(retaining validTags: Set<String>) throws -> [String: DelayRecord] {
+        let retained = try delayHistory().filter { validTags.contains($0.key) }
+        try replaceDelayHistory(retained)
+        return retained
+    }
+
+    private static func encodeMeasurementTime(_ date: Date) -> Int64 {
+        Int64((date.timeIntervalSince1970 * 1_000).rounded())
+    }
+
+    private static func decodeMeasurementTime(_ storedValue: Int64) -> Date {
+        // Values written before millisecond precision used Unix seconds.
+        let seconds = storedValue >= 10_000_000_000
+            ? TimeInterval(storedValue) / 1_000
+            : TimeInterval(storedValue)
+        return Date(timeIntervalSince1970: seconds)
     }
 
     public func upsert(
