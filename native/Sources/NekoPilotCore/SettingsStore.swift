@@ -1,6 +1,17 @@
 import Foundation
 import Darwin
 
+/// Immutable settings consumed by one sing-box configuration generation.
+/// Capturing them in one actor read prevents a concurrent preference write
+/// from mixing listener, DNS, proxy ownership, and routing values.
+public struct RuntimeConfigurationSettings: Equatable, Sendable {
+    public let proxyPort: Int
+    public let allowLAN: Bool
+    public let skipSystemProxy: Bool
+    public let directDNS: String
+    public let rules: [RoutingRule]
+}
+
 public actor SettingsStore {
     public enum Key {
         public static let allowLAN = "allow_lan"
@@ -67,6 +78,16 @@ public actor SettingsStore {
     public func proxyPort() -> Int {
         let port = integer(Key.proxyPort, default: Self.defaultProxyPort)
         return (1 ... 65_535).contains(port) ? port : Self.defaultProxyPort
+    }
+
+    public func runtimeConfiguration() -> RuntimeConfigurationSettings {
+        RuntimeConfigurationSettings(
+            proxyPort: proxyPort(),
+            allowLAN: bool(Key.allowLAN),
+            skipSystemProxy: bool(Key.skipSystemProxy),
+            directDNS: string(Key.directDNS, default: DNSResolverDetector.fallback),
+            rules: rules()
+        )
     }
 
     func delayHistory() -> [String: DelayRecord] {

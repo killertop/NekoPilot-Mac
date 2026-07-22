@@ -85,14 +85,16 @@ public actor EngineSupervisor {
         var appliedProxySession: UUID?
         setStatus(.starting)
         do {
-            let mixedPort = await settings.proxyPort()
+            let runtimeSettings = await settings.runtimeConfiguration()
+            let mixedPort = runtimeSettings.proxyPort
             let apiEndpoint = try LocalAPIEndpoint.make()
             let healthProbePort = try makeHealthProbePort(excluding: [mixedPort, apiEndpoint.port])
             await nativeAPI.configure(endpoint: apiEndpoint)
             let config = try await compiler.compile(
                 selectedNode: selectedNode,
                 apiEndpoint: apiEndpoint,
-                healthProbePort: healthProbePort
+                healthProbePort: healthProbePort,
+                runtimeSettings: runtimeSettings
             )
             try await SingBoxValidator.validate(configuration: config)
             try ensureCurrent(startEpoch)
@@ -126,8 +128,7 @@ public actor EngineSupervisor {
                 ))
             }
 
-            let skipSystemProxy = await settings.bool(SettingsStore.Key.skipSystemProxy)
-            if !skipSystemProxy {
+            if !runtimeSettings.skipSystemProxy {
                 let proxySession = try await systemProxy.apply(port: mixedPort)
                 appliedProxySession = proxySession
                 proxySessionID = proxySession

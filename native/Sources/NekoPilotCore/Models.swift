@@ -199,6 +199,7 @@ public enum NekoPilotError: LocalizedError, Equatable {
     case invalidLink
     case unsupportedProtocol
     case invalidSubscription
+    case corruptSubscription(String)
     case remoteAddressBlocked
     case responseTooLarge
     case invalidRule
@@ -215,6 +216,10 @@ public enum NekoPilotError: LocalizedError, Equatable {
         case .invalidLink: CoreL10n.text("链接格式无效", "The link format is invalid")
         case .unsupportedProtocol: CoreL10n.text("暂不支持该协议", "This protocol is not supported")
         case .invalidSubscription: CoreL10n.text("订阅中没有可用节点", "The subscription contains no usable nodes")
+        case let .corruptSubscription(identifier): CoreL10n.text(
+            "订阅 \(identifier) 的本地配置已损坏",
+            "The local configuration for subscription \(identifier) is corrupted"
+        )
         case .remoteAddressBlocked: CoreL10n.text(
             "订阅地址指向本机或内网，已拒绝访问",
             "The subscription points to this Mac or a private network and was blocked"

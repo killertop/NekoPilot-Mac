@@ -24,6 +24,7 @@ struct ConfigurationCompilerRulePriorityTests {
             value: ProxyHealthEndpoint.host
         ))
         try await settings.replaceRules(rules)
+        try await settings.set(.number(20_808), for: SettingsStore.Key.proxyPort)
         let sourceIdentifier = try await repository.upsert(
             url: nil,
             name: "Test",
@@ -41,13 +42,24 @@ struct ConfigurationCompilerRulePriorityTests {
         let compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
         let selectedNode = "@np:\(sourceIdentifier):node"
         let healthProbePort = 39_876
+        let runtimeSettings = await settings.runtimeConfiguration()
+        // A later UI write must not change only one field of an in-flight
+        // engine start. The compiler consumes the snapshot captured above.
+        try await settings.set(.number(30_303), for: SettingsStore.Key.proxyPort)
         let configURL = try await compiler.compile(
             selectedNode: selectedNode,
-            healthProbePort: healthProbePort
+            healthProbePort: healthProbePort,
+            runtimeSettings: runtimeSettings
         )
         let config = try JSONValue.decodeObject(from: Data(contentsOf: configURL))
 
         let inbounds = config["inbounds"]?.arrayValue ?? []
+        #expect(inbounds.contains(where: {
+            $0.objectValue?["listen_port"]?.numberValue == 20_808
+        }))
+        #expect(!inbounds.contains(where: {
+            $0.objectValue?["listen_port"]?.numberValue == 30_303
+        }))
         let healthInbound = try #require(inbounds.first(where: {
             $0.objectValue?["tag"]?.stringValue == ProxyHealthEndpoint.inboundTag
         })?.objectValue)

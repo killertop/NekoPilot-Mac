@@ -18,10 +18,27 @@ public actor ConfigurationCompiler {
         apiEndpoint: LocalAPIEndpoint? = nil,
         healthProbePort: Int? = nil
     ) async throws -> URL {
+        let runtimeSettings = await settings.runtimeConfiguration()
+        return try await compile(
+            selectedNode: selectedNode,
+            apiEndpoint: apiEndpoint,
+            healthProbePort: healthProbePort,
+            runtimeSettings: runtimeSettings
+        )
+    }
+
+    @discardableResult
+    func compile(
+        selectedNode: String?,
+        apiEndpoint: LocalAPIEndpoint? = nil,
+        healthProbePort: Int? = nil,
+        runtimeSettings: RuntimeConfigurationSettings
+    ) async throws -> URL {
         let config = try await makeConfiguration(
             selectedNode: selectedNode,
             apiEndpoint: apiEndpoint,
-            healthProbePort: healthProbePort
+            healthProbePort: healthProbePort,
+            runtimeSettings: runtimeSettings
         )
         try AtomicFile.write(try JSONValue.encodeObject(config, pretty: true), to: paths.runtimeConfig)
         return paths.runtimeConfig
@@ -78,7 +95,8 @@ public actor ConfigurationCompiler {
         let baseConfig = try await makeConfiguration(
             selectedNode: selectedNode,
             apiEndpoint: apiEndpoints[0],
-            healthProbePort: nil
+            healthProbePort: nil,
+            runtimeSettings: await settings.runtimeConfiguration()
         )
         var configurations: [URL] = []
         do {
@@ -124,7 +142,8 @@ public actor ConfigurationCompiler {
         let baseConfig = try await makeConfiguration(
             selectedNode: selectedNode,
             apiEndpoint: apiEndpoints[0],
-            healthProbePort: nil
+            healthProbePort: nil,
+            runtimeSettings: await settings.runtimeConfiguration()
         )
         var configurations: [URL] = []
         do {
@@ -229,23 +248,20 @@ public actor ConfigurationCompiler {
     private func makeConfiguration(
         selectedNode: String?,
         apiEndpoint: LocalAPIEndpoint?,
-        healthProbePort: Int?
+        healthProbePort: Int?,
+        runtimeSettings: RuntimeConfigurationSettings
     ) async throws -> [String: JSONValue] {
         var config = try Self.loadTemplate()
-        let port = await settings.proxyPort()
-        let allowLAN = await settings.bool(SettingsStore.Key.allowLAN)
-        let dns = await settings.string(SettingsStore.Key.directDNS, default: DNSResolverDetector.fallback)
-        let rules = await settings.rules()
         try installRuleSetBaseline()
         configureRuntime(
             config: &config,
-            proxyPort: port,
-            allowLAN: allowLAN,
-            directDNS: dns,
+            proxyPort: runtimeSettings.proxyPort,
+            allowLAN: runtimeSettings.allowLAN,
+            directDNS: runtimeSettings.directDNS,
             apiEndpoint: apiEndpoint,
             healthProbePort: healthProbePort
         )
-        injectRules(rules, healthProbeEnabled: healthProbePort != nil, into: &config)
+        injectRules(runtimeSettings.rules, healthProbeEnabled: healthProbePort != nil, into: &config)
         let sources = try await repository.configObjects()
         try merge(sources: sources, selectedNode: selectedNode, into: &config)
         return config

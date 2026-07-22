@@ -43,8 +43,12 @@ public actor SubscriptionRepository {
             let config = Data((SQLiteDatabase.text(row, 2) ?? "{}").utf8)
             return (identifier, name, config)
         }
-        return rows.flatMap { identifier, sourceName, data in
-            (try? Self.nodes(in: data, identifier: identifier, sourceName: sourceName)) ?? []
+        return try rows.flatMap { identifier, sourceName, data in
+            do {
+                return try Self.nodes(in: data, identifier: identifier, sourceName: sourceName)
+            } catch {
+                throw NekoPilotError.corruptSubscription(identifier)
+            }
         }
     }
 
@@ -59,7 +63,11 @@ public actor SubscriptionRepository {
         ) { row in
             let identifier = SQLiteDatabase.text(row, 0) ?? ""
             let data = Data((SQLiteDatabase.text(row, 1) ?? "{}").utf8)
-            return (identifier, try JSONValue.decodeObject(from: data))
+            do {
+                return (identifier, try JSONValue.decodeObject(from: data))
+            } catch {
+                throw NekoPilotError.corruptSubscription(identifier)
+            }
         }
     }
 

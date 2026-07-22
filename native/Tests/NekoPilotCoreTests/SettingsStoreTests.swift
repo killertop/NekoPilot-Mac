@@ -46,6 +46,35 @@ struct SettingsStoreTests {
         #expect(try await reopened.takeLegacyDelayHistory().isEmpty)
     }
 
+    @Test("Runtime configuration is captured as one typed snapshot")
+    func runtimeConfigurationSnapshot() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NekoPilot-Settings-Test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let settings = try SettingsStore(fileURL: directory.appendingPathComponent("preferences.json"))
+        let rule = RoutingRule(action: .direct, kind: .domainSuffix, value: "example.com")
+        try await settings.set(.number(20_808), for: SettingsStore.Key.proxyPort)
+        try await settings.set(.bool(true), for: SettingsStore.Key.allowLAN)
+        try await settings.set(.bool(true), for: SettingsStore.Key.skipSystemProxy)
+        try await settings.set(.string("1.1.1.1"), for: SettingsStore.Key.directDNS)
+        try await settings.replaceRules([rule])
+
+        let snapshot = await settings.runtimeConfiguration()
+        try await settings.set(.number(30_303), for: SettingsStore.Key.proxyPort)
+        try await settings.set(.bool(false), for: SettingsStore.Key.allowLAN)
+
+        #expect(snapshot.proxyPort == 20_808)
+        #expect(snapshot.allowLAN)
+        #expect(snapshot.skipSystemProxy)
+        #expect(snapshot.directDNS == "1.1.1.1")
+        #expect(snapshot.rules.count == 1)
+        #expect(snapshot.rules.first?.action == rule.action)
+        #expect(snapshot.rules.first?.kind == rule.kind)
+        #expect(snapshot.rules.first?.value == rule.value)
+        #expect(await settings.runtimeConfiguration().proxyPort == 30_303)
+    }
+
     @Test("Default proxy suffixes are visible once and stay deleted")
     func defaultProxySuffixesSeedOnlyOnce() async throws {
         let directory = FileManager.default.temporaryDirectory

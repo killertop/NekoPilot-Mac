@@ -74,6 +74,38 @@ struct SubscriptionRepositoryTests {
         #expect(nodes.map(\.originalTag) == ["original"])
     }
 
+    @Test("Corrupted source configuration fails consistently instead of hiding its nodes")
+    func corruptedConfigurationIsTypedAndFailFast() async throws {
+        let location = try temporaryDatabaseLocation()
+        defer { try? FileManager.default.removeItem(at: location.directory) }
+        let repository = try SubscriptionRepository(databaseURL: location.database)
+        let identifier = try await repository.upsert(
+            url: "https://example.com/corrupt",
+            name: "Corrupt",
+            sourceType: .subscription,
+            config: configuration(tag: "node")
+        )
+        let inspection = try SQLiteDatabase(url: location.database)
+        try inspection.execute(
+            "UPDATE subscription_configs SET config_content = ? WHERE identifier = ?",
+            bindings: [.text("{not-json"), .text(identifier)]
+        )
+
+        do {
+            _ = try await repository.nodes()
+            Issue.record("Expected the node snapshot to reject corrupted source data")
+        } catch {
+            #expect(error as? NekoPilotError == .corruptSubscription(identifier))
+        }
+
+        do {
+            _ = try await repository.configObjects()
+            Issue.record("Expected configuration compilation input to reject the same source")
+        } catch {
+            #expect(error as? NekoPilotError == .corruptSubscription(identifier))
+        }
+    }
+
     @Test("Editing never overwrites another source that owns the requested URL")
     func editingDoesNotOverwriteAnotherSource() async throws {
         let location = try temporaryDatabaseLocation()
