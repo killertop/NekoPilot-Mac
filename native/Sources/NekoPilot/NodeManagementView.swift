@@ -297,14 +297,18 @@ private struct RefreshErrorSheet: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
 
-            Text(errorMessage)
-                .font(AppTypography.secondary)
-                .foregroundStyle(.primary)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(AppVisual.fill(colorScheme), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            ScrollView {
+                Text(errorMessage)
+                    .font(AppTypography.secondary)
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollIndicators(.automatic)
+            .frame(maxHeight: 180)
+            .background(AppVisual.fill(colorScheme), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
             HStack {
                 Spacer()
@@ -576,6 +580,7 @@ private struct SourceDetailSheet: View {
                     .padding(.horizontal, 16)
                     .padding(.bottom, 18)
                 }
+                .scrollIndicators(.automatic)
             }
         }
         .frame(width: AppVisual.sheetWidth)

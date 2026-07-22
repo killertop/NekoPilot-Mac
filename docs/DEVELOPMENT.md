@@ -87,6 +87,8 @@ Run the packaged `.app`, not just `swift run`, and confirm:
 - a second launch activates the existing instance instead of creating another;
 - subscription and standalone-node import persist across restart;
 - URL Test works while disconnected and connected, retains old results until the next test, and sorts nodes by delay;
+- URL Test continues after leaving Home; stopping it offers an explicit choice to keep completed results or restore the pre-test history, and both choices survive relaunch;
+- deleting a node source names the affected source and node count before confirmation, while a deleted custom rule remains undoable for a short interval;
 - automatic selection starts its ten-minute cadence only while connected, respects a manual choice for the current connection, and switches only after a materially faster node wins twice;
 - disabling automatic selection or starting an explicit URL Test cancels any in-flight automatic cycle, while an unavailable current node receives one bounded quick confirmation before failover;
 - selected-node connection, stop, reconnect, and node switch use the displayed node;

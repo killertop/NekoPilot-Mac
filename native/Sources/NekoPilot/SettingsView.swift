@@ -58,7 +58,7 @@ struct SettingsView: View {
             VStack(spacing: 0) {
                 toggleRow(
                     icon: "gauge.with.dots.needle.50percent",
-                    iconColor: .accentColor,
+                    iconColor: AppVisual.standardSettingIcon,
                     title: L10n.text("自动选择节点", "Automatic Node Selection"),
                     subtitle: model.automaticSelectionSummary,
                     value: Binding(
@@ -69,14 +69,14 @@ struct SettingsView: View {
                 AppDivider(leading: 52)
                 toggleRow(
                     icon: "power",
-                    iconColor: .secondary,
+                    iconColor: AppVisual.secondarySettingIcon,
                     title: L10n.text("开机启动", "Launch at Login"),
                     value: Binding(get: { login.enabled }, set: { login.setEnabled($0) })
                 )
                 AppDivider(leading: 52)
                 toggleRow(
                     icon: "wifi.router",
-                    iconColor: .orange,
+                    iconColor: AppVisual.cautionSettingIcon,
                     title: L10n.text("局域网连接", "LAN Connections"),
                     subtitle: L10n.text("让同一局域网设备使用本机代理", "Let LAN devices use this proxy"),
                     value: Binding(
@@ -88,7 +88,7 @@ struct SettingsView: View {
                 Button { showingPort = true } label: {
                     settingRow(
                         icon: "cable.connector",
-                        iconColor: .accentColor,
+                        iconColor: AppVisual.standardSettingIcon,
                         title: L10n.text("代理端口", "Proxy Port"),
                         subtitle: L10n.text("HTTP/SOCKS 混合入站端口", "Mixed HTTP/SOCKS inbound port"),
                         trailing: "\(model.proxyPort)",
@@ -106,7 +106,7 @@ struct SettingsView: View {
                 Button { showingDirectDNS = true } label: {
                     settingRow(
                         icon: "server.rack",
-                        iconColor: .accentColor,
+                        iconColor: AppVisual.standardSettingIcon,
                         title: L10n.text("直连 DNS", "Direct DNS"),
                         subtitle: L10n.text("打开直连 DNS 设置", "Open direct DNS settings"),
                         chevron: true
@@ -116,7 +116,7 @@ struct SettingsView: View {
                 AppDivider(leading: 52)
                 toggleRow(
                     icon: "tag",
-                    iconColor: .accentColor,
+                    iconColor: AppVisual.standardSettingIcon,
                     title: L10n.text("显示协议类型", "Show Protocol Type"),
                     subtitle: L10n.text("在节点列表中显示每个节点的协议类型", "Show protocol labels in the node list"),
                     value: Binding(
@@ -128,7 +128,7 @@ struct SettingsView: View {
                 Button { showingUserAgent = true } label: {
                     settingRow(
                         icon: "wrench.and.screwdriver",
-                        iconColor: .accentColor,
+                        iconColor: AppVisual.standardSettingIcon,
                         title: L10n.text("User Agent 设置", "User Agent Settings"),
                         subtitle: SubscriptionUserAgentPreset.summary(for: model.userAgent),
                         chevron: true
@@ -139,7 +139,7 @@ struct SettingsView: View {
                 AppDivider(leading: 52)
                 toggleRow(
                     icon: "network",
-                    iconColor: .accentColor,
+                    iconColor: AppVisual.standardSettingIcon,
                     title: L10n.text("自动设置系统代理", "Set System Proxy Automatically"),
                     subtitle: L10n.text("连接时接管 HTTP、HTTPS 和 SOCKS", "Manage HTTP, HTTPS, and SOCKS while connected"),
                     value: Binding(
@@ -159,7 +159,7 @@ struct SettingsView: View {
                 } label: {
                     settingRow(
                         icon: "chevron.left.forwardslash.chevron.right",
-                        iconColor: .accentColor,
+                        iconColor: AppVisual.standardSettingIcon,
                         title: "GitHub",
                         subtitle: L10n.text("源码、问题反馈与版本更新", "Source, issues, and releases"),
                         chevron: true
@@ -169,7 +169,7 @@ struct SettingsView: View {
                 AppDivider(leading: 52)
                 settingRow(
                     icon: "info.circle",
-                    iconColor: .secondary,
+                    iconColor: AppVisual.secondarySettingIcon,
                     title: L10n.text("版本", "Version"),
                     subtitle: "NekoPilot for macOS",
                     trailing: version
@@ -456,6 +456,7 @@ private struct UserAgentSheet: View {
                     .padding(.horizontal, AppVisual.sheetPadding)
                     .padding(.bottom, 12)
                 }
+                .scrollIndicators(.automatic)
                 .frame(maxHeight: 360)
 
                 AppDivider(leading: 0)

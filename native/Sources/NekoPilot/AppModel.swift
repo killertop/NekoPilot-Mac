@@ -15,6 +15,11 @@ struct PendingDeepLink: Identifiable, Equatable {
     let shouldConnect: Bool
 }
 
+enum URLTestStopPolicy: Equatable {
+    case keepPartialResults
+    case restorePreviousResults
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var status: EngineStatus = .stopped
@@ -69,6 +74,7 @@ final class AppModel: ObservableObject {
     private var releaseCheckTask: Task<Void, Never>?
     private var selectionGeneration = 0
     private var urlTestGeneration = 0
+    private var urlTestBaselineHistory: [String: DelayRecord]?
     private var pendingURLTestProgress: [String: DelayRecord] = [:]
     private var ruleUpdateGeneration = 0
     private var sleepStartedAt: Date?
@@ -273,6 +279,7 @@ final class AppModel: ObservableObject {
         urlTestGeneration += 1
         let generation = urlTestGeneration
         isURLTesting = true
+        urlTestBaselineHistory = delayHistory
         let snapshot = nodes
         let running = status.isRunning
         urlTestProgressFlushTask?.cancel()
@@ -287,6 +294,7 @@ final class AppModel: ObservableObject {
                 if generation == urlTestGeneration {
                     isURLTesting = false
                     urlTestTask = nil
+                    urlTestBaselineHistory = nil
                 }
             }
             let results = await tester.test(
@@ -332,24 +340,36 @@ final class AppModel: ObservableObject {
         rebuildSortedNodes()
     }
 
-    /// Stops an explicit user test while retaining every completed result.
-    /// Untested nodes keep their previous history, and the merged snapshot is
-    /// persisted so leaving and relaunching the app cannot show different data.
-    func cancelURLTest() async {
+    /// Stops an explicit user test using the choice made in the confirmation
+    /// dialog. Keeping partial results persists every completed measurement;
+    /// restoring discards them and returns both UI and disk to the pre-test
+    /// snapshot.
+    func cancelURLTest(policy: URLTestStopPolicy) async {
         guard isURLTesting else { return }
         urlTestProgressFlushTask?.cancel()
         urlTestProgressFlushTask = nil
-        flushURLTestProgress(generation: urlTestGeneration)
+        if policy == .keepPartialResults {
+            flushURLTestProgress(generation: urlTestGeneration)
+        }
+        let baseline = urlTestBaselineHistory ?? delayHistory
         urlTestGeneration += 1
         urlTestTask?.cancel()
         urlTestTask = nil
         await automaticSelection.setExplicitTestActive(false)
         pendingURLTestProgress.removeAll(keepingCapacity: true)
+        urlTestBaselineHistory = nil
         isURLTesting = false
-        rebuildSortedNodes()
+        defer { rebuildSortedNodes() }
         do {
             let validTags = Set(nodes.map(\.runtimeTag))
-            delayHistory = try await repository.mergeDelayHistory(delayHistory, retaining: validTags)
+            switch policy {
+            case .keepPartialResults:
+                delayHistory = try await repository.mergeDelayHistory(delayHistory, retaining: validTags)
+            case .restorePreviousResults:
+                let restored = baseline.filter { validTags.contains($0.key) }
+                delayHistory = restored
+                try await repository.replaceDelayHistory(restored)
+            }
         } catch {
             show(error)
         }
@@ -680,9 +700,15 @@ final class AppModel: ObservableObject {
         wakeTask?.cancel()
         wakeTask = nil
         let testing = urlTestTask
-        testing?.cancel()
-        urlTestTask = nil
-        isURLTesting = false
+        if isURLTesting {
+            // Quitting is the only non-user navigation event that must stop a
+            // test. Persist completed work so the next launch matches the last
+            // results the user saw instead of silently reverting to disk.
+            await cancelURLTest(policy: .keepPartialResults)
+        } else {
+            testing?.cancel()
+            urlTestTask = nil
+        }
         statusTask?.cancel()
         selectionTask?.cancel()
         automaticDelayTask?.cancel()

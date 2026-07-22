@@ -137,6 +137,13 @@ struct RootView: View {
                 Image(systemName: isSelected ? selectedIcon : icon)
                     .font(.system(size: 19, weight: isSelected ? .semibold : .regular))
                     .frame(height: 22)
+                    .background {
+                        if isSelected, tab == .rules {
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(Color.accentColor.opacity(0.12))
+                                .frame(width: 29, height: 27)
+                        }
+                    }
                 Text(title)
                     .font(AppTypography.caption)
                     .lineLimit(1)

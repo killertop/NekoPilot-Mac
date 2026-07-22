@@ -20,6 +20,13 @@ enum AppVisual {
     static let sheetPadding: CGFloat = 16
     static let sheetMaximumHeight: CGFloat = 480
 
+    // Setting icons use one semantic palette: accent for ordinary actions,
+    // secondary for passive information, and caution only for settings that
+    // expand network exposure or require extra care.
+    static var standardSettingIcon: Color { .accentColor }
+    static var secondarySettingIcon: Color { .secondary }
+    static var cautionSettingIcon: Color { .orange }
+
     static func background(_ scheme: ColorScheme) -> Color {
         scheme == .dark ? .black : Color(red: 247 / 255, green: 247 / 255, blue: 247 / 255)
     }

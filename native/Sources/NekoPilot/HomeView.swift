@@ -4,6 +4,7 @@ import SwiftUI
 struct HomeView: View {
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var model: AppModel
+    @State private var showingStopOptions = false
 
     var body: some View {
         TimelineView(.periodic(from: Date(), by: 60)) { context in
@@ -23,6 +24,26 @@ struct HomeView: View {
                 .frame(maxWidth: AppVisual.pageMaximumWidth)
                 .frame(maxWidth: .infinity)
             }
+        }
+        .alert(
+            L10n.text("停止测速？", "Stop Speed Test?"),
+            isPresented: $showingStopOptions
+        ) {
+            Button(L10n.text("继续测速", "Continue Testing"), role: .cancel) { }
+            Button(L10n.text("恢复测速前结果", "Restore Previous Results"), role: .destructive) {
+                Task { await model.cancelURLTest(policy: .restorePreviousResults) }
+            }
+            Button(L10n.text("保存已完成结果", "Keep Completed Results")) {
+                Task { await model.cancelURLTest(policy: .keepPartialResults) }
+            }
+        } message: {
+            Text(L10n.text(
+                "请选择保留已经完成的测速结果，或恢复到本次测速开始前的历史结果。",
+                "Keep measurements that have completed, or restore the history from before this test started."
+            ))
+        }
+        .onChange(of: model.isURLTesting) { testing in
+            if !testing { showingStopOptions = false }
         }
     }
 
@@ -106,7 +127,7 @@ struct HomeView: View {
             SectionTitle(nodesSectionTitle(now: now)) {
                 Button {
                     if model.isURLTesting {
-                        Task { await model.cancelURLTest() }
+                        showingStopOptions = true
                     } else {
                         model.runURLTest()
                     }

@@ -81,6 +81,9 @@ final class StatusItemController: NSObject {
         statusItem.button?.contentTintColor = nil
         statusItem.button?.toolTip = "NekoPilot · \(status.localizedTitle)"
         copyItem.isEnabled = status.isRunning
+        copyItem.toolTip = status.isRunning
+            ? L10n.text("已连接，可复制当前代理环境变量", "Connected. Copy the active proxy environment variables.")
+            : L10n.text("连接后才能复制代理环境变量", "Connect before copying proxy environment variables.")
     }
 
     private func loadTemplateImage() -> NSImage? {
@@ -138,7 +141,7 @@ final class StatusItemController: NSObject {
     }
 
     @objc private func copyEnvironment() {
-        guard let port = model?.proxyPort else { return }
+        guard model?.status.isRunning == true, let port = model?.proxyPort else { return }
         let value = """
         export http_proxy=http://127.0.0.1:\(port)
         export https_proxy=http://127.0.0.1:\(port)

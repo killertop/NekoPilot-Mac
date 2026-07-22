@@ -138,6 +138,7 @@ struct RulesView: View {
         .onDisappear {
             undoDismissTask?.cancel()
             undoDismissTask = nil
+            undoRule = nil
         }
     }
 
@@ -501,6 +502,7 @@ private struct RuleHelpSheet: View {
                     .padding(.horizontal, 16)
                     .padding(.bottom, 18)
                 }
+                .scrollIndicators(.automatic)
 
                 AppDivider(leading: 0)
                 Button(L10n.text("关闭", "Close")) { isPresented = false }
