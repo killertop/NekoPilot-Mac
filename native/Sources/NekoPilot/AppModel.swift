@@ -825,7 +825,12 @@ final class AppModel: ObservableObject {
         } else {
             delayHistory = storedHistory
         }
-        rules = await settings.rules()
+        do {
+            rules = try await settings.rulesInstallingDefaultsIfNeeded()
+        } catch {
+            rules = await settings.rules()
+            show(error)
+        }
         rebuildSortedNodes()
     }
 

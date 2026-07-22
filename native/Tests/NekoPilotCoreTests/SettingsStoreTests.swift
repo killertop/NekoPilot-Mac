@@ -22,4 +22,50 @@ struct SettingsStoreTests {
         #expect(await reopened.delayHistory().isEmpty)
         #expect(try await reopened.takeLegacyDelayHistory().isEmpty)
     }
+
+    @Test("Default proxy suffixes are visible once and stay deleted")
+    func defaultProxySuffixesSeedOnlyOnce() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NekoPilot-Settings-Test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("preferences.json")
+        let settings = try SettingsStore(fileURL: file)
+
+        let seeded = try await settings.rulesInstallingDefaultsIfNeeded()
+        let visibleDefaults = seeded.filter { rule in
+            rule.action == .proxy && rule.kind == .domainSuffix
+                && SettingsStore.defaultProxyDomainSuffixes.contains(rule.value)
+        }
+        #expect(visibleDefaults.count == SettingsStore.defaultProxyDomainSuffixes.count)
+
+        try await settings.replaceRules([])
+        let reopened = try SettingsStore(fileURL: file)
+        #expect(try await reopened.rulesInstallingDefaultsIfNeeded().isEmpty)
+    }
+
+    @Test("Default proxy seeding respects an existing user decision")
+    func defaultProxySuffixesPreserveExistingAction() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NekoPilot-Settings-Test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let settings = try SettingsStore(fileURL: directory.appendingPathComponent("preferences.json"))
+        let direct = RoutingRule(action: .direct, kind: .domainSuffix, value: "googleapis.com")
+        try await settings.replaceRules([direct])
+
+        let seeded = try await settings.rulesInstallingDefaultsIfNeeded()
+        let preservesDirect = seeded.contains(where: {
+            $0.action == .direct && $0.kind == .domainSuffix && $0.value == "googleapis.com"
+        })
+        let addsConflictingProxy = seeded.contains(where: {
+            $0.action == .proxy && $0.kind == .domainSuffix && $0.value == "googleapis.com"
+        })
+        let addsOtherDefault = seeded.contains(where: {
+            $0.action == .proxy && $0.kind == .domainSuffix && $0.value == "gstatic.com"
+        })
+        #expect(preservesDirect)
+        #expect(!addsConflictingProxy)
+        #expect(addsOtherDefault)
+    }
 }

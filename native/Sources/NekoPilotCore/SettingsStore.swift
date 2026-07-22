@@ -15,9 +15,11 @@ public actor SettingsStore {
         public static let lastUpdateCheck = "github_release_update_last_check"
         public static let directRules = "rules_direct"
         public static let proxyRules = "rules_proxy"
+        public static let defaultProxyRulesSeeded = "default_proxy_rules_seeded"
     }
 
     public static let defaultProxyPort = 16_789
+    public static let defaultProxyDomainSuffixes = ["googleapis.com", "gstatic.com"]
 
     private let fileURL: URL
     private var values: [String: JSONValue]
@@ -123,21 +125,28 @@ public actor SettingsStore {
     }
 
     public func replaceRules(_ rules: [RoutingRule]) throws {
-        try commit {
-            for action in RuleAction.allCases {
-                var object: [String: JSONValue] = [:]
-                for kind in RuleKind.allCases {
-                    let entries = Array(Set(rules
-                        .filter { $0.action == action && $0.kind == kind }
-                        .map { $0.value.trimmingCharacters(in: .whitespacesAndNewlines) }
-                        .filter { !$0.isEmpty }))
-                        .sorted()
-                        .map(JSONValue.string)
-                    object[kind.rawValue] = .array(entries)
-                }
-                values[action == .direct ? Key.directRules : Key.proxyRules] = .object(object)
-            }
+        try commit { storeRules(rules) }
+    }
+
+    /// Adds the first-install proxy exceptions as ordinary editable rules.
+    /// The marker is committed with the rules so deleting them later is an
+    /// intentional user choice and never causes the defaults to reappear.
+    public func rulesInstallingDefaultsIfNeeded() throws -> [RoutingRule] {
+        let current = rules()
+        guard !bool(Key.defaultProxyRulesSeeded) else { return current }
+
+        var next = current
+        let existingSuffixes = Set(current
+            .filter { $0.kind == .domainSuffix }
+            .map { $0.value.lowercased() })
+        for suffix in Self.defaultProxyDomainSuffixes where !existingSuffixes.contains(suffix) {
+            next.append(RoutingRule(action: .proxy, kind: .domainSuffix, value: suffix))
         }
+        try commit {
+            storeRules(next)
+            values[Key.defaultProxyRulesSeeded] = .bool(true)
+        }
+        return next
     }
 
     private func persist() throws {
@@ -152,6 +161,22 @@ public actor SettingsStore {
         } catch {
             values = previous
             throw error
+        }
+    }
+
+    private func storeRules(_ rules: [RoutingRule]) {
+        for action in RuleAction.allCases {
+            var object: [String: JSONValue] = [:]
+            for kind in RuleKind.allCases {
+                let entries = Array(Set(rules
+                    .filter { $0.action == action && $0.kind == kind }
+                    .map { $0.value.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }))
+                    .sorted()
+                    .map(JSONValue.string)
+                object[kind.rawValue] = .array(entries)
+            }
+            values[action == .direct ? Key.directRules : Key.proxyRules] = .object(object)
         }
     }
 
@@ -170,7 +195,7 @@ public actor SettingsStore {
             guard let number = value.numberValue, number.isFinite, number >= 0 else {
                 throw NekoPilotError.invalidSetting(key)
             }
-        case Key.allowLAN, Key.autoSelect, Key.showProtocol, Key.skipSystemProxy:
+        case Key.allowLAN, Key.autoSelect, Key.showProtocol, Key.skipSystemProxy, Key.defaultProxyRulesSeeded:
             guard value.boolValue != nil else { throw NekoPilotError.invalidSetting(key) }
         case Key.selectedNode:
             guard let string = value.stringValue, string.utf8.count <= 16 * 1024 else {

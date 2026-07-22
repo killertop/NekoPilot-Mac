@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+## 1.4.2 - 2026-07-22
+
+### 规则 / Rules
+
+- 首次运行或升级时，将 `googleapis.com` 与 `gstatic.com` 作为普通“代理 · 后缀”规则加入规则页，优先于中国 `.srs` 规则集生效；用户可以查看、编辑或删除，删除后不会再次自动出现。 / On first launch or upgrade, `googleapis.com` and `gstatic.com` are added to the Rules page as ordinary Proxy · Suffix rules ahead of the China `.srs` rule sets. Users can inspect, edit, or delete them, and deleted defaults are never recreated.
+
 ## 1.4.1 - 2026-07-22
 
 ### 稳定性与性能 / Reliability and Performance
