@@ -35,7 +35,6 @@ struct NodeManagementView: View {
                 .padding(.horizontal, AppVisual.pageHorizontalPadding)
                 .padding(.top, AppVisual.pageTopPadding)
                 .padding(.bottom, AppVisual.pageBottomPadding)
-                .frame(maxWidth: AppVisual.pageMaximumWidth)
                 .frame(maxWidth: .infinity)
                 .appOverlayScrollers()
             }

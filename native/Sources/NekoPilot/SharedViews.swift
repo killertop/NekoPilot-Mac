@@ -6,7 +6,6 @@ import SwiftUI
 /// `windowBackgroundColor` and materials are darker and blurrier than the
 /// compact grouped surface used by NekoPilot.
 enum AppVisual {
-    static let pageMaximumWidth: CGFloat = 448
     static let pageHorizontalPadding: CGFloat = 20
     static let pageTopPadding: CGFloat = 20
     static let pageBottomPadding: CGFloat = 20

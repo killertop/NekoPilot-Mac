@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+## 1.4.4 - 2026-07-22
+
+### 界面 / Interface
+
+- 首页、节点、规则和设置页面移除固定的 `448pt` 内容宽度上限。点击 macOS 窗口绿色缩放按钮后，页面卡片会在保留统一左右边距的同时随主窗口扩展，并继续受紧凑窗口最大宽度约束。 / Removed the fixed `448pt` content-width cap from Home, Nodes, Rules, and Settings. Cards now expand with the main window after using the macOS green zoom button while retaining consistent side padding and the compact window's maximum width.
+
 ## 1.4.3 - 2026-07-22
 
 ### 稳定性与性能 / Reliability and Performance

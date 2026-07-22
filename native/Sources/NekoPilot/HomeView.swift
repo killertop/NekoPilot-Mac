@@ -21,7 +21,6 @@ struct HomeView: View {
                 }
                 .padding(.horizontal, AppVisual.pageHorizontalPadding)
                 .padding(.bottom, AppVisual.pageBottomPadding)
-                .frame(maxWidth: AppVisual.pageMaximumWidth)
                 .frame(maxWidth: .infinity)
                 .appOverlayScrollers()
             }
