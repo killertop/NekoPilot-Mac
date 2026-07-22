@@ -36,6 +36,9 @@ final class StatusItemController: NSObject {
     }
 
     private func configureMenu() {
+        // AppKit otherwise re-enables actionable menu items automatically,
+        // overriding the connection-state gate applied in update(status:).
+        menu.autoenablesItems = false
         let show = NSMenuItem(title: L10n.showWindow, action: #selector(showWindow), keyEquivalent: "")
         show.target = self
         menu.addItem(show)
@@ -80,6 +83,11 @@ final class StatusItemController: NSObject {
         statusItem.button?.image = statusImage(dotColor: dotColor)
         statusItem.button?.contentTintColor = nil
         statusItem.button?.toolTip = "NekoPilot · \(status.localizedTitle)"
+        if !status.isRunning {
+            copyFeedbackTask?.cancel()
+            copyFeedbackTask = nil
+            copyItem.title = L10n.copyProxyEnvironment
+        }
         copyItem.isEnabled = status.isRunning
         copyItem.toolTip = status.isRunning
             ? L10n.text("已连接，可复制当前代理环境变量", "Connected. Copy the active proxy environment variables.")

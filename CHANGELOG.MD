@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+## 1.3.5 - 2026-07-22
+
+### 菜单栏 / Menu Bar
+
+- 修复 AppKit 自动重新启用“复制代理环境变量”的问题；仅在代理已连接时可点击，未连接、连接中、断开中和失败状态均保持置灰。 / Prevented AppKit from automatically re-enabling Copy Proxy Environment; it is now available only while the proxy is running and remains disabled in all other states.
+
 ## 1.3.4 - 2026-07-22
 
 ### 界面 / Interface
