@@ -104,7 +104,9 @@ public actor GitHubReleaseChecker {
         guard (1 ... 3).contains(fields.count), fields.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }) else {
             return nil
         }
-        return fields.map { Int($0)! } + Array(repeating: 0, count: 3 - fields.count)
+        let components = fields.compactMap { Int($0) }
+        guard components.count == fields.count else { return nil }
+        return components + Array(repeating: 0, count: 3 - fields.count)
     }
 
     private static func isCanonicalAPIURL(_ url: URL?) -> Bool {

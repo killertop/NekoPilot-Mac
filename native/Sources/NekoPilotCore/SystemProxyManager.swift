@@ -28,14 +28,16 @@ public actor SystemProxyManager {
     public func apply(port: Int, bypassDomains: [String] = []) async throws -> UUID {
         try await withTransaction {
             if let existing = try self.readMarker() {
-                if existing.pid == getpid(), existing.port == port,
-                   let session = UUID(uuidString: existing.sessionID) {
-                    self.activeSession = session
-                    return session
-                }
                 guard !self.markerBelongsToLiveOtherProcess(existing) else {
-                    throw NekoPilotError.processFailed("另一个 NekoPilot 实例正在管理系统代理")
+                    throw NekoPilotError.processFailed(CoreL10n.text(
+                        "另一个 NekoPilot 实例正在管理系统代理",
+                        "Another NekoPilot instance is managing the system proxy"
+                    ))
                 }
+                // A marker owned by this process can remain after a partial
+                // restore failure. Never treat it as proof that every service
+                // still points at the live proxy; finish the old transaction
+                // before applying a fresh, internally consistent snapshot.
                 try await self.restoreLocked(existing)
             }
 
@@ -130,7 +132,10 @@ public actor SystemProxyManager {
             }
         }.compactMap { $0 }
         guard failures.isEmpty else {
-            throw NekoPilotError.processFailed("系统代理恢复失败：\(failures.joined(separator: "; "))")
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "系统代理恢复失败：\(failures.joined(separator: "; "))",
+                "System proxy restoration failed: \(failures.joined(separator: "; "))"
+            ))
         }
         if FileManager.default.fileExists(atPath: markerURL.path) {
             try FileManager.default.removeItem(at: markerURL)
@@ -222,8 +227,12 @@ public actor SystemProxyManager {
     private func checked(_ arguments: [String]) async throws -> CommandResult {
         let result = try await CommandRunner.run(executable: executable, arguments: arguments, timeout: 15)
         guard result.status == 0 else {
-            let message = result.errorOutput.isEmpty ? result.output : result.errorOutput
-            throw NekoPilotError.processFailed(message.trimmingCharacters(in: .whitespacesAndNewlines))
+            let detail = (result.errorOutput.isEmpty ? result.output : result.errorOutput)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "系统代理命令失败：\(detail)",
+                "The system proxy command failed: \(detail)"
+            ))
         }
         return result
     }

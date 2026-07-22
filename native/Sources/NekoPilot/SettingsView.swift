@@ -155,7 +155,9 @@ struct SettingsView: View {
         AppCard {
             VStack(spacing: 0) {
                 Button {
-                    NSWorkspace.shared.open(URL(string: "https://github.com/killertop/NekoPilot-Mac")!)
+                    if let url = URL(string: "https://github.com/killertop/NekoPilot-Mac") {
+                        NSWorkspace.shared.open(url)
+                    }
                 } label: {
                     settingRow(
                         icon: "chevron.left.forwardslash.chevron.right",
@@ -329,6 +331,7 @@ private struct DirectDNSSheet: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
+                .accessibilityLabel(L10n.text("关闭", "Close"))
             }
             Text(L10n.text("用于直连域名解析的 DNS 服务器地址", "DNS server used to resolve direct connections"))
                 .font(AppTypography.secondary)
@@ -483,6 +486,9 @@ private struct UserAgentSheet: View {
         }
         .frame(width: AppVisual.sheetWidth)
         .frame(maxHeight: AppVisual.sheetMaximumHeight)
+        .onAppear {
+            if selected == .custom { customFocused = true }
+        }
         .onChange(of: selected) { value in
             if value == .custom {
                 DispatchQueue.main.async { customFocused = true }

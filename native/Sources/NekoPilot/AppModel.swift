@@ -73,6 +73,7 @@ final class AppModel: ObservableObject {
     private var ruleUpdateTask: Task<Void, Never>?
     private var releaseCheckTask: Task<Void, Never>?
     private var selectionGeneration = 0
+    private var dataRefreshGeneration = 0
     private var urlTestGeneration = 0
     private var urlTestBaselineHistory: [String: DelayRecord]?
     private var pendingURLTestProgress: [String: DelayRecord] = [:]
@@ -138,6 +139,9 @@ final class AppModel: ObservableObject {
             for await next in stream {
                 guard !Task.isCancelled else { return }
                 status = next
+                if case let .failed(message) = next, errorMessage == nil {
+                    errorMessage = message
+                }
                 await automaticSelection.updateConnectionState(isRunning: next.isRunning)
                 if next.isRunning {
                     scheduleRuleSetRefresh()
@@ -188,16 +192,22 @@ final class AppModel: ObservableObject {
 
     func refreshData() async {
         guard storageAvailable, !isShuttingDown else { return }
+        dataRefreshGeneration += 1
+        let generation = dataRefreshGeneration
         do {
             let previousTags = Set(nodes.map(\.runtimeTag))
             async let loadedNodes = repository.nodes()
             async let loadedSources = repository.subscriptions()
-            nodes = try await loadedNodes
-            subscriptions = try await loadedSources
+            let refreshedNodes = try await loadedNodes
+            let refreshedSources = try await loadedSources
+            guard generation == dataRefreshGeneration, !isShuttingDown else { return }
+            nodes = refreshedNodes
+            subscriptions = refreshedSources
             rebuildNodeCounts()
             let availableTags = Set(nodes.map(\.runtimeTag))
             if previousTags != availableTags { lastAutomaticSelectionUpdate = nil }
             var refreshedHistory = try await repository.pruneDelayHistory(retaining: availableTags)
+            guard generation == dataRefreshGeneration, !isShuttingDown else { return }
             // A source refresh can finish while an explicit URL Test is still
             // streaming progress. Keep newer in-memory measurements visible;
             // the completed test will persist them atomically afterwards.
@@ -208,11 +218,17 @@ final class AppModel: ObservableObject {
             delayHistory = refreshedHistory
             if selectedNode == nil || !nodes.contains(where: { $0.runtimeTag == selectedNode }) {
                 selectedNode = nodes.first?.runtimeTag
-                if let selectedNode {
-                    try await settings.set(.string(selectedNode), for: SettingsStore.Key.selectedNode)
-                } else {
-                    try await settings.set(nil, for: SettingsStore.Key.selectedNode)
+                // A user selection may interleave while the actor-backed
+                // preferences write is suspended. Keep writing the current
+                // value until the state observed before the write still
+                // matches afterwards, so an older fallback can never replace
+                // a newer manual choice on disk.
+                while !isShuttingDown {
+                    let value = selectedNode
+                    try await settings.set(value.map(JSONValue.string), for: SettingsStore.Key.selectedNode)
+                    if value == selectedNode { break }
                 }
+                guard generation == dataRefreshGeneration, !isShuttingDown else { return }
             }
             rebuildSortedNodes()
             await automaticSelection.nodesDidChange()
@@ -825,15 +841,27 @@ final class AppModel: ObservableObject {
     }
 
     private func persistRules(previous: [RoutingRule]) async -> Bool {
+        let wasRunning = status.isRunning
         do {
             try await settings.replaceRules(rules)
             _ = try await compiler.compile(selectedNode: selectedNode)
-            if status.isRunning { try await reloadRunningEngine(selectedNode: selectedNode) }
+            if wasRunning { try await reloadRunningEngine(selectedNode: selectedNode) }
             return true
         } catch {
             rules = previous
             try? await settings.replaceRules(previous)
             _ = try? await compiler.compile(selectedNode: selectedNode)
+            if wasRunning {
+                do {
+                    if status.isRunning {
+                        try await reloadRunningEngine(selectedNode: selectedNode)
+                    } else {
+                        try await engine.start(selectedNode: selectedNode)
+                    }
+                } catch {
+                    AppLogger.shared.error("failed to restore previous routing rules: \(error.localizedDescription)")
+                }
+            }
             show(error)
             return false
         }
@@ -858,7 +886,19 @@ final class AppModel: ObservableObject {
     }
 
     private func reloadRunningEngine(selectedNode: String?) async throws {
-        try await engine.reload(selectedNode: selectedNode)
+        do {
+            try await engine.reload(selectedNode: selectedNode)
+        } catch {
+            guard status.isRunning else { throw error }
+            // A reload request can succeed in sing-box while the short status
+            // confirmation is lost, leaving UI and runtime state ambiguous.
+            // A bounded full restart gives every source/rule mutation one
+            // deterministic final state instead of silently running an older
+            // or only partially observed configuration.
+            AppLogger.shared.warning("live reload failed; restarting sing-box: \(error.localizedDescription)")
+            await engine.stop()
+            try await engine.start(selectedNode: selectedNode)
+        }
     }
 
     private func scheduleRuleSetRefresh() {

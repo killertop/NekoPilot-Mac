@@ -11,7 +11,8 @@ public struct NativeSelector: Sendable, Equatable {
 ///
 /// This intentionally has no command-line control shim, no Unix socket
 /// protocol, and no Clash compatibility endpoint. The API endpoint is created
-/// per core process and authenticated with its in-memory random secret.
+/// per core process and authenticated with a short-lived random secret stored
+/// only in the owner-readable runtime configuration for that process.
 public actor NativeControlClient {
     private static let startedService = "/daemon.StartedService"
     // The control plane is loopback-only, so one app-lifetime event-loop group
@@ -68,7 +69,10 @@ public actor NativeControlClient {
         }
         // sing-box intentionally omits a selector with fewer than two items.
         guard knownNodes.count == 1, let node = knownNodes.first else {
-            throw NekoPilotError.processFailed("无法读取当前节点")
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "无法读取当前节点",
+                "Could not read the selected node"
+            ))
         }
         return NativeSelector(current: node, nodes: [node])
     }
@@ -158,12 +162,18 @@ public actor NativeControlClient {
             call.cancel()
             return message
         }
-        throw NekoPilotError.processFailed("sing-box API 未返回 \(method) 状态")
+        throw NekoPilotError.processFailed(CoreL10n.text(
+            "sing-box API 未返回 \(method) 状态",
+            "The sing-box API returned no \(method) status"
+        ))
     }
 
     private func activeConnection() throws -> ClientConnection {
         guard let connection else {
-            throw NekoPilotError.processFailed("sing-box API 尚未连接")
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "sing-box API 尚未连接",
+                "The sing-box API is not connected"
+            ))
         }
         return connection
     }

@@ -1,18 +1,28 @@
 # Changelog
 
-本文件记录 NekoPilot for Mac 的用户可见变化。开发中的变更先记录在当前版本的 Unreleased 区域，发布时再整理为正式版本。
+本文件记录 NekoPilot for Mac 的用户可见变化。开发中的变更先记录在当前版本的 Unreleased 区域，发布时再整理为正式版本。 / This file records user-visible NekoPilot for Mac changes. Work in progress stays under Unreleased until it is prepared as a formal version.
 
 ## Unreleased
 
-- 应用运行架构已统一为 SwiftUI/AppKit 原生壳与上游 Go sing-box 核心。
-- 移除旧的 Rust、Tauri、React/WebView 和其他平台代码及构建依赖。
-- 将应用图标、菜单栏图标和视觉基线迁入原生工程，并增加架构防回退检查。
-- 测速切换页面后继续在后台完成；手动停止会保留并持久化已完成结果。
-- 节点来源删除增加节点数量确认，规则删除增加限时撤销。
-- 统一放大弹窗、恢复系统滚动提示，并限制紧凑窗口的最大尺寸。
-- 相对时间按分钟刷新，增强低对比度文字、导航、开关和表单焦点的辅助功能语义。
-- 菜单栏根据连接状态控制代理环境变量复制，并提供复制成功反馈。
-- 删除节点页“更新全部”批量操作，仅保留每个机场订阅的独立更新入口。
+## 1.3.2 - 2026-07-22
+
+### 稳定性与数据一致性 / Reliability and data consistency
+
+- 修复并发刷新、节点切换持久化、规则热重载失败回滚和系统代理残留时的状态错位。 / Fixed stale concurrent refreshes, node-selection persistence races, routing-rule reload rollback, and inconsistent system-proxy recovery.
+- 连接启动阶段现在可主动取消；核心异常退出和系统代理恢复失败会显示真实状态，不再长期停留在“正在连接”。 / Connecting can now be cancelled, and unexpected core exits or proxy-restore failures surface their real state instead of remaining stuck on Connecting.
+- 关闭控制窗口不再终止正在运行的代理；只有明确退出才清理核心、系统代理和菜单栏资源。 / Closing the control window now keeps the proxy alive; explicit Quit owns full core, system-proxy, and menu-bar cleanup.
+- 自定义直连/代理域名同时应用到 DNS 与流量路由，保持自定义直连、自定义代理、中国规则集的优先级一致。 / Custom direct/proxy domains now affect both DNS and traffic routing with consistent priority over the China rule sets.
+
+### 性能与安全 / Performance and security
+
+- 显式测速继续在后台并分批并发执行，结果逐步排序并持久化；规则列表避免重复排序计算。 / Explicit URL Test continues in the background with bounded parallel workers, progressive persisted results, and no repeated rule-list sorting.
+- 持久日志统一脱敏代理链接、订阅 Token、密码、授权头与 UUID，并增加回归测试。 / Persistent logs now redact proxy links, subscription tokens, passwords, authorization headers, and UUIDs, with regression coverage.
+- 移除未使用的 gVisor 构建标签，同时保留 DHCP、QUIC、uTLS 与 macOS 必需能力，缩小正式核心和安装包。 / Removed the unused gVisor build tag while retaining DHCP, QUIC, uTLS, and required macOS capabilities to reduce the release core and package size.
+
+### 界面与工程 / Interface and engineering
+
+- 测速停止、危险删除、弹窗尺寸、滚动提示、每分钟时间刷新、初始焦点、VoiceOver 与菜单栏反馈统一为原生交互。 / Speed-test stopping, destructive confirmations, sheet sizing, scroll indicators, minute refreshes, initial focus, VoiceOver, and menu-bar feedback now follow one native interaction model.
+- 核心错误补齐中英文文案，版本解析避免超大数字崩溃，公共 Swift 依赖经 GitHub Advisory Database 检查无已知匹配公告。 / Core errors are bilingual, version parsing no longer crashes on oversized numbers, and public Swift dependencies have no matching GitHub Advisory Database entries.
 
 ## 1.2.4 - 2026-07-21
 

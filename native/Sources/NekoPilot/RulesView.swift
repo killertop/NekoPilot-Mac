@@ -15,6 +15,7 @@ struct RulesView: View {
     @State private var undoDismissTask: Task<Void, Never>?
 
     var body: some View {
+        let displayedRules = visibleRules
         ScrollView {
             LazyVStack(spacing: 6) {
                 SectionTitle("\(L10n.text("自定义规则", "Custom Rules")) · \(model.rules.count)") {
@@ -38,7 +39,7 @@ struct RulesView: View {
 
                 AppCard {
                     LazyVStack(spacing: 0) {
-                        if visibleRules.isEmpty, !model.rules.isEmpty {
+                        if displayedRules.isEmpty, !model.rules.isEmpty {
                             Text(L10n.text("没有匹配的规则", "No matching rules"))
                                 .font(AppTypography.body)
                                 .foregroundStyle(.secondary)
@@ -46,11 +47,11 @@ struct RulesView: View {
                                 .padding(16)
                             AppDivider()
                         } else {
-                            ForEach(Array(visibleRules.enumerated()), id: \.element.id) { index, rule in
+                            ForEach(Array(displayedRules.enumerated()), id: \.element.id) { index, rule in
                                 ruleRow(rule)
-                                if index < visibleRules.count - 1 { AppDivider() }
+                                if index < displayedRules.count - 1 { AppDivider() }
                             }
-                            if !visibleRules.isEmpty { AppDivider() }
+                            if !displayedRules.isEmpty { AppDivider() }
                         }
 
                         Button { showingAdd = true } label: {
@@ -264,6 +265,7 @@ private struct AddRuleSheet: View {
                         TextEditor(text: $input)
                             .font(AppTypography.monoBody)
                             .focused($inputFocused)
+                            .accessibilityLabel(L10n.text("规则地址", "Rule values"))
                             .scrollContentBackground(.hidden)
                             .padding(5)
                     }

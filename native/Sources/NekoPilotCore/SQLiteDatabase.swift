@@ -16,7 +16,10 @@ final class SQLiteDatabase: @unchecked Sendable {
         guard sqlite3_open_v2(url.path, &connection, flags, nil) == SQLITE_OK else {
             let message = connection.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown sqlite error"
             if let connection { sqlite3_close(connection) }
-            throw NekoPilotError.processFailed("无法打开节点数据库：\(message)")
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "无法打开节点数据库：\(message)",
+                "Could not open the node database: \(message)"
+            ))
         }
         handle = connection
         try execute("PRAGMA foreign_keys = ON")
@@ -85,7 +88,9 @@ final class SQLiteDatabase: @unchecked Sendable {
         bindings: [Binding],
         body: (OpaquePointer) throws -> T
     ) throws -> T {
-        guard let handle else { throw NekoPilotError.processFailed("节点数据库已关闭") }
+        guard let handle else {
+            throw NekoPilotError.processFailed(CoreL10n.text("节点数据库已关闭", "The node database is closed"))
+        }
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK,
               let statement else {
@@ -125,8 +130,14 @@ final class SQLiteDatabase: @unchecked Sendable {
     }
 
     private func databaseError() -> Error {
-        guard let handle else { return NekoPilotError.processFailed("节点数据库已关闭") }
-        return NekoPilotError.processFailed(String(cString: sqlite3_errmsg(handle)))
+        guard let handle else {
+            return NekoPilotError.processFailed(CoreL10n.text("节点数据库已关闭", "The node database is closed"))
+        }
+        let detail = String(cString: sqlite3_errmsg(handle))
+        return NekoPilotError.processFailed(CoreL10n.text(
+            "节点数据库操作失败：\(detail)",
+            "The node database operation failed: \(detail)"
+        ))
     }
 
     enum Binding: Sendable {

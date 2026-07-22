@@ -55,7 +55,10 @@ public actor EngineSupervisor {
                 AppLogger.shared.warning("recovering orphan sing-box pid=\(marker.childProcess.pid)")
                 terminateProcessGroup(pid: marker.childProcess.pid)
                 guard await waitUntilDead(marker.childProcess, attempts: 25) else {
-                    throw NekoPilotError.processFailed("无法清理遗留的 sing-box 进程")
+                    throw NekoPilotError.processFailed(CoreL10n.text(
+                        "无法清理遗留的 sing-box 进程",
+                        "Could not terminate the orphaned sing-box process"
+                    ))
                 }
             }
             try removeOwnershipMarker(at: ownershipURL)
@@ -105,11 +108,14 @@ public actor EngineSupervisor {
 
             guard await waitUntilReady(endpoint: apiEndpoint, epoch: startEpoch) else {
                 try ensureCurrent(startEpoch)
-                throw NekoPilotError.processFailed("sing-box 启动超时")
+                throw NekoPilotError.processFailed(CoreL10n.text("sing-box 启动超时", "sing-box startup timed out"))
             }
             try ensureCurrent(startEpoch)
             guard child.isRunning else {
-                throw NekoPilotError.processFailed("sing-box 启动后意外退出")
+                throw NekoPilotError.processFailed(CoreL10n.text(
+                    "sing-box 启动后意外退出",
+                    "sing-box exited unexpectedly during startup"
+                ))
             }
 
             let skipSystemProxy = await settings.bool(SettingsStore.Key.skipSystemProxy)
@@ -155,14 +161,25 @@ public actor EngineSupervisor {
         // may leave sing-box alive while that work is in progress.
         let didStop = await stopProcessOnly(expectedSession: stoppingSession)
         await nativeAPI.disconnect()
+        var proxyCleanupError: Error?
         do {
             try await systemProxy.removeOwnedProxy(expectedSession: stoppingProxySession)
             if proxySessionID == stoppingProxySession { proxySessionID = nil }
         } catch {
+            proxyCleanupError = error
             AppLogger.shared.error("system proxy cleanup failed during stop: \(error.localizedDescription)")
         }
         guard epoch == stopEpoch else { return }
-        setStatus(didStop ? .stopped : .failed("sing-box 无法停止"))
+        if !didStop {
+            setStatus(.failed(CoreL10n.text("sing-box 无法停止", "sing-box could not be stopped")))
+        } else if let proxyCleanupError {
+            setStatus(.failed(CoreL10n.text(
+                "系统代理恢复失败：\(proxyCleanupError.localizedDescription)",
+                "System proxy restoration failed: \(proxyCleanupError.localizedDescription)"
+            )))
+        } else {
+            setStatus(.stopped)
+        }
     }
 
     public func restartAfterLifecycleEvent(selectedNode: String?) async {
@@ -190,7 +207,10 @@ public actor EngineSupervisor {
 
         do {
             guard let apiEndpoint else {
-                throw NekoPilotError.processFailed("sing-box API 会话已丢失")
+                throw NekoPilotError.processFailed(CoreL10n.text(
+                    "sing-box API 会话已丢失",
+                    "The sing-box API session was lost"
+                ))
             }
             let config = try await compiler.compile(
                 selectedNode: selectedNode,
@@ -203,13 +223,19 @@ public actor EngineSupervisor {
             // This preserves native rule-set refresh without reintroducing a
             // private Go control host.
             guard kill(child.processIdentifier, SIGHUP) == 0 else {
-                throw NekoPilotError.processFailed("无法请求 sing-box 重新加载")
+                throw NekoPilotError.processFailed(CoreL10n.text(
+                    "无法请求 sing-box 重新加载",
+                    "Could not request a sing-box reload"
+                ))
             }
 
             for _ in 0 ..< 50 {
                 try ensureCurrent(reloadEpoch)
                 guard sessionID == runningSession, child.isRunning else {
-                    throw NekoPilotError.processFailed("sing-box 在重新加载时退出")
+                    throw NekoPilotError.processFailed(CoreL10n.text(
+                        "sing-box 在重新加载时退出",
+                        "sing-box exited while reloading"
+                    ))
                 }
                 if let selector = try? await nativeAPI.selector(knownNodes: Array(expectedNodes)),
                    Set(selector.nodes) == expectedNodes {
@@ -220,7 +246,10 @@ public actor EngineSupervisor {
                 }
                 try await Task.sleep(nanoseconds: 100_000_000)
             }
-            throw NekoPilotError.processFailed("规则重新加载未生效")
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "规则重新加载未生效",
+                "The routing rule reload did not take effect"
+            ))
         } catch {
             throw error
         }
@@ -260,7 +289,10 @@ public actor EngineSupervisor {
         } catch {
             AppLogger.shared.error("system proxy cleanup failed during shutdown: \(error.localizedDescription)")
         }
-        setStatus(didStop ? .stopped : .failed("sing-box 无法停止"))
+        setStatus(didStop ? .stopped : .failed(CoreL10n.text(
+            "sing-box 无法停止",
+            "sing-box could not be stopped"
+        )))
     }
 
     private func spawn(
@@ -377,7 +409,10 @@ public actor EngineSupervisor {
         if status == .stopping || isShuttingDown {
             setStatus(.stopped)
         } else {
-            let message = "sing-box 已退出（状态码 \(statusCode)）"
+            let message = CoreL10n.text(
+                "sing-box 已退出（状态码 \(statusCode)）",
+                "sing-box exited with status \(statusCode)"
+            )
             AppLogger.shared.error(message)
             setStatus(.failed(message))
         }
@@ -407,7 +442,10 @@ public actor EngineSupervisor {
             pid: child.processIdentifier,
             expectedExecutablePath: executable.path
         ) else {
-            throw NekoPilotError.processFailed("无法确认 sing-box 进程身份")
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "无法确认 sing-box 进程身份",
+                "Could not verify the sing-box process identity"
+            ))
         }
         let marker = EngineOwnershipMarker(
             sessionID: session.uuidString,

@@ -16,10 +16,10 @@ SOURCE_DATE_EPOCH="1779788717"
 # Clash is deliberately absent: NekoPilot uses only the native sing-box 1.14
 # API service, bound to loopback with an ephemeral secret by Swift.
 # Keep the transport/runtime features used by NekoPilot's supported proxy
-# protocols plus DHCP DNS discovery for network-aware local resolution. Server,
-# certificate, mesh-network, and enterprise-management services have no product
-# entry point and are intentionally left out.
-BUILD_TAGS="with_gvisor,with_quic,with_dhcp,with_utls,with_naive_outbound,badlinkname,tfogo_checklinkname0"
+# protocols plus DHCP DNS discovery for network-aware local resolution. The
+# app has no TUN inbound, so the large gVisor userspace IP stack is deliberately
+# excluded along with server, mesh, and enterprise-management features.
+BUILD_TAGS="with_quic,with_dhcp,with_utls,with_naive_outbound,badlinkname,tfogo_checklinkname0"
 # The fixed Go build ID feeds `-B gobuildid`. macOS requires LC_UUID for dyld
 # to execute the sidecar; the linker may still emit a different UUID for two
 # otherwise identical builds, so the reproducibility check canonicalizes only

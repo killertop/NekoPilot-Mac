@@ -8,9 +8,13 @@ public enum SingBoxValidator {
             timeout: 20
         )
         guard result.status == 0 else {
+            let detail = (result.errorOutput.isEmpty ? result.output : result.errorOutput)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             throw NekoPilotError.processFailed(
-                (result.errorOutput.isEmpty ? result.output : result.errorOutput)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                CoreL10n.text(
+                    "sing-box 配置校验失败：\(detail)",
+                    "sing-box configuration validation failed: \(detail)"
+                )
             )
         }
     }

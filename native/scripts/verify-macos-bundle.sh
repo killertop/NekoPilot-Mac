@@ -5,7 +5,7 @@ APP_BUNDLE=${1:-}
 EXPECTED_VERSION=${2:-}
 EXPECTED_SING_BOX_VERSION="1.14.0-alpha.48"
 EXPECTED_GO_VERSION="1.26.5"
-EXPECTED_TAGS="with_gvisor,with_quic,with_dhcp,with_utls,with_naive_outbound,badlinkname,tfogo_checklinkname0"
+EXPECTED_TAGS="with_quic,with_dhcp,with_utls,with_naive_outbound,badlinkname,tfogo_checklinkname0"
 EXPECTED_MENU_ICON_SHA256="4c632710a7644b1704fc7995fae95e1dee53c854984eb74e52c43c9ec7718213"
 
 fail() {

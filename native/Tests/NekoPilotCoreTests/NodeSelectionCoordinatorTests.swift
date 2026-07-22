@@ -73,6 +73,25 @@ struct NodeSelectionCoordinatorTests {
         #expect(await probe.applied == ["A", "C"])
         #expect(await probe.persisted == ["C"])
     }
+
+    @Test("A persistence failure restores the last committed runtime node")
+    func persistenceFailureRollsBackRuntime() async {
+        let probe = SelectionProbe()
+        let coordinator = NodeSelectionCoordinator(
+            applySelection: { node in try await probe.apply(node) },
+            persistSelection: { _ in throw NekoPilotError.processFailed("disk unavailable") },
+            loadPersistedSelection: { "Previous" }
+        )
+
+        do {
+            try await coordinator.submit(node: "Next")
+            Issue.record("Expected persistence to fail")
+        } catch {
+            #expect(error as? NekoPilotError == .processFailed("disk unavailable"))
+        }
+        #expect(await probe.applied == ["Next", "Previous"])
+        #expect(await probe.persisted.isEmpty)
+    }
 }
 
 private actor SelectionProbe {

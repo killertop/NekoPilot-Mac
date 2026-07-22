@@ -44,7 +44,8 @@ public actor SubscriptionImporter {
            ProxyLinkParser.supportedSchemes.contains(scheme) {
             let config = try Self.validateConfiguration(ProxyLinkParser.parse(input))
             let nodeName = name?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let fallback = config["outbounds"]?.arrayValue?.first?["tag"]?.stringValue ?? "本地节点"
+            let fallback = config["outbounds"]?.arrayValue?.first?["tag"]?.stringValue
+                ?? CoreL10n.text("本地节点", "Local Node")
             let resolvedName = nodeName.flatMap { $0.isEmpty ? nil : $0 } ?? fallback
             try await candidateValidator(config)
             return try await repository.upsert(
@@ -60,7 +61,8 @@ public actor SubscriptionImporter {
         }
         let config = try await fetchConfiguration(from: url)
         let displayName = name?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedName = displayName.flatMap { $0.isEmpty ? nil : $0 } ?? (url.host ?? "机场订阅")
+        let resolvedName = displayName.flatMap { $0.isEmpty ? nil : $0 }
+            ?? (url.host ?? CoreL10n.text("机场订阅", "Subscription"))
         try await candidateValidator(config)
         return try await repository.upsert(
             url: url.absoluteString,
@@ -171,7 +173,7 @@ public actor SubscriptionImporter {
                       let config = try? ProxyLinkParser.parse(link),
                       let outbound = config["outbounds"]?.arrayValue?.first?.objectValue else { continue }
                 var unique = outbound
-                let baseTag = outbound["tag"]?.stringValue ?? "节点"
+                let baseTag = outbound["tag"]?.stringValue ?? CoreL10n.text("节点", "Node")
                 var tag = baseTag
                 var index = 2
                 while !seenTags.insert(tag).inserted {
@@ -469,29 +471,35 @@ enum HTTPWireResponseParser {
     ) throws -> PinnedHTTPResponse? {
         guard let delimiter = data.range(of: headerDelimiter) else {
             if data.count > maximumHeaderBytes { throw NekoPilotError.responseTooLarge }
-            if streamComplete { throw NekoPilotError.processFailed("订阅响应无效") }
+            if streamComplete {
+                throw NekoPilotError.processFailed(CoreL10n.text("订阅响应无效", "Invalid subscription response"))
+            }
             return nil
         }
         guard delimiter.lowerBound <= maximumHeaderBytes,
               let rawHead = String(data: data[..<delimiter.lowerBound], encoding: .isoLatin1) else {
-            throw NekoPilotError.processFailed("订阅响应头无效")
+            throw NekoPilotError.processFailed(CoreL10n.text("订阅响应头无效", "Invalid subscription response headers"))
         }
         let lines = rawHead.components(separatedBy: "\r\n")
-        guard let statusLine = lines.first else { throw NekoPilotError.processFailed("订阅响应无效") }
+        guard let statusLine = lines.first else {
+            throw NekoPilotError.processFailed(CoreL10n.text("订阅响应无效", "Invalid subscription response"))
+        }
         let statusParts = statusLine.split(separator: " ", maxSplits: 2)
         guard statusParts.count >= 2,
               statusParts[0].hasPrefix("HTTP/1."),
               let statusCode = Int(statusParts[1]) else {
-            throw NekoPilotError.processFailed("订阅响应状态无效")
+            throw NekoPilotError.processFailed(CoreL10n.text("订阅响应状态无效", "Invalid subscription response status"))
         }
         var headers: [String: String] = [:]
         for line in lines.dropFirst() {
             guard let separator = line.firstIndex(of: ":") else {
-                throw NekoPilotError.processFailed("订阅响应头无效")
+                throw NekoPilotError.processFailed(CoreL10n.text("订阅响应头无效", "Invalid subscription response headers"))
             }
             let name = line[..<separator].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let value = line[line.index(after: separator)...].trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !name.isEmpty else { throw NekoPilotError.processFailed("订阅响应头无效") }
+            guard !name.isEmpty else {
+                throw NekoPilotError.processFailed(CoreL10n.text("订阅响应头无效", "Invalid subscription response headers"))
+            }
             headers[name] = headers[name].map { "\($0),\(value)" } ?? value
         }
 
@@ -503,7 +511,10 @@ enum HTTPWireResponseParser {
         }
         if let encoding = headers["content-encoding"]?.lowercased(),
            !encoding.isEmpty, encoding != "identity" {
-            throw NekoPilotError.processFailed("订阅响应压缩格式不受支持")
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "订阅响应压缩格式不受支持",
+                "The subscription response compression is not supported"
+            ))
         }
 
         let bodyStart = delimiter.upperBound
@@ -513,11 +524,17 @@ enum HTTPWireResponseParser {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty } ?? []
         guard transferCodings.isEmpty || transferCodings == ["chunked"] else {
-            throw NekoPilotError.processFailed("订阅响应传输格式不受支持")
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "订阅响应传输格式不受支持",
+                "The subscription response transfer encoding is not supported"
+            ))
         }
         let chunked = transferCodings == ["chunked"]
         if chunked, headers["content-length"] != nil {
-            throw NekoPilotError.processFailed("订阅响应长度冲突")
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "订阅响应长度冲突",
+                "The subscription response contains conflicting lengths"
+            ))
         }
         if chunked {
             // We explicitly request `Connection: close`. Waiting for the end of
@@ -535,11 +552,19 @@ enum HTTPWireResponseParser {
         let availableBody = data[bodyStart...]
         if let rawLength = headers["content-length"] {
             guard let length = Int(rawLength), length >= 0 else {
-                throw NekoPilotError.processFailed("订阅响应长度无效")
+                throw NekoPilotError.processFailed(CoreL10n.text(
+                    "订阅响应长度无效",
+                    "The subscription response length is invalid"
+                ))
             }
             guard length <= maximumBodyBytes else { throw NekoPilotError.responseTooLarge }
             guard availableBody.count >= length else {
-                if streamComplete { throw NekoPilotError.processFailed("订阅响应提前结束") }
+                if streamComplete {
+                    throw NekoPilotError.processFailed(CoreL10n.text(
+                        "订阅响应提前结束",
+                        "The subscription response ended prematurely"
+                    ))
+                }
                 return nil
             }
             return PinnedHTTPResponse(
@@ -564,14 +589,22 @@ enum HTTPWireResponseParser {
         var decoded = Data()
         while true {
             guard let lineRange = encoded.range(of: lineDelimiter, in: cursor ..< encoded.endIndex) else {
-                if streamComplete { throw NekoPilotError.processFailed("订阅分块响应无效") }
+                if streamComplete {
+                    throw NekoPilotError.processFailed(CoreL10n.text(
+                        "订阅分块响应无效",
+                        "The chunked subscription response is invalid"
+                    ))
+                }
                 return nil
             }
             guard let sizeLine = String(data: encoded[cursor ..< lineRange.lowerBound], encoding: .ascii),
                   let rawSize = sizeLine.split(separator: ";", maxSplits: 1).first,
                   let size = Int(rawSize.trimmingCharacters(in: .whitespaces), radix: 16),
                   size >= 0 else {
-                throw NekoPilotError.processFailed("订阅分块响应无效")
+                throw NekoPilotError.processFailed(CoreL10n.text(
+                    "订阅分块响应无效",
+                    "The chunked subscription response is invalid"
+                ))
             }
             cursor = lineRange.upperBound
             if size == 0 {
@@ -580,7 +613,12 @@ enum HTTPWireResponseParser {
                     return PinnedHTTPResponse(statusCode: statusCode, headers: headers, body: decoded)
                 }
                 guard encoded.range(of: headerDelimiter, in: cursor ..< encoded.endIndex) != nil else {
-                    if streamComplete { throw NekoPilotError.processFailed("订阅分块响应无效") }
+                    if streamComplete {
+                        throw NekoPilotError.processFailed(CoreL10n.text(
+                            "订阅分块响应无效",
+                            "The chunked subscription response is invalid"
+                        ))
+                    }
                     return nil
                 }
                 return PinnedHTTPResponse(statusCode: statusCode, headers: headers, body: decoded)
@@ -589,12 +627,20 @@ enum HTTPWireResponseParser {
                 throw NekoPilotError.responseTooLarge
             }
             guard encoded.distance(from: cursor, to: encoded.endIndex) >= size + 2 else {
-                if streamComplete { throw NekoPilotError.processFailed("订阅分块响应提前结束") }
+                if streamComplete {
+                    throw NekoPilotError.processFailed(CoreL10n.text(
+                        "订阅分块响应提前结束",
+                        "The chunked subscription response ended prematurely"
+                    ))
+                }
                 return nil
             }
             let end = encoded.index(cursor, offsetBy: size)
             guard encoded[end ..< encoded.index(end, offsetBy: 2)] == lineDelimiter else {
-                throw NekoPilotError.processFailed("订阅分块响应无效")
+                throw NekoPilotError.processFailed(CoreL10n.text(
+                    "订阅分块响应无效",
+                    "The chunked subscription response is invalid"
+                ))
             }
             decoded.append(encoded[cursor ..< end])
             cursor = encoded.index(end, offsetBy: 2)
@@ -634,20 +680,29 @@ enum PinnedHTTPClient {
                       let location = response.headers["location"],
                       let redirected = URL(string: location, relativeTo: current)?.absoluteURL,
                       ["http", "https"].contains(redirected.scheme?.lowercased() ?? "") else {
-                    throw NekoPilotError.processFailed("订阅重定向无效")
+                    throw NekoPilotError.processFailed(CoreL10n.text(
+                        "订阅重定向无效",
+                        "The subscription redirect is invalid"
+                    ))
                 }
                 if current.scheme?.lowercased() == "https", redirected.scheme?.lowercased() != "https" {
-                    throw NekoPilotError.processFailed("订阅重定向不允许降低安全级别")
+                    throw NekoPilotError.processFailed(CoreL10n.text(
+                        "订阅重定向不允许降低安全级别",
+                        "The subscription redirect cannot downgrade HTTPS"
+                    ))
                 }
                 current = redirected
                 continue
             }
             guard (200 ... 299).contains(response.statusCode) else {
-                throw NekoPilotError.processFailed("订阅下载失败")
+                throw NekoPilotError.processFailed(CoreL10n.text("订阅下载失败", "The subscription download failed"))
             }
             return response.body
         }
-        throw NekoPilotError.processFailed("订阅重定向次数过多")
+        throw NekoPilotError.processFailed(CoreL10n.text(
+            "订阅重定向次数过多",
+            "The subscription redirected too many times"
+        ))
     }
 
     private static func requestWithTimeout(
@@ -667,10 +722,10 @@ enum PinnedHTTPClient {
             }
             group.addTask {
                 try await Task.sleep(nanoseconds: timeoutNanoseconds)
-                throw NekoPilotError.processFailed("订阅下载超时")
+                throw NekoPilotError.processFailed(CoreL10n.text("订阅下载超时", "The subscription download timed out"))
             }
             guard let first = try await group.next() else {
-                throw NekoPilotError.processFailed("订阅下载失败")
+                throw NekoPilotError.processFailed(CoreL10n.text("订阅下载失败", "The subscription download failed"))
             }
             group.cancelAll()
             return first
@@ -713,7 +768,12 @@ enum PinnedHTTPClient {
                 ) {
                     return response
                 }
-                if received.complete { throw NekoPilotError.processFailed("订阅响应提前结束") }
+                if received.complete {
+                    throw NekoPilotError.processFailed(CoreL10n.text(
+                        "订阅响应提前结束",
+                        "The subscription response ended prematurely"
+                    ))
+                }
             }
         }, onCancel: {
             connection.cancel()

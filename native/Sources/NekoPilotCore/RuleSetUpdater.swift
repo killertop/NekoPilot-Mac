@@ -47,7 +47,10 @@ public actor RuleSetUpdater {
             for source in sources {
                 let data = try await download(source)
                 guard Self.isValidRuleSet(data) else {
-                    throw NekoPilotError.processFailed("下载的中国规则库无效")
+                    throw NekoPilotError.processFailed(CoreL10n.text(
+                        "下载的中国规则库无效",
+                        "A downloaded China rule set is invalid"
+                    ))
                 }
                 let candidate = paths.ruleSets.appendingPathComponent(".\(source.fileName).\(UUID().uuidString).candidate")
                 defer { try? FileManager.default.removeItem(at: candidate) }
@@ -104,7 +107,12 @@ public actor RuleSetUpdater {
         try fileManager.createDirectory(at: candidate, withIntermediateDirectories: true)
         do {
             for (name, data) in files {
-                guard isValidRuleSet(data) else { throw NekoPilotError.processFailed("规则库候选无效") }
+                guard isValidRuleSet(data) else {
+                    throw NekoPilotError.processFailed(CoreL10n.text(
+                        "规则库候选无效",
+                        "The candidate rule set is invalid"
+                    ))
+                }
                 try AtomicFile.write(data, to: candidate.appendingPathComponent("\(name).srs"))
             }
             try fileManager.moveItem(at: candidate, to: destination)
@@ -124,7 +132,10 @@ public actor RuleSetUpdater {
         guard rename(pending.path, active.path) == 0 else {
             let message = String(cString: strerror(errno))
             try? fileManager.removeItem(at: pending)
-            throw NekoPilotError.processFailed("无法切换规则库版本：\(message)")
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "无法切换规则库版本：\(message)",
+                "Could not activate the rule-set version: \(message)"
+            ))
         }
     }
 
@@ -171,7 +182,10 @@ public actor RuleSetUpdater {
         let rawURL = try Self.url("https://raw.githubusercontent.com/\(source.repository)/\(commit)/\(source.fileName)")
         let data = try await fetch(rawURL, maximumBytes: Self.maximumBytes)
         guard Self.gitBlobSHA1(data) == expectedBlob else {
-            throw NekoPilotError.processFailed("规则库内容校验失败")
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "规则库内容校验失败",
+                "Rule-set content verification failed"
+            ))
         }
         return data
     }
@@ -183,7 +197,10 @@ public actor RuleSetUpdater {
               let reference = object["object"] as? [String: Any],
               let commit = reference["sha"] as? String,
               Self.isGitSHA(commit) else {
-            throw NekoPilotError.processFailed("规则库版本信息无效")
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "规则库版本信息无效",
+                "The rule-set version metadata is invalid"
+            ))
         }
         return commit
     }
@@ -194,7 +211,10 @@ public actor RuleSetUpdater {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let blob = object["sha"] as? String,
               Self.isGitSHA(blob) else {
-            throw NekoPilotError.processFailed("规则库内容摘要无效")
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "规则库内容摘要无效",
+                "The rule-set content digest is invalid"
+            ))
         }
         return blob
     }
@@ -210,7 +230,7 @@ public actor RuleSetUpdater {
         let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
         defer { session.invalidateAndCancel() }
         var request = URLRequest(url: url)
-        request.setValue("NekoPilot/1.2 rule-set updater", forHTTPHeaderField: "User-Agent")
+        request.setValue("NekoPilot rule-set updater", forHTTPHeaderField: "User-Agent")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse,
@@ -218,7 +238,10 @@ public actor RuleSetUpdater {
               let finalURL = http.url,
               finalURL.scheme?.lowercased() == "https",
               allowedHosts.contains(finalURL.host?.lowercased() ?? "") else {
-            throw NekoPilotError.processFailed("规则库下载失败")
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "规则库下载失败",
+                "The rule-set download failed"
+            ))
         }
         if let length = http.value(forHTTPHeaderField: "Content-Length").flatMap(Int.init),
            length > maximumBytes {
@@ -261,7 +284,10 @@ public actor RuleSetUpdater {
 
     private static func url(_ value: String) throws -> URL {
         guard let url = URL(string: value), url.scheme == "https" else {
-            throw NekoPilotError.processFailed("规则库地址无效")
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "规则库地址无效",
+                "The rule-set URL is invalid"
+            ))
         }
         return url
     }

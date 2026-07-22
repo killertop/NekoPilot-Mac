@@ -47,7 +47,10 @@ public actor ConfigurationCompiler {
             apiEndpoints: [apiEndpoint]
         )
         guard let configuration = configurations.first else {
-            throw NekoPilotError.processFailed("测速配置未生成")
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "测速配置未生成",
+                "The speed-test configuration was not generated"
+            ))
         }
         return configuration
     }
@@ -62,7 +65,10 @@ public actor ConfigurationCompiler {
     ) async throws -> [URL] {
         guard selectedNodeGroups.count == apiEndpoints.count,
               let selectedNode = selectedNodeGroups.first?.first else {
-            throw NekoPilotError.processFailed("测速节点不能为空")
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "测速节点不能为空",
+                "At least one speed-test node is required"
+            ))
         }
         // Do not call compile here. An offline URL Test must not overwrite the
         // live runtime configuration with its short-lived API credentials or
@@ -148,12 +154,18 @@ public actor ConfigurationCompiler {
                       && outbounds[$0].objectValue?["type"]?.stringValue == "selector"
               }),
               var selector = outbounds[selectorIndex].objectValue else {
-            throw NekoPilotError.processFailed("测速配置缺少节点选择器")
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "测速配置缺少节点选择器",
+                "The speed-test configuration has no node selector"
+            ))
         }
         let existing = selector["outbounds"]?.arrayValue?.compactMap(\.stringValue) ?? []
         let included = existing.filter { requested.contains($0) }
         guard Set(included) == requested else {
-            throw NekoPilotError.processFailed("测速节点未写入运行配置")
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "测速节点未写入运行配置",
+                "A speed-test node is missing from the runtime configuration"
+            ))
         }
         selector["outbounds"] = .array(included.map(JSONValue.string))
         outbounds[selectorIndex] = .object(selector)
@@ -162,7 +174,10 @@ public actor ConfigurationCompiler {
 
     private static func loadTemplate() throws -> [String: JSONValue] {
         guard let url = resourceURL(name: "base-config", extension: "json") else {
-            throw NekoPilotError.processFailed("缺少内置配置模板")
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "缺少内置配置模板",
+                "The bundled configuration template is missing"
+            ))
         }
         return try JSONValue.decodeObject(from: Data(contentsOf: url))
     }
@@ -285,6 +300,30 @@ public actor ConfigurationCompiler {
         }
         route["rules"] = .array(routeRules)
         config["route"] = .object(route)
+
+        // A user-facing Direct/Proxy rule describes the complete path, not
+        // only the post-resolution TCP/UDP route. Mirror domain rules into the
+        // DNS router so a custom direct domain does not leak through the proxy
+        // resolver, and a custom proxy domain still overrides the China direct
+        // rule set. IP CIDR rules have no request-domain equivalent here.
+        guard var dns = config["dns"]?.objectValue,
+              let existingDNSRules = dns["rules"]?.arrayValue else { return }
+        var customDNSRules: [JSONValue] = []
+        for action in RuleAction.allCases {
+            for kind in [RuleKind.domain, .domainSuffix] {
+                let values = rules
+                    .filter { $0.action == action && $0.kind == kind }
+                    .map(\.value)
+                guard !values.isEmpty else { continue }
+                customDNSRules.append(.object([
+                    kind.rawValue: .array(Array(Set(values)).sorted().map(JSONValue.string)),
+                    "action": .string("route"),
+                    "server": .string(action == .direct ? "system" : "dns_proxy"),
+                ]))
+            }
+        }
+        dns["rules"] = .array(customDNSRules + existingDNSRules)
+        config["dns"] = .object(dns)
     }
 
     private func merge(
@@ -330,7 +369,10 @@ public actor ConfigurationCompiler {
                   $0.objectValue?["type"]?.stringValue == "selector" &&
                       $0.objectValue?["tag"]?.stringValue == "ExitGateway"
               }), var selector = outbounds[selectorIndex].objectValue else {
-            throw NekoPilotError.processFailed("内置配置缺少节点选择器")
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "内置配置缺少节点选择器",
+                "The bundled configuration has no node selector"
+            ))
         }
         selector["outbounds"] = .array(nodes.compactMap { $0["tag"]?.stringValue }.map(JSONValue.string))
         // Keep established sessions on their existing path when automatic
@@ -346,11 +388,17 @@ public actor ConfigurationCompiler {
         for name in ["geoip-cn", "geosite-cn"] {
             guard let source = Self.resourceURL(name: name, extension: "srs", subdirectory: "rules")
                 ?? Self.resourceURL(name: name, extension: "srs") else {
-                throw NekoPilotError.processFailed("缺少内置中国规则库")
+                throw NekoPilotError.processFailed(CoreL10n.text(
+                    "缺少内置中国规则库",
+                    "A bundled China rule set is missing"
+                ))
             }
             let bundledData = try Data(contentsOf: source)
             guard RuleSetUpdater.isValidRuleSet(bundledData) else {
-                throw NekoPilotError.processFailed("内置中国规则库无效")
+                throw NekoPilotError.processFailed(CoreL10n.text(
+                    "内置中国规则库无效",
+                    "A bundled China rule set is invalid"
+                ))
             }
             bundledFiles.append((name, bundledData))
         }

@@ -62,8 +62,8 @@ final class StatusItemController: NSObject {
             toggleItem.isEnabled = true
         case .starting:
             dotColor = .systemOrange
-            toggleItem.title = L10n.starting
-            toggleItem.isEnabled = false
+            toggleItem.title = L10n.text("取消连接", "Cancel Connection")
+            toggleItem.isEnabled = true
         case .stopping:
             dotColor = .systemOrange
             toggleItem.title = L10n.stopping

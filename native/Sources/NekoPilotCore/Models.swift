@@ -1,5 +1,15 @@
 import Foundation
 
+enum CoreL10n {
+    private static var usesChinese: Bool {
+        Locale.preferredLanguages.first?.lowercased().hasPrefix("zh") == true
+    }
+
+    static func text(_ chinese: String, _ english: String) -> String {
+        usesChinese ? chinese : english
+    }
+}
+
 public enum EngineStatus: Equatable, Sendable {
     case stopped
     case starting
@@ -129,19 +139,22 @@ public enum NekoPilotError: LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
-        case .noNodes: "没有可用节点"
-        case .nodeNotFound: "节点不存在"
-        case .invalidLink: "链接格式无效"
-        case .unsupportedProtocol: "暂不支持该协议"
-        case .invalidSubscription: "订阅中没有可用节点"
-        case .remoteAddressBlocked: "订阅地址指向本机或内网，已拒绝访问"
-        case .responseTooLarge: "订阅内容过大"
-        case .invalidRule: "规则格式无效"
-        case .duplicateRule: "规则已存在"
-        case .singBoxMissing: "缺少 sing-box 代理核心"
-        case let .portOccupied(port): "端口 \(port) 已被占用"
+        case .noNodes: CoreL10n.text("没有可用节点", "No nodes are available")
+        case .nodeNotFound: CoreL10n.text("节点不存在", "The node no longer exists")
+        case .invalidLink: CoreL10n.text("链接格式无效", "The link format is invalid")
+        case .unsupportedProtocol: CoreL10n.text("暂不支持该协议", "This protocol is not supported")
+        case .invalidSubscription: CoreL10n.text("订阅中没有可用节点", "The subscription contains no usable nodes")
+        case .remoteAddressBlocked: CoreL10n.text(
+            "订阅地址指向本机或内网，已拒绝访问",
+            "The subscription points to this Mac or a private network and was blocked"
+        )
+        case .responseTooLarge: CoreL10n.text("订阅内容过大", "The subscription response is too large")
+        case .invalidRule: CoreL10n.text("规则格式无效", "The rule format is invalid")
+        case .duplicateRule: CoreL10n.text("规则已存在", "The rule already exists")
+        case .singBoxMissing: CoreL10n.text("缺少 sing-box 代理核心", "The sing-box core is missing")
+        case let .portOccupied(port): CoreL10n.text("端口 \(port) 已被占用", "Port \(port) is already in use")
         case let .processFailed(message): message
-        case let .invalidSetting(key): "设置项无效：\(key)"
+        case let .invalidSetting(key): CoreL10n.text("设置项无效：\(key)", "Invalid setting: \(key)")
         }
     }
 }

@@ -354,6 +354,7 @@ private struct AddNodeSheet: View {
                 Button { isPresented = false } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
+                    .accessibilityLabel(L10n.text("关闭", "Close"))
             }
             Text(L10n.text("粘贴机场订阅 URL，或 VLESS、Trojan、AnyTLS、Hysteria2、TUIC、VMess、Shadowsocks 单节点链接。", "Paste a subscription URL or a supported single-node link."))
                 .font(AppTypography.body)
@@ -363,6 +364,7 @@ private struct AddNodeSheet: View {
             TextEditor(text: $input)
                 .font(AppTypography.monoBody)
                 .focused($inputFocused)
+                .accessibilityLabel(L10n.text("订阅 URL 或节点链接", "Subscription URL or node link"))
                 .frame(minHeight: 120)
                 .padding(8)
                 .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
@@ -416,6 +418,7 @@ private struct EditSourceSheet: View {
                 Button { isPresented = false } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
+                    .accessibilityLabel(L10n.text("关闭", "Close"))
             }
             Text(
                 subscription.sourceType == .subscription
@@ -429,6 +432,11 @@ private struct EditSourceSheet: View {
                 .focused($nameFocused)
             TextEditor(text: $input)
                 .font(AppTypography.monoBody)
+                .accessibilityLabel(
+                    subscription.sourceType == .subscription
+                        ? L10n.text("订阅 URL", "Subscription URL")
+                        : L10n.text("节点链接", "Node link")
+                )
                 .frame(minHeight: 110)
                 .padding(8)
                 .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
@@ -486,6 +494,7 @@ private struct SourceDetailSheet: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
+                    .accessibilityLabel(L10n.text("关闭", "Close"))
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 18)

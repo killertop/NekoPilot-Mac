@@ -14,6 +14,7 @@ public actor NodeSelectionCoordinator {
 
     private let applySelection: @Sendable (String) async throws -> Void
     private let persistSelection: @Sendable (String) async throws -> Void
+    private let loadPersistedSelection: @Sendable () async -> String?
     private var pending: Request?
     private var processing = false
     private var activeOrigin: Origin?
@@ -24,14 +25,20 @@ public actor NodeSelectionCoordinator {
         persistSelection = { node in
             try await settings.set(.string(node), for: SettingsStore.Key.selectedNode)
         }
+        loadPersistedSelection = {
+            let value = await settings.string(SettingsStore.Key.selectedNode)
+            return value.isEmpty ? nil : value
+        }
     }
 
     init(
         applySelection: @escaping @Sendable (String) async throws -> Void,
-        persistSelection: @escaping @Sendable (String) async throws -> Void
+        persistSelection: @escaping @Sendable (String) async throws -> Void,
+        loadPersistedSelection: @escaping @Sendable () async -> String? = { nil }
     ) {
         self.applySelection = applySelection
         self.persistSelection = persistSelection
+        self.loadPersistedSelection = loadPersistedSelection
     }
 
     public func submit(node: String) async throws {
@@ -76,6 +83,7 @@ public actor NodeSelectionCoordinator {
         while let request = pending {
             pending = nil
             activeOrigin = request.origin
+            let previousNode = await loadPersistedSelection()
             do {
                 try await applySelection(request.node)
                 // A newer tap may arrive while the engine call is suspended.
@@ -93,6 +101,12 @@ public actor NodeSelectionCoordinator {
                 for continuation in continuations.values { continuation.yield(request.node) }
                 request.continuation.resume(returning: true)
             } catch {
+                // The API can apply a selector change before its response or
+                // the subsequent preference write fails. Restore the last
+                // committed node so runtime, UI, and disk never diverge.
+                if let previousNode, previousNode != request.node {
+                    try? await applySelection(previousNode)
+                }
                 request.continuation.resume(throwing: error)
             }
         }

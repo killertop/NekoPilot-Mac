@@ -66,7 +66,7 @@ enum CommandRunner {
             try? output.fileHandleForReading.close()
             try? errors.fileHandleForReading.close()
             terminate(process)
-            throw NekoPilotError.processFailed("命令执行超时")
+            throw NekoPilotError.processFailed(CoreL10n.text("命令执行超时", "The command timed out"))
         }
         let outData = await outputTask.value
         let errorData = await errorTask.value

@@ -40,7 +40,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.initialize()
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool { true }
+    // Closing the compact control window must not tear down an active proxy.
+    // The menu-bar item remains the owner and provides both Show Window and
+    // Quit; only an explicit Quit performs engine and system-proxy cleanup.
+    func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool { false }
 
     func applicationShouldHandleReopen(
         _: NSApplication,

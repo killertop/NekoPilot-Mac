@@ -72,6 +72,10 @@ checks.append(("repository and config compiler", {
     let paths = AppPaths(applicationSupport: directory, logs: directory.appendingPathComponent("logs"))
     let settings = try SettingsStore(fileURL: paths.settings)
     try await settings.set(.number(17_777), for: SettingsStore.Key.proxyPort)
+    try await settings.replaceRules([
+        RoutingRule(action: .direct, kind: .domain, value: "direct.example"),
+        RoutingRule(action: .proxy, kind: .domainSuffix, value: ".proxy.example"),
+    ])
     let repository = try SubscriptionRepository(databaseURL: paths.database)
     let history = ["@np:source:node": DelayRecord(delay: 88, measuredAt: Date(timeIntervalSince1970: 1_000))]
     try await repository.replaceDelayHistory(history)
@@ -103,6 +107,17 @@ checks.append(("repository and config compiler", {
     try expect(
         selector?["outbounds"]?.arrayValue?.first?.stringValue == nodes[0].runtimeTag,
         "compiler did not select stable runtime node"
+    )
+    let dnsRules = config["dns"]?.objectValue?["rules"]?.arrayValue?.compactMap(\.objectValue) ?? []
+    try expect(
+        dnsRules.first?["domain"]?.arrayValue?.contains(.string("direct.example")) == true &&
+            dnsRules.first?["server"]?.stringValue == "system",
+        "custom direct domain did not receive highest-priority direct DNS routing"
+    )
+    try expect(
+        dnsRules.dropFirst().first?["domain_suffix"]?.arrayValue?.contains(.string(".proxy.example")) == true &&
+            dnsRules.dropFirst().first?["server"]?.stringValue == "dns_proxy",
+        "custom proxy domain did not override the China direct DNS rule set"
     )
     try await SingBoxValidator.validate(configuration: output)
     let runtimeConfigurationBeforeOfflineTest = try Data(contentsOf: output)

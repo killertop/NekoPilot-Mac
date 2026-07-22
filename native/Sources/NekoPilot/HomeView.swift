@@ -80,8 +80,12 @@ struct HomeView: View {
                 .contentShape(RoundedRectangle(cornerRadius: 44, style: .continuous))
             }
             .buttonStyle(.plain)
-            .disabled(model.status.isBusy)
-            .accessibilityLabel(model.status.isRunning ? L10n.disconnect : L10n.connect)
+            // Starting is cancellable; otherwise a slow network or system
+            // proxy command leaves the user staring at an inert power button.
+            // A stop already in progress remains disabled to avoid overlapping
+            // stop transactions.
+            .disabled(model.status == .stopping)
+            .accessibilityLabel(powerButtonAccessibilityLabel)
         }
         .frame(height: 160)
     }
@@ -108,6 +112,15 @@ struct HomeView: View {
         if model.status.isRunning { return .white }
         if model.status.isBusy { return .accentColor }
         return AppVisual.tertiaryLabel(colorScheme)
+    }
+
+    private var powerButtonAccessibilityLabel: String {
+        switch model.status {
+        case .running: return L10n.disconnect
+        case .starting: return L10n.text("取消连接", "Cancel Connection")
+        case .stopping: return L10n.stopping
+        case .stopped, .failed: return L10n.connect
+        }
     }
 
     private var connectionStatus: some View {

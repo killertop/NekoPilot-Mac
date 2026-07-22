@@ -11,6 +11,10 @@ struct GitHubReleaseCheckerTests {
         #expect(!GitHubReleaseChecker.isVersionNewer("v1.0.7", than: "1.0.7"))
         #expect(!GitHubReleaseChecker.isVersionNewer("v1.0.6", than: "1.0.7"))
         #expect(!GitHubReleaseChecker.isVersionNewer("not-a-version", than: "1.0.7"))
+        #expect(!GitHubReleaseChecker.isVersionNewer(
+            "999999999999999999999999999999999999.1.1",
+            than: "1.0.7"
+        ))
     }
 
     @Test("Only the canonical project release page is accepted")
