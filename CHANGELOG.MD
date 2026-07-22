@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+## 1.4.0 - 2026-07-22
+
+### 界面 / Interface
+
+- 全部页面和长内容弹窗统一使用 macOS 原生小号覆盖式滚动条：滚动时自然出现、空闲时淡出，不再保留粗重轨道或挤占内容宽度，同时保留系统滚动惯性、对比度和辅助功能。 / All pages and long-content sheets now use the native macOS small overlay scroller, which appears while scrolling, fades when idle, and no longer reserves a heavy gutter, while retaining system momentum, contrast, and accessibility behavior.
+
 ## 1.3.9 - 2026-07-22
 
 ### 菜单栏 / Menu Bar

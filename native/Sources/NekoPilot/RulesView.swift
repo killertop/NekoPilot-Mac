@@ -114,6 +114,7 @@ struct RulesView: View {
             .padding(.bottom, AppVisual.pageBottomPadding)
             .frame(maxWidth: AppVisual.pageMaximumWidth)
             .frame(maxWidth: .infinity)
+            .appOverlayScrollers()
         }
         .sheet(isPresented: $showingHelp) {
             RuleHelpSheet(isPresented: $showingHelp)
@@ -503,6 +504,7 @@ private struct RuleHelpSheet: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.bottom, 18)
+                    .appOverlayScrollers()
                 }
                 .scrollIndicators(.automatic)
 

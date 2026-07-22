@@ -23,6 +23,7 @@ struct HomeView: View {
                 .padding(.bottom, AppVisual.pageBottomPadding)
                 .frame(maxWidth: AppVisual.pageMaximumWidth)
                 .frame(maxWidth: .infinity)
+                .appOverlayScrollers()
             }
         }
         .alert(

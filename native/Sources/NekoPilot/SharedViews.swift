@@ -78,6 +78,49 @@ enum AppTypography {
     static let monoCaption = Font.system(size: 11, weight: .regular, design: .monospaced)
 }
 
+/// Keeps scroll feedback available without reserving the wide gutter used by
+/// macOS' legacy "always show scroll bars" preference. The native overlay
+/// scroller retains system animation, input, contrast, and accessibility.
+private final class AppOverlayScrollerConfigurationView: NSView {
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        configureEnclosingScrollView()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        configureEnclosingScrollView()
+    }
+
+    func configureEnclosingScrollView() {
+        DispatchQueue.main.async { [weak self] in
+            guard let scrollView = self?.enclosingScrollView else { return }
+            scrollView.scrollerStyle = .overlay
+            scrollView.autohidesScrollers = true
+            scrollView.verticalScroller?.controlSize = .small
+            scrollView.horizontalScroller?.controlSize = .small
+        }
+    }
+}
+
+private struct AppOverlayScrollerConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> AppOverlayScrollerConfigurationView {
+        AppOverlayScrollerConfigurationView(frame: .zero)
+    }
+
+    func updateNSView(_ nsView: AppOverlayScrollerConfigurationView, context: Context) {
+        nsView.configureEnclosingScrollView()
+    }
+}
+
+extension View {
+    /// Attach to content inside a ScrollView to replace its persistent gutter
+    /// with a slim, transient overlay scroller.
+    func appOverlayScrollers() -> some View {
+        background(AppOverlayScrollerConfigurator().frame(width: 0, height: 0))
+    }
+}
+
 struct AppCard<Content: View>: View {
     @Environment(\.colorScheme) private var colorScheme
     @ViewBuilder let content: Content

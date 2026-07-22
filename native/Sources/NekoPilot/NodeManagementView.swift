@@ -37,6 +37,7 @@ struct NodeManagementView: View {
                 .padding(.bottom, AppVisual.pageBottomPadding)
                 .frame(maxWidth: AppVisual.pageMaximumWidth)
                 .frame(maxWidth: .infinity)
+                .appOverlayScrollers()
             }
         }
         .sheet(isPresented: $showingAdd) {
@@ -305,6 +306,7 @@ private struct RefreshErrorSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .appOverlayScrollers()
             }
             .scrollIndicators(.automatic)
             .frame(maxHeight: 180)
@@ -588,6 +590,7 @@ private struct SourceDetailSheet: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.bottom, 18)
+                    .appOverlayScrollers()
                 }
                 .scrollIndicators(.automatic)
             }

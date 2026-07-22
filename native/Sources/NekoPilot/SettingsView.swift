@@ -30,6 +30,7 @@ struct SettingsView: View {
             .padding(.bottom, AppVisual.pageBottomPadding)
             .frame(maxWidth: AppVisual.pageMaximumWidth)
             .frame(maxWidth: .infinity)
+            .appOverlayScrollers()
         }
         .sheet(isPresented: $showingPort) {
             ProxyPortSheet(model: model, isPresented: $showingPort)
@@ -460,6 +461,7 @@ private struct UserAgentSheet: View {
                     }
                     .padding(.horizontal, AppVisual.sheetPadding)
                     .padding(.bottom, 12)
+                    .appOverlayScrollers()
                 }
                 .scrollIndicators(.automatic)
                 .frame(maxHeight: 360)
