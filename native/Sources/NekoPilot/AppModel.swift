@@ -1335,6 +1335,16 @@ final class AppModel: ObservableObject {
             rules = previous
             return false
         } catch {
+            if AppRuntimeRecoveryPolicy.keepsPersistedRules(
+                after: error,
+                didPersist: didPersistRules
+            ) {
+                // The candidate is already the durable runtime configuration.
+                // Preserve the matching rules/settings snapshot; a later reload
+                // or restart can reconcile an ambiguous live-core confirmation.
+                show(error)
+                return true
+            }
             rules = previous
             try? await settings.replaceRules(previous)
             if wasRunning {

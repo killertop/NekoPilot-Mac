@@ -38,6 +38,25 @@ struct UserActionTaskOwnerTests {
         ))
     }
 
+    @Test("Committed reload ambiguity never rolls back durable rules")
+    func testCommittedReloadAmbiguityNeverRollsBackDurableRules() {
+        let committed = EngineFailure(kind: .reloadCommitted, message: "confirmation lost")
+        let preflight = EngineFailure(kind: .reload, message: "candidate unhealthy")
+
+        #expect(AppRuntimeRecoveryPolicy.keepsPersistedRules(
+            after: committed,
+            didPersist: true
+        ))
+        #expect(!AppRuntimeRecoveryPolicy.keepsPersistedRules(
+            after: committed,
+            didPersist: false
+        ))
+        #expect(!AppRuntimeRecoveryPolicy.keepsPersistedRules(
+            after: preflight,
+            didPersist: true
+        ))
+    }
+
     @MainActor
     @Test("Cancelled import post-processing stops before reload and selection")
     func testCancelledImportPostprocessingStopsSideEffects() async {

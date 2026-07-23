@@ -61,14 +61,25 @@ public actor ConfigurationCompiler {
     func removeAbandonedRuntimeCandidates() {
         let directory = paths.runtimeConfig.deletingLastPathComponent()
         let currentProcessPrefix = ".runtime.json.\(RuntimeCandidateOwnership.currentProcessToken)."
+        let currentPreflightPrefix = ".reload-preflight-\(RuntimeCandidateOwnership.currentProcessToken)."
         guard let contents = try? FileManager.default.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: nil
         ) else { return }
-        for url in contents where url.lastPathComponent.hasPrefix(".runtime.json.")
-            && url.lastPathComponent.hasSuffix(".candidate")
-            && !url.lastPathComponent.hasPrefix(currentProcessPrefix) {
-            try? FileManager.default.removeItem(at: url)
+        for url in contents {
+            let name = url.lastPathComponent
+            let isAbandonedCandidate = name.hasPrefix(".runtime.json.")
+                && name.hasSuffix(".candidate")
+                && !name.hasPrefix(currentProcessPrefix)
+            let isPreflightCache = name.hasPrefix(".reload-preflight-")
+                && (name.hasSuffix(".db")
+                    || name.hasSuffix(".db-shm")
+                    || name.hasSuffix(".db-wal"))
+            let isAbandonedPreflightCache = isPreflightCache
+                && !name.hasPrefix(currentPreflightPrefix)
+            if isAbandonedCandidate || isAbandonedPreflightCache {
+                try? FileManager.default.removeItem(at: url)
+            }
         }
     }
 
@@ -146,34 +157,70 @@ public actor ConfigurationCompiler {
     /// a reload can prove that the exact candidate starts and reaches its
     /// selected gateway before asking the live core to adopt it.
     func makeReloadPreflightCandidate(
-        selectedNode: String?,
+        from sourceConfigurationURL: URL,
         apiEndpoint: LocalAPIEndpoint,
         healthProbePort: Int,
         proxyPort: Int
-    ) async throws -> RuntimeConfigurationCandidate {
-        let current = await settings.runtimeConfiguration()
-        let isolatedSettings = RuntimeConfigurationSettings(
-            proxyPort: proxyPort,
-            allowLAN: false,
-            skipSystemProxy: true,
-            directDNS: current.directDNS,
-            rules: current.rules
+    ) throws -> RuntimeConfigurationCandidate {
+        var config = try JSONValue.decodeObject(
+            from: Data(contentsOf: sourceConfigurationURL)
         )
-        var config = try await makeConfiguration(
-            selectedNode: selectedNode,
-            apiEndpoint: apiEndpoint,
-            healthProbePort: healthProbePort,
-            runtimeSettings: isolatedSettings
-        )
+        guard var services = config["services"]?.arrayValue,
+              let apiIndex = services.firstIndex(where: {
+                  $0.objectValue?["type"]?.stringValue == "api"
+                      && $0.objectValue?["tag"]?.stringValue == "nekopilot-local-api"
+              }),
+              var api = services[apiIndex].objectValue else {
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "候选配置缺少本地控制服务",
+                "The candidate configuration has no local control service"
+            ))
+        }
+        api["listen"] = .string(apiEndpoint.host)
+        api["listen_port"] = .number(Double(apiEndpoint.port))
+        api["secret"] = .string(apiEndpoint.secret)
+        services[apiIndex] = .object(api)
+        config["services"] = .array(services)
+
+        guard var inbounds = config["inbounds"]?.arrayValue,
+              let mixedIndex = inbounds.firstIndex(where: {
+                  $0.objectValue?["type"]?.stringValue == "mixed"
+                      && $0.objectValue?["tag"]?.stringValue == "mixed"
+              }),
+              var mixed = inbounds[mixedIndex].objectValue,
+              let healthIndex = inbounds.firstIndex(where: {
+                  $0.objectValue?["type"]?.stringValue == "mixed"
+                      && $0.objectValue?["tag"]?.stringValue == ProxyHealthEndpoint.inboundTag
+              }),
+              var health = inbounds[healthIndex].objectValue else {
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "候选配置缺少隔离预检监听器",
+                "The candidate configuration is missing a reload-preflight listener"
+            ))
+        }
+        mixed["listen"] = .string("127.0.0.1")
+        mixed["listen_port"] = .number(Double(proxyPort))
+        inbounds[mixedIndex] = .object(mixed)
+        health["listen"] = .string("127.0.0.1")
+        health["listen_port"] = .number(Double(healthProbePort))
+        inbounds[healthIndex] = .object(health)
+        config["inbounds"] = .array(inbounds)
+
         let runtimeDirectory = paths.runtimeConfig.deletingLastPathComponent()
         let token = UUID().uuidString.lowercased()
-        let cacheURL = runtimeDirectory.appendingPathComponent(".reload-preflight-\(token).db")
-        if var experimental = config["experimental"]?.objectValue,
-           var cache = experimental["cache_file"]?.objectValue {
-            cache["path"] = .string(cacheURL.path)
-            experimental["cache_file"] = .object(cache)
-            config["experimental"] = .object(experimental)
+        let cacheURL = runtimeDirectory.appendingPathComponent(
+            ".reload-preflight-\(RuntimeCandidateOwnership.currentProcessToken).\(token).db"
+        )
+        guard var experimental = config["experimental"]?.objectValue,
+              var cache = experimental["cache_file"]?.objectValue else {
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "候选配置缺少缓存设置",
+                "The candidate configuration has no cache settings"
+            ))
         }
+        cache["path"] = .string(cacheURL.path)
+        experimental["cache_file"] = .object(cache)
+        config["experimental"] = .object(experimental)
         let candidateURL = runtimeDirectory.appendingPathComponent(
             ".runtime.json.\(RuntimeCandidateOwnership.currentProcessToken).\(token).candidate"
         )
@@ -702,10 +749,11 @@ public actor ConfigurationCompiler {
             ))
         }
         selector["outbounds"] = .array(nodes.compactMap { $0["tag"]?.stringValue }.map(JSONValue.string))
-        // Existing long-lived streams stay on their established outbound.
-        // New connections use the selected node, while reloads and manual
-        // selection no longer tear down WebSocket/SSE sessions.
-        selector["interrupt_exist_connections"] = .bool(false)
+        // A manual or automatic failover must move existing streams away from
+        // the old outbound as well as route new connections through the newly
+        // selected node. Otherwise a dead node can leave long-lived sessions
+        // stuck until each application times out on its own.
+        selector["interrupt_exist_connections"] = .bool(true)
         outbounds[selectorIndex] = .object(selector)
         outbounds.append(contentsOf: nodes.map(JSONValue.object))
         config["outbounds"] = .array(outbounds)

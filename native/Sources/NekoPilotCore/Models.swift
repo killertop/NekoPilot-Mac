@@ -22,6 +22,7 @@ public struct EngineFailure: Error, LocalizedError, Equatable, Sendable {
         case startup
         case control
         case reload
+        case reloadCommitted
         case unexpectedExit
         case shutdown
         case systemProxy

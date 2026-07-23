@@ -55,7 +55,7 @@ struct EngineFailureTests {
         )
 
         #expect(beforeCommit as? NekoPilotError == controlError)
-        #expect((afterCommit as? EngineFailure)?.kind == .reload)
+        #expect((afterCommit as? EngineFailure)?.kind == .reloadCommitted)
         #expect((afterCommit as? EngineFailure)?.message == "control unavailable")
     }
 }

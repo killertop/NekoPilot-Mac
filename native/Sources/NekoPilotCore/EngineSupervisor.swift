@@ -305,11 +305,13 @@ public actor EngineSupervisor {
             try await ReloadSafetyPipeline.prepare(
                 preflight: {
                     try await self.preflightReloadCandidate(
+                        sourceConfigurationURL: candidate.configurationURL,
                         selectedNode: selectedNode,
                         expectedNodes: expectedNodes,
                         epoch: currentEpoch,
                         configurationGeneration: configurationGeneration
                     )
+                    try Task.checkCancellation()
                     try self.ensureCurrent(currentEpoch)
                     try self.ensureConfigurationCurrent(configurationGeneration)
                 },
@@ -392,7 +394,7 @@ public actor EngineSupervisor {
         // error leaves the observed reload result ambiguous and must use the
         // typed recovery path.
         guard candidateWasCommitted else { return error }
-        return EngineFailure(kind: .reload, message: error.localizedDescription)
+        return EngineFailure(kind: .reloadCommitted, message: error.localizedDescription)
     }
 
     private func confirmReloadWhileHoldingGate(
@@ -444,6 +446,7 @@ public actor EngineSupervisor {
     }
 
     private func preflightReloadCandidate(
+        sourceConfigurationURL: URL,
         selectedNode: String?,
         expectedNodes: Set<String>,
         epoch expectedEpoch: UInt64,
@@ -456,11 +459,12 @@ public actor EngineSupervisor {
             excluding: [livePort, candidateAPI.port, candidateMixedPort]
         )
         let candidate = try await compiler.makeReloadPreflightCandidate(
-            selectedNode: selectedNode,
+            from: sourceConfigurationURL,
             apiEndpoint: candidateAPI,
             healthProbePort: candidateHealthPort,
             proxyPort: candidateMixedPort
         )
+        defer { candidate.discard() }
         var candidateProcess: Process?
         var candidateClient: NativeControlClient?
         do {
@@ -509,13 +513,17 @@ public actor EngineSupervisor {
             }
         } catch {
             if let candidateClient { await candidateClient.disconnect() }
-            if let candidateProcess { await stopPreflightProcess(candidateProcess) }
-            candidate.discard()
+            if let candidateProcess {
+                do {
+                    try await stopPreflightProcess(candidateProcess)
+                } catch {
+                    throw error
+                }
+            }
             throw error
         }
         if let candidateClient { await candidateClient.disconnect() }
-        if let candidateProcess { await stopPreflightProcess(candidateProcess) }
-        candidate.discard()
+        if let candidateProcess { try await stopPreflightProcess(candidateProcess) }
     }
 
     public func select(node: String) async throws {
@@ -721,16 +729,31 @@ public actor EngineSupervisor {
         return child
     }
 
-    private func stopPreflightProcess(_ child: Process) async {
-        terminateProcessGroup(pid: child.processIdentifier)
-        for _ in 0 ..< 20 where child.isRunning {
-            try? await Task.sleep(nanoseconds: 50_000_000)
-        }
-        if child.isRunning {
-            terminateProcessGroup(pid: child.processIdentifier, force: true)
+    private func stopPreflightProcess(_ child: Process) async throws {
+        // Cleanup must finish even if the user operation was cancelled after
+        // the health probe passed. An unstructured task starts uncancelled, so
+        // its bounded TERM/KILL waits cannot collapse into a busy loop.
+        let stopped = await Task.detached { () -> Bool in
+            terminateProcessGroup(pid: child.processIdentifier)
             for _ in 0 ..< 20 where child.isRunning {
                 try? await Task.sleep(nanoseconds: 50_000_000)
             }
+            if child.isRunning {
+                terminateProcessGroup(pid: child.processIdentifier, force: true)
+                for _ in 0 ..< 20 where child.isRunning {
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
+            }
+            return !child.isRunning
+        }.value
+        guard stopped else {
+            throw EngineFailure(
+                kind: .reload,
+                message: CoreL10n.text(
+                    "无法停止候选 sing-box 进程",
+                    "Could not stop the candidate sing-box process"
+                )
+            )
         }
     }
 

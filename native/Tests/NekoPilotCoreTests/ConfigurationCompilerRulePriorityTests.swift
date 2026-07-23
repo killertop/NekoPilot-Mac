@@ -126,7 +126,7 @@ struct ConfigurationCompilerRulePriorityTests {
         #expect(!FileManager.default.fileExists(atPath: second.configurationURL.path))
     }
 
-    @Test("Reload preflight uses isolated listeners and removes its cache family")
+    @Test("Reload preflight derives only from its source and isolates listeners and cache")
     func reloadPreflightCandidateIsIsolated() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("NekoPilot-Reload-Preflight-Test-\(UUID().uuidString)", isDirectory: true)
@@ -140,6 +140,10 @@ struct ConfigurationCompilerRulePriorityTests {
         let settings = try SettingsStore(fileURL: paths.settings)
         try await settings.set(.number(16_789), for: SettingsStore.Key.proxyPort)
         try await settings.set(.bool(true), for: SettingsStore.Key.allowLAN)
+        try await settings.set(.string("1.1.1.1"), for: SettingsStore.Key.directDNS)
+        try await settings.replaceRules([
+            RoutingRule(action: .direct, kind: .domain, value: "source-only.example"),
+        ])
         let repository = try SubscriptionRepository(databaseURL: paths.database)
         let identifier = try await repository.upsert(
             url: nil,
@@ -158,13 +162,28 @@ struct ConfigurationCompilerRulePriorityTests {
         let sentinel = Data("live-config-remains-owned-by-running-core".utf8)
         try AtomicFile.write(sentinel, to: paths.runtimeConfig)
         let compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
-        let candidate = try await compiler.makeReloadPreflightCandidate(
+        let source = try await compiler.makeRuntimeConfigurationCandidate(
             selectedNode: "@np:\(identifier):node",
+            apiEndpoint: LocalAPIEndpoint(port: 16_790, secret: "source-secret"),
+            healthProbePort: 16_791
+        )
+        defer { source.discard() }
+        let sourceConfig = try JSONValue.decodeObject(from: Data(contentsOf: source.configurationURL))
+
+        // Preference writes after the source candidate has been built must not
+        // leak into the preflight derived from that candidate.
+        try await settings.set(.string("8.8.8.8"), for: SettingsStore.Key.directDNS)
+        try await settings.replaceRules([
+            RoutingRule(action: .proxy, kind: .domain, value: "later-only.example"),
+        ])
+        let candidate = try await compiler.makeReloadPreflightCandidate(
+            from: source.configurationURL,
             apiEndpoint: LocalAPIEndpoint(port: 39_890, secret: "preflight-secret"),
             healthProbePort: 39_892,
             proxyPort: 39_891
         )
 
+        try await SingBoxValidator.validate(configuration: candidate.configurationURL)
         let config = try JSONValue.decodeObject(from: Data(contentsOf: candidate.configurationURL))
         #expect(try Data(contentsOf: paths.runtimeConfig) == sentinel)
         let inbounds = config["inbounds"]?.arrayValue?.compactMap(\.objectValue) ?? []
@@ -181,9 +200,56 @@ struct ConfigurationCompilerRulePriorityTests {
         #expect(cachePath != paths.cacheDatabase.path)
         #expect(cachePath.contains(".reload-preflight-"))
 
+        // Restore the four intentionally isolated endpoint groups. Everything
+        // else must be byte-model equivalent to the source candidate.
+        var normalized = config
+        var normalizedServices = try #require(normalized["services"]?.arrayValue)
+        let sourceServices = try #require(sourceConfig["services"]?.arrayValue)
+        let apiIndex = try #require(normalizedServices.firstIndex(where: {
+            $0.objectValue?["tag"]?.stringValue == "nekopilot-local-api"
+        }))
+        var normalizedAPI = try #require(normalizedServices[apiIndex].objectValue)
+        let sourceAPI = try #require(sourceServices[apiIndex].objectValue)
+        for field in ["listen", "listen_port", "secret"] {
+            normalizedAPI[field] = sourceAPI[field]
+        }
+        normalizedServices[apiIndex] = .object(normalizedAPI)
+        normalized["services"] = .array(normalizedServices)
+
+        var normalizedInbounds = try #require(normalized["inbounds"]?.arrayValue)
+        let sourceInbounds = try #require(sourceConfig["inbounds"]?.arrayValue)
+        for tag in ["mixed", ProxyHealthEndpoint.inboundTag] {
+            let index = try #require(normalizedInbounds.firstIndex(where: {
+                $0.objectValue?["tag"]?.stringValue == tag
+            }))
+            let sourceIndex = try #require(sourceInbounds.firstIndex(where: {
+                $0.objectValue?["tag"]?.stringValue == tag
+            }))
+            var normalizedInbound = try #require(normalizedInbounds[index].objectValue)
+            let sourceInbound = try #require(sourceInbounds[sourceIndex].objectValue)
+            for field in ["listen", "listen_port"] {
+                normalizedInbound[field] = sourceInbound[field]
+            }
+            normalizedInbounds[index] = .object(normalizedInbound)
+        }
+        normalized["inbounds"] = .array(normalizedInbounds)
+
+        var normalizedExperimental = try #require(normalized["experimental"]?.objectValue)
+        let sourceExperimental = try #require(sourceConfig["experimental"]?.objectValue)
+        var normalizedCache = try #require(normalizedExperimental["cache_file"]?.objectValue)
+        let sourceCache = try #require(sourceExperimental["cache_file"]?.objectValue)
+        normalizedCache["path"] = sourceCache["path"]
+        normalizedExperimental["cache_file"] = .object(normalizedCache)
+        normalized["experimental"] = .object(normalizedExperimental)
+        #expect(normalized == sourceConfig)
+
         for path in [cachePath, cachePath + "-shm", cachePath + "-wal"] {
             FileManager.default.createFile(atPath: path, contents: Data())
         }
+        await compiler.removeAbandonedRuntimeCandidates()
+        #expect(FileManager.default.fileExists(atPath: cachePath))
+        #expect(FileManager.default.fileExists(atPath: cachePath + "-shm"))
+        #expect(FileManager.default.fileExists(atPath: cachePath + "-wal"))
         candidate.discard()
         #expect(!FileManager.default.fileExists(atPath: candidate.configurationURL.path))
         #expect(!FileManager.default.fileExists(atPath: cachePath))
@@ -205,16 +271,28 @@ struct ConfigurationCompilerRulePriorityTests {
         let repository = try SubscriptionRepository(databaseURL: paths.database)
         let compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
         let abandoned = support.appendingPathComponent(".runtime.json.crashed.candidate")
+        let abandonedCache = support.appendingPathComponent(".reload-preflight-crashed-token.db")
+        let abandonedCacheSHM = support.appendingPathComponent(".reload-preflight-crashed-token.db-shm")
+        let abandonedCacheWAL = support.appendingPathComponent(".reload-preflight-crashed-token.db-wal")
         let unrelated = support.appendingPathComponent("keep.candidate")
+        let unrelatedCache = support.appendingPathComponent(".reload-preflight-not-a-cache.txt")
         let live = paths.runtimeConfig
         try AtomicFile.write(Data("secret".utf8), to: abandoned)
+        try AtomicFile.write(Data(), to: abandonedCache)
+        try AtomicFile.write(Data(), to: abandonedCacheSHM)
+        try AtomicFile.write(Data(), to: abandonedCacheWAL)
         try AtomicFile.write(Data("keep".utf8), to: unrelated)
+        try AtomicFile.write(Data("keep".utf8), to: unrelatedCache)
         try AtomicFile.write(Data("live".utf8), to: live)
 
         await compiler.removeAbandonedRuntimeCandidates()
 
         #expect(!FileManager.default.fileExists(atPath: abandoned.path))
+        #expect(!FileManager.default.fileExists(atPath: abandonedCache.path))
+        #expect(!FileManager.default.fileExists(atPath: abandonedCacheSHM.path))
+        #expect(!FileManager.default.fileExists(atPath: abandonedCacheWAL.path))
         #expect(FileManager.default.fileExists(atPath: unrelated.path))
+        #expect(FileManager.default.fileExists(atPath: unrelatedCache.path))
         #expect(try Data(contentsOf: live) == Data("live".utf8))
     }
 
@@ -675,7 +753,7 @@ struct ConfigurationCompilerRulePriorityTests {
             return outbound?["type"]?.stringValue == "selector"
                 && outbound?["tag"]?.stringValue == "ExitGateway"
         })?.objectValue)
-        #expect(selector["interrupt_exist_connections"]?.boolValue == false)
+        #expect(selector["interrupt_exist_connections"]?.boolValue == true)
 
         let disabledURL = try await compiler.compile(selectedNode: selectedNode)
         let disabledConfig = try JSONValue.decodeObject(from: Data(contentsOf: disabledURL))
@@ -811,7 +889,7 @@ struct ConfigurationCompilerRulePriorityTests {
             value.objectValue?["tag"]?.stringValue == "ExitGateway"
         })?.objectValue)
         #expect(selector["outbounds"]?.arrayValue?.compactMap(\.stringValue) == [selectedNode])
-        #expect(selector["interrupt_exist_connections"]?.boolValue == false)
+        #expect(selector["interrupt_exist_connections"]?.boolValue == true)
         let workerOutboundTags = Set(
             config["outbounds"]?.arrayValue?.compactMap {
                 $0.objectValue?["tag"]?.stringValue

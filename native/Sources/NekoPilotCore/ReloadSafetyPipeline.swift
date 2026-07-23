@@ -12,6 +12,7 @@ enum ReloadSafetyPipeline {
         commit: () throws -> Void
     ) async throws {
         try await preflight()
+        try Task.checkCancellation()
         try commit()
     }
 

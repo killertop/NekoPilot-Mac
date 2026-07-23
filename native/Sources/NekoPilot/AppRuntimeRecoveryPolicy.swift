@@ -7,7 +7,9 @@ import NekoPilotCore
 /// between safe cancellation and a required core restart explicit.
 enum AppRuntimeRecoveryPolicy {
     static func keepsPersistedRules(after error: Error, didPersist: Bool) -> Bool {
-        didPersist && error is CancellationError
+        guard didPersist else { return false }
+        if error is CancellationError { return true }
+        return (error as? EngineFailure)?.kind == .reloadCommitted
     }
 
 }
