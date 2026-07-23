@@ -3,6 +3,11 @@ import SQLite3
 
 public actor SubscriptionRepository {
     private let database: SQLiteDatabase
+    // The app owns source-config mutations through this actor. Holding the
+    // immutable node snapshot here avoids reparsing unchanged subscription
+    // JSON every automatic health cycle while preserving a full reload after
+    // every successful source mutation.
+    private var nodeSnapshot: [ProxyNode]?
 
     public init(databaseURL: URL) throws {
         database = try SQLiteDatabase(url: databaseURL)
@@ -30,6 +35,7 @@ public actor SubscriptionRepository {
     }
 
     public func nodes() throws -> [ProxyNode] {
+        if let nodeSnapshot { return nodeSnapshot }
         let rows: [(String, String, Data)] = try database.query(
             """
             SELECT s.identifier, COALESCE(NULLIF(s.name, ''), s.identifier), c.config_content
@@ -43,13 +49,15 @@ public actor SubscriptionRepository {
             let config = Data((SQLiteDatabase.text(row, 2) ?? "{}").utf8)
             return (identifier, name, config)
         }
-        return try rows.flatMap { identifier, sourceName, data in
+        let loaded = try rows.flatMap { identifier, sourceName, data in
             do {
                 return try Self.nodes(in: data, identifier: identifier, sourceName: sourceName)
             } catch {
                 throw NekoPilotError.corruptSubscription(identifier)
             }
         }
+        nodeSnapshot = loaded
+        return loaded
     }
 
     public func configObjects() throws -> [(identifier: String, config: [String: JSONValue])] {
@@ -353,6 +361,7 @@ public actor SubscriptionRepository {
                 bindings: [.text(identifier), .text(configText)]
             )
         }
+        nodeSnapshot = nil
         return identifier
     }
 
@@ -361,6 +370,7 @@ public actor SubscriptionRepository {
             "DELETE FROM subscriptions WHERE identifier = ?",
             bindings: [.text(identifier)]
         )
+        nodeSnapshot = nil
     }
 
     public func rename(identifier: String, name: String) throws {
@@ -372,6 +382,7 @@ public actor SubscriptionRepository {
             "UPDATE subscriptions SET name = ? WHERE identifier = ?",
             bindings: [.text(trimmedName), .text(identifier)]
         )
+        nodeSnapshot = nil
     }
 
     public func subscription(identifier: String) throws -> Subscription? {

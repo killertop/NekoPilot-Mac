@@ -106,6 +106,59 @@ struct SubscriptionRepositoryTests {
         }
     }
 
+    @Test("Node snapshot refreshes after successful source mutations only")
+    func nodeSnapshotInvalidatesAfterSuccessfulSourceMutations() async throws {
+        let location = try temporaryDatabaseLocation()
+        defer { try? FileManager.default.removeItem(at: location.directory) }
+        let repository = try SubscriptionRepository(databaseURL: location.database)
+        let identifier = try await repository.upsert(
+            url: "https://example.com/cache",
+            name: "Before",
+            sourceType: .subscription,
+            config: configuration(tag: "original", server: "one.example.com")
+        )
+
+        let original = try await repository.nodes()
+        #expect(original.first?.sourceName == "Before")
+        #expect(original.first?.outbound["server"]?.stringValue == "one.example.com")
+
+        try await repository.rename(identifier: identifier, name: "Renamed")
+        let renamed = try await repository.nodes()
+        #expect(renamed.first?.sourceName == "Renamed")
+
+        _ = try await repository.upsert(
+            url: "https://example.com/cache",
+            name: "Renamed",
+            sourceType: .subscription,
+            config: configuration(tag: "replacement", server: "two.example.com"),
+            identifier: identifier
+        )
+        let replacement = try await repository.nodes()
+        #expect(replacement.map(\.originalTag) == ["replacement"])
+        #expect(replacement.first?.outbound["server"]?.stringValue == "two.example.com")
+
+        let inspection = try SQLiteDatabase(url: location.database)
+        try inspection.execute(
+            "CREATE TRIGGER reject_cached_config_update BEFORE UPDATE ON subscription_configs BEGIN SELECT RAISE(ABORT, 'test failure'); END"
+        )
+        do {
+            _ = try await repository.upsert(
+                url: "https://example.com/cache",
+                name: "Unexpected",
+                sourceType: .subscription,
+                config: configuration(tag: "unexpected", server: "three.example.com"),
+                identifier: identifier
+            )
+            Issue.record("Expected the config update to fail")
+        } catch {
+            // A failed transaction must retain the still-valid snapshot.
+        }
+        #expect(try await repository.nodes() == replacement)
+
+        try await repository.delete(identifier: identifier)
+        #expect(try await repository.nodes().isEmpty)
+    }
+
     @Test("Editing never overwrites another source that owns the requested URL")
     func editingDoesNotOverwriteAnotherSource() async throws {
         let location = try temporaryDatabaseLocation()

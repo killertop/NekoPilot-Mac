@@ -53,6 +53,7 @@ let package = Package(
     products: [
         .executable(name: "NekoPilot", targets: ["NekoPilot"]),
         .executable(name: "NekoPilotCoreChecks", targets: ["NekoPilotCoreChecks"]),
+        .executable(name: "NekoPilotBench", targets: ["NekoPilotBench"]),
         .library(name: "NekoPilotCore", targets: ["NekoPilotCore"]),
     ],
     dependencies: packageDependencies,
@@ -80,6 +81,13 @@ let package = Package(
         ),
         .executableTarget(
             name: "NekoPilotCoreChecks",
+            dependencies: ["NekoPilotCore"],
+            swiftSettings: [
+                .swiftLanguageMode(.v5),
+            ]
+        ),
+        .executableTarget(
+            name: "NekoPilotBench",
             dependencies: ["NekoPilotCore"],
             swiftSettings: [
                 .swiftLanguageMode(.v5),
