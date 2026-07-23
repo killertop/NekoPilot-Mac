@@ -11,7 +11,12 @@ enum CoreL10n {
     }
 }
 
-public struct EngineFailure: Equatable, Sendable {
+/// A categorized engine error for internal recovery and diagnostics.
+///
+/// `EngineStatus` and `NekoPilotError` keep their original `String`
+/// associated values for source compatibility. Engine-owned code can throw
+/// this type directly, then project `message` into those legacy UI surfaces.
+public struct EngineFailure: Error, LocalizedError, Equatable, Sendable {
     public enum Kind: String, Equatable, Sendable {
         case configuration
         case startup
@@ -30,6 +35,8 @@ public struct EngineFailure: Equatable, Sendable {
         self.kind = kind
         self.message = message
     }
+
+    public var errorDescription: String? { message }
 }
 
 public enum EngineStatus: Equatable, Sendable {
@@ -37,12 +44,15 @@ public enum EngineStatus: Equatable, Sendable {
     case starting
     case running
     case stopping
-    case failed(EngineFailure)
+    case failed(String)
 
-    /// Keeps existing construction call sites working when they only have
-    /// display text. New engine code should provide a concrete failure kind.
-    public static func failed(_ message: String) -> EngineStatus {
-        .failed(EngineFailure(kind: .operation, message: message))
+    /// Projects a typed engine failure onto the source-compatible UI status.
+    ///
+    /// The failure category remains available to the engine while it handles
+    /// the thrown ``EngineFailure``; `EngineStatus` intentionally carries only
+    /// the user-facing text it has always exposed.
+    public static func failed(_ failure: EngineFailure) -> EngineStatus {
+        .failed(failure.message)
     }
 
     public var isRunning: Bool {
@@ -269,13 +279,16 @@ public enum NekoPilotError: LocalizedError, Equatable {
     case duplicateRule
     case singBoxMissing
     case portOccupied(Int)
-    case processFailed(EngineFailure)
+    case processFailed(String)
     case invalidSetting(String)
 
-    /// Keeps existing construction call sites working while engine-owned sites
-    /// provide an `EngineFailure` with a precise kind.
-    public static func processFailed(_ message: String) -> NekoPilotError {
-        .processFailed(EngineFailure(kind: .operation, message: message))
+    /// Compatibility bridge for typed call sites during migration.
+    ///
+    /// New engine-owned code should throw ``EngineFailure`` directly so its
+    /// category is preserved for recovery decisions.
+    @available(*, deprecated, message: "Throw EngineFailure directly to preserve its category")
+    public static func processFailed(_ failure: EngineFailure) -> NekoPilotError {
+        .processFailed(failure.message)
     }
 
     public var errorDescription: String? {
@@ -298,7 +311,7 @@ public enum NekoPilotError: LocalizedError, Equatable {
         case .duplicateRule: CoreL10n.text("规则已存在", "The rule already exists")
         case .singBoxMissing: CoreL10n.text("缺少 sing-box 代理核心", "The sing-box core is missing")
         case let .portOccupied(port): CoreL10n.text("端口 \(port) 已被占用", "Port \(port) is already in use")
-        case let .processFailed(failure): failure.message
+        case let .processFailed(message): message
         case let .invalidSetting(key): CoreL10n.text("设置项无效：\(key)", "Invalid setting: \(key)")
         }
     }

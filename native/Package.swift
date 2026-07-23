@@ -40,6 +40,10 @@ private let testDependencies: [Target.Dependency] = needsCommandLineToolsTesting
     ? ["NekoPilotCore", .product(name: "Testing", package: "swift-testing")]
     : ["NekoPilotCore"]
 
+private let appTestDependencies: [Target.Dependency] = needsCommandLineToolsTestingPackage
+    ? ["NekoPilot", .product(name: "Testing", package: "swift-testing")]
+    : ["NekoPilot"]
+
 let package = Package(
     name: "NekoPilotNative",
     defaultLocalization: "zh-Hans",
@@ -84,6 +88,11 @@ let package = Package(
         .testTarget(
             name: "NekoPilotCoreTests",
             dependencies: testDependencies,
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .testTarget(
+            name: "NekoPilotAppTests",
+            dependencies: appTestDependencies,
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]

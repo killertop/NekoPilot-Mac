@@ -81,7 +81,7 @@ struct NodeManagementView: View {
             }
             Button(L10n.text("删除", "Delete"), role: .destructive) {
                 deleteTarget = nil
-                Task { await model.delete(target) }
+                model.performUserAction { await $0.delete(target) }
             }
         } message: { target in
             let count = model.nodeCountsBySource[target.identifier, default: 0]
@@ -166,7 +166,7 @@ struct NodeManagementView: View {
 
             if subscription.sourceType == .subscription {
                 Button {
-                    Task { await model.refresh(subscription) }
+                    model.performUserAction { await $0.refresh(subscription) }
                 } label: {
                     Group {
                         if model.refreshingSubscriptionIDs.contains(subscription.identifier) {
@@ -316,7 +316,7 @@ private struct RefreshErrorSheet: View {
                 Button(L10n.text("关闭", "Close")) { isPresented = false }
                     .keyboardShortcut(.cancelAction)
                 Button {
-                    Task {
+                    model.performUserAction { model in
                         await model.refresh(subscription)
                         if model.subscriptionRefreshErrors[subscription.identifier] == nil {
                             isPresented = false
@@ -375,7 +375,7 @@ private struct AddNodeSheet: View {
                 Button(L10n.text("取消", "Cancel")) { isPresented = false }
                     .keyboardShortcut(.cancelAction)
                 Button {
-                    Task {
+                    model.performUserAction { model in
                         importing = true
                         let success = await model.importNode(input, name: name.nilIfBlank)
                         importing = false
@@ -447,7 +447,7 @@ private struct EditSourceSheet: View {
                 Button(L10n.text("取消", "Cancel")) { isPresented = false }
                     .keyboardShortcut(.cancelAction)
                 Button {
-                    Task {
+                    model.performUserAction { model in
                         saving = true
                         let success = await model.edit(subscription, name: name, input: input)
                         saving = false

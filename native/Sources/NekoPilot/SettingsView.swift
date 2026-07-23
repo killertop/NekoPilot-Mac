@@ -54,7 +54,7 @@ struct SettingsView: View {
                     subtitle: model.automaticSwitchSummary,
                     value: Binding(
                         get: { model.autoSwitch },
-                        set: { value in Task { await model.setAutoSwitch(value) } }
+                        set: { value in model.performUserAction { await $0.setAutoSwitch(value) } }
                     )
                 )
                 AppDivider(leading: 52)
@@ -72,7 +72,7 @@ struct SettingsView: View {
                     subtitle: L10n.text("让同一局域网设备使用本机代理", "Let LAN devices use this proxy"),
                     value: Binding(
                         get: { model.allowLAN },
-                        set: { value in Task { await model.setAllowLAN(value) } }
+                        set: { value in model.performUserAction { await $0.setAllowLAN(value) } }
                     )
                 )
                 AppDivider(leading: 52)
@@ -112,7 +112,7 @@ struct SettingsView: View {
                     subtitle: L10n.text("在节点列表中显示每个节点的协议类型", "Show protocol labels in the node list"),
                     value: Binding(
                         get: { model.showProtocol },
-                        set: { value in Task { await model.setShowProtocol(value) } }
+                        set: { value in model.performUserAction { await $0.setShowProtocol(value) } }
                     )
                 )
                 AppDivider(leading: 52)
@@ -123,7 +123,7 @@ struct SettingsView: View {
                     subtitle: model.serverLocationSummary,
                     value: Binding(
                         get: { model.showServerLocation },
-                        set: { value in Task { await model.setShowServerLocation(value) } }
+                        set: { value in model.performUserAction { await $0.setShowServerLocation(value) } }
                     )
                 )
                 AppDivider(leading: 52)
@@ -146,7 +146,7 @@ struct SettingsView: View {
                     subtitle: L10n.text("连接时接管 HTTP、HTTPS 和 SOCKS", "Manage HTTP, HTTPS, and SOCKS while connected"),
                     value: Binding(
                         get: { !model.skipSystemProxy },
-                        set: { value in Task { await model.setSkipSystemProxy(!value) } }
+                        set: { value in model.performUserAction { await $0.setSkipSystemProxy(!value) } }
                     )
                 )
             }
@@ -292,7 +292,7 @@ private struct ProxyPortSheet: View {
                     .keyboardShortcut(.cancelAction)
                 Button {
                     guard let value = Int(port) else { return }
-                    Task {
+                    model.performUserAction { model in
                         saving = true
                         let success = await model.setProxyPort(value)
                         saving = false
@@ -349,7 +349,7 @@ private struct DirectDNSSheet: View {
                 Button(L10n.text("取消", "Cancel")) { isPresented = false }
                     .keyboardShortcut(.cancelAction)
                 Button(L10n.text("保存", "Save")) {
-                    Task {
+                    model.performUserAction { model in
                         saving = true
                         let success = await model.setDirectDNS(value)
                         saving = false
@@ -473,7 +473,7 @@ private struct UserAgentSheet: View {
                     Button(L10n.text("取消", "Cancel")) { isPresented = false }
                         .keyboardShortcut(.cancelAction)
                     Button {
-                        Task {
+                        model.performUserAction { model in
                             saving = true
                             let success = await model.setUserAgent(selected.resolvedValue(custom: customValue))
                             saving = false

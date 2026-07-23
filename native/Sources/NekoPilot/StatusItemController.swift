@@ -160,7 +160,7 @@ final class StatusItemController: NSObject {
 
     @objc private func toggleConnection() {
         guard let model else { return }
-        Task { await model.toggleConnection() }
+        model.performUserAction { await $0.toggleConnection() }
     }
 
     @objc private func copyEnvironment() {

@@ -35,10 +35,14 @@ struct HomeView: View {
         ) {
             Button(L10n.text("继续测速", "Continue Testing"), role: .cancel) { }
             Button(L10n.text("恢复测速前结果", "Restore Previous Results"), role: .destructive) {
-                Task { await model.cancelURLTest(policy: .restorePreviousResults) }
+                model.performUserAction {
+                    await $0.cancelURLTest(policy: .restorePreviousResults)
+                }
             }
             Button(L10n.text("保存已完成结果", "Keep Completed Results")) {
-                Task { await model.cancelURLTest(policy: .keepPartialResults) }
+                model.performUserAction {
+                    await $0.cancelURLTest(policy: .keepPartialResults)
+                }
             }
         } message: {
             Text(L10n.text(
@@ -61,7 +65,7 @@ struct HomeView: View {
             }
 
             Button {
-                Task { await model.toggleConnection() }
+                model.performUserAction { await $0.toggleConnection() }
             } label: {
                 ZStack {
                     RoundedRectangle(cornerRadius: 40, style: .continuous)
@@ -232,7 +236,7 @@ struct HomeView: View {
         let node = row.node
         let selected = model.selectedNode == node.runtimeTag
         return Button {
-            Task { await model.selectNode(node) }
+            model.performUserAction { await $0.selectNode(node) }
         } label: {
             HStack(spacing: 8) {
                 if model.showProtocol {

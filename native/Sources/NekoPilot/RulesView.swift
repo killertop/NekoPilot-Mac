@@ -191,7 +191,7 @@ struct RulesView: View {
     }
 
     private func delete(_ rule: RoutingRule) {
-        Task {
+        model.performUserAction { model in
             guard await model.deleteRule(rule) else { return }
             undoDismissTask?.cancel()
             withAnimation(.easeOut(duration: 0.16)) { undoRule = rule }
@@ -207,7 +207,7 @@ struct RulesView: View {
     private func restoreDeletedRule(_ rule: RoutingRule) {
         undoDismissTask?.cancel()
         undoDismissTask = nil
-        Task {
+        model.performUserAction { model in
             guard await model.restoreRule(rule) else { return }
             withAnimation(.easeOut(duration: 0.16)) { undoRule = nil }
         }
@@ -320,7 +320,7 @@ private struct AddRuleSheet: View {
     }
 
     private func add() {
-        Task {
+        model.performUserAction { model in
             saving = true
             defer { saving = false }
             guard let result = await model.addRules(action: action, kind: kind, input: input) else { return }
@@ -405,7 +405,7 @@ private struct EditRuleSheet: View {
                     Button(L10n.text("取消", "Cancel"), action: onCancel)
                         .keyboardShortcut(.cancelAction)
                     Button {
-                        Task {
+                        model.performUserAction { model in
                             saving = true
                             let result = await model.updateRule(rule, action: action, kind: kind, value: value)
                             saving = false

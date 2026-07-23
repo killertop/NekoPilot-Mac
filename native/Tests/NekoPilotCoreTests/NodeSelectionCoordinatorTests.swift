@@ -23,6 +23,7 @@ struct NodeSelectionCoordinatorTests {
         let first = Task { try await coordinator.submit(node: "A") }
         await probe.waitUntilFirstStarted()
         let second = Task { try await coordinator.submit(node: "B") }
+        while await coordinator.pendingNodeForTesting != "B" { await Task.yield() }
         let third = Task { try await coordinator.submit(node: "C") }
         while await coordinator.pendingNodeForTesting != "C" { await Task.yield() }
         await probe.releaseFirst()

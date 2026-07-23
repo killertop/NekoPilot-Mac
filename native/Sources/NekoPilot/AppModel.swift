@@ -80,6 +80,7 @@ final class AppModel: ObservableObject {
     private var bootstrapTask: Task<Void, Never>?
     private var lanConfirmationTasks: [UUID: Task<Void, Never>] = [:]
     private var deepLinkTasks: [UUID: Task<Void, Never>] = [:]
+    private let userActionTaskOwner = UserActionTaskOwner()
     private var urlTestTask: Task<Void, Never>?
     private var nodeLocationTask: Task<Void, Never>?
     private var nodeLocationPredecessorTask: Task<Void, Never>?
@@ -167,8 +168,8 @@ final class AppModel: ObservableObject {
             for await next in stream {
                 guard !Task.isCancelled else { return }
                 status = next
-                if case let .failed(failure) = next, errorMessage == nil {
-                    errorMessage = failure.message
+                if case let .failed(message) = next, errorMessage == nil {
+                    errorMessage = message
                 }
                 await automaticSwitching.updateConnectionState(isRunning: next.isRunning)
                 if next.isRunning {
@@ -221,6 +222,22 @@ final class AppModel: ObservableObject {
             await automaticSwitching.start(enabled: autoSwitch, engineRunning: engineRunning)
             guard !Task.isCancelled, !isShuttingDown else { return }
             scheduleReleaseCheck()
+        }
+    }
+
+    /// Registers business work initiated by a view with the application
+    /// lifecycle. Views still own presentation-only tasks such as animation
+    /// timers, while storage, settings, and engine mutations come through this
+    /// entry point so shutdown can cancel and await them before stopping the
+    /// core.
+    func performUserAction(
+        _ operation: @escaping @MainActor (AppModel) async -> Void
+    ) {
+        guard !isShuttingDown else { return }
+        userActionTaskOwner.submit { [weak self] in
+            guard let self else { return }
+            guard !Task.isCancelled, !isShuttingDown else { return }
+            await operation(self)
         }
     }
 
@@ -474,13 +491,14 @@ final class AppModel: ObservableObject {
         guard storageAvailable, !isShuttingDown else { return false }
         do {
             let identifier = try await importer.importInput(input, name: name)
-            await refreshData()
-            if let node = nodes.first(where: { $0.sourceIdentifier == identifier }) {
-                if await engine.currentStatus().isRunning {
-                    try await reloadRunningEngine(selectedNode: node.runtimeTag)
-                }
-                await selectNode(node)
-            }
+            try await ImportedNodePostprocessor.run(
+                refresh: { await self.refreshData() },
+                resolveNode: { self.nodes.first(where: { $0.sourceIdentifier == identifier }) },
+                isEngineRunning: { await self.engine.currentStatus().isRunning },
+                reload: { try await self.reloadRunningEngine(selectedNode: $0.runtimeTag) },
+                select: { await self.selectNode($0) },
+                isShuttingDown: { self.isShuttingDown }
+            )
             return true
         } catch is CancellationError {
             return false
@@ -497,11 +515,18 @@ final class AppModel: ObservableObject {
         defer { refreshingSubscriptionIDs.remove(subscription.identifier) }
         do {
             try await importer.refresh(identifier: subscription.identifier)
+            try Task.checkCancellation()
+            guard !isShuttingDown else { throw CancellationError() }
             subscriptionRefreshErrors.removeValue(forKey: subscription.identifier)
             await refreshData()
+            try Task.checkCancellation()
+            guard !isShuttingDown else { throw CancellationError() }
             if await engine.currentStatus().isRunning {
+                try Task.checkCancellation()
                 try await reloadRunningEngine(selectedNode: selectedNode)
             }
+        } catch is CancellationError {
+            return
         } catch {
             subscriptionRefreshErrors[subscription.identifier] = error.localizedDescription
             show(error)
@@ -516,11 +541,18 @@ final class AppModel: ObservableObject {
                 rawInput: input,
                 name: name
             )
+            try Task.checkCancellation()
+            guard !isShuttingDown else { throw CancellationError() }
             await refreshData()
+            try Task.checkCancellation()
+            guard !isShuttingDown else { throw CancellationError() }
             if replacement == .contentChanged, await engine.currentStatus().isRunning {
+                try Task.checkCancellation()
                 try await reloadRunningEngine(selectedNode: selectedNode)
             }
             return true
+        } catch is CancellationError {
+            return false
         } catch {
             show(error)
             return false
@@ -531,10 +563,17 @@ final class AppModel: ObservableObject {
         guard storageAvailable, !isShuttingDown else { return }
         do {
             try await repository.delete(identifier: subscription.identifier)
+            try Task.checkCancellation()
+            guard !isShuttingDown else { throw CancellationError() }
             await refreshData()
+            try Task.checkCancellation()
+            guard !isShuttingDown else { throw CancellationError() }
             if await engine.currentStatus().isRunning {
+                try Task.checkCancellation()
                 try await reloadRunningEngine(selectedNode: selectedNode)
             }
+        } catch is CancellationError {
+            return
         } catch {
             show(error)
         }
@@ -603,8 +642,12 @@ final class AppModel: ObservableObject {
         await selection.setAutomaticSwitchingEnabled(value)
         do {
             try await settings.set(.bool(value), for: SettingsStore.Key.autoSwitch)
+            try Task.checkCancellation()
+            guard !isShuttingDown else { throw CancellationError() }
             lastAutomaticSwitchUpdate = nil
             if value { await automaticSwitching.setAutomaticSwitchingEnabled(true) }
+        } catch is CancellationError where isShuttingDown {
+            return
         } catch {
             autoSwitch = previous
             await selection.setAutomaticSwitchingEnabled(previous)
@@ -619,6 +662,8 @@ final class AppModel: ObservableObject {
         showProtocol = value
         do {
             try await settings.set(.bool(value), for: SettingsStore.Key.showProtocol)
+        } catch is CancellationError where isShuttingDown {
+            return
         } catch {
             showProtocol = previous
             show(error)
@@ -634,6 +679,7 @@ final class AppModel: ObservableObject {
         let interrupted = value ? nil : (cancelNodeLocationProbe() ?? nodeLocationPredecessorTask)
         do {
             try await settings.set(.bool(value), for: SettingsStore.Key.showServerLocation)
+            try Task.checkCancellation()
             guard settingGeneration == nodeLocationSettingGeneration, !isShuttingDown else { return }
             if value {
                 do {
@@ -650,6 +696,8 @@ final class AppModel: ObservableObject {
                       nodeLocationTask == nil else { return }
                 nodeLocationPredecessorTask = nil
             }
+        } catch is CancellationError where isShuttingDown {
+            return
         } catch {
             guard settingGeneration == nodeLocationSettingGeneration else { return }
             showServerLocation = previous
@@ -780,6 +828,8 @@ final class AppModel: ObservableObject {
         do {
             try await settings.set(.string(trimmed), for: SettingsStore.Key.userAgent)
             return true
+        } catch is CancellationError where isShuttingDown {
+            return true
         } catch {
             userAgent = previous
             show(error)
@@ -788,6 +838,7 @@ final class AppModel: ObservableObject {
     }
 
     func handleSleep() async {
+        guard !isShuttingDown else { return }
         wakeTask?.cancel()
         wakeTask = nil
         sleepStartedAt = Date()
@@ -800,6 +851,7 @@ final class AppModel: ObservableObject {
     }
 
     func handleWake() async {
+        guard !isShuttingDown else { return }
         lifecycleGeneration += 1
         let generation = lifecycleGeneration
         guard wasRunningBeforeSleep,
@@ -870,11 +922,16 @@ final class AppModel: ObservableObject {
         bootstrapping?.cancel()
         confirmingLAN.forEach { $0.cancel() }
         importingDeepLink.forEach { $0.cancel() }
+        userActionTaskOwner.cancelAll()
         bootstrapTask = nil
         lanConfirmationTasks.removeAll()
         deepLinkTasks.removeAll()
         wakeTask?.cancel()
         wakeTask = nil
+        // Join view-launched mutations before running shutdown's own URL-test
+        // transaction or tearing down the engine. This also prevents a user
+        // "keep results" action from racing the identical quit-time action.
+        await userActionTaskOwner.cancelAndWait()
         let testing = urlTestTask
         if isURLTesting {
             // Quitting is the only non-user navigation event that must stop a
@@ -898,6 +955,13 @@ final class AppModel: ObservableObject {
         ruleUpdateTask = nil
         releaseCheckTask?.cancel()
         releaseCheckTask = nil
+        // Every view-launched storage/settings/runtime mutation must quiesce
+        // before the engine is torn down. Import and configuration boundaries
+        // cooperate with cancellation, so no task can resume after shutdown
+        // and write state or restart the core.
+        await bootstrapping?.value
+        for task in confirmingLAN { await task.value }
+        for task in importingDeepLink { await task.value }
         await automaticSwitching.stop()
         // Releasing the system proxy and the long-lived sing-box process is
         // the only shutdown work that must finish before the app may exit.
@@ -907,9 +971,6 @@ final class AppModel: ObservableObject {
         logger.info("shutdown: stopping proxy engine")
         await engine.shutdown()
         logger.info("shutdown: proxy engine stopped")
-        await bootstrapping?.value
-        for task in confirmingLAN { await task.value }
-        for task in importingDeepLink { await task.value }
         await testing?.value
         await locating?.value
         nodeLocationPredecessorTask = nil
@@ -1195,25 +1256,40 @@ final class AppModel: ObservableObject {
 
     private func loadSettings() async {
         autoSwitch = await settings.bool(SettingsStore.Key.autoSwitch, default: true)
+        guard !Task.isCancelled, !isShuttingDown else { return }
         await selection.setAutomaticSwitchingEnabled(autoSwitch)
+        guard !Task.isCancelled, !isShuttingDown else { return }
         showProtocol = await settings.bool(SettingsStore.Key.showProtocol)
+        guard !Task.isCancelled, !isShuttingDown else { return }
         showServerLocation = await settings.bool(SettingsStore.Key.showServerLocation, default: false)
+        guard !Task.isCancelled, !isShuttingDown else { return }
         allowLAN = await settings.bool(SettingsStore.Key.allowLAN)
+        guard !Task.isCancelled, !isShuttingDown else { return }
         skipSystemProxy = await settings.bool(SettingsStore.Key.skipSystemProxy)
+        guard !Task.isCancelled, !isShuttingDown else { return }
         proxyPort = await settings.proxyPort()
+        guard !Task.isCancelled, !isShuttingDown else { return }
         let storedDNS = await settings.string(SettingsStore.Key.directDNS)
+        guard !Task.isCancelled, !isShuttingDown else { return }
         if DNSResolverDetector.isUsableIPAddress(storedDNS) {
             directDNS = storedDNS
         } else {
             directDNS = await DNSResolverDetector.detectSystemResolver(logger: logger) ?? DNSResolverDetector.fallback
+            guard !Task.isCancelled, !isShuttingDown else { return }
             try? await settings.set(.string(directDNS), for: SettingsStore.Key.directDNS)
+            guard !Task.isCancelled, !isShuttingDown else { return }
         }
         userAgent = await settings.string(SettingsStore.Key.userAgent, default: "sing-box 1.14.0-alpha.48")
+        guard !Task.isCancelled, !isShuttingDown else { return }
         selectedNode = (await settings.string(SettingsStore.Key.selectedNode)).nilIfEmpty
+        guard !Task.isCancelled, !isShuttingDown else { return }
         let storedHistory = (try? await repository.delayHistory()) ?? [:]
+        guard !Task.isCancelled, !isShuttingDown else { return }
         let legacyHistory = (try? await settings.takeLegacyDelayHistory()) ?? [:]
+        guard !Task.isCancelled, !isShuttingDown else { return }
         if storedHistory.isEmpty, !legacyHistory.isEmpty {
             try? await repository.replaceDelayHistory(legacyHistory)
+            guard !Task.isCancelled, !isShuttingDown else { return }
             delayHistory = legacyHistory
         } else {
             delayHistory = storedHistory
@@ -1221,22 +1297,43 @@ final class AppModel: ObservableObject {
         do {
             rules = try await settings.rulesInstallingDefaultsIfNeeded()
         } catch {
+            guard !Task.isCancelled, !isShuttingDown else { return }
             rules = await settings.rules()
+            guard !Task.isCancelled, !isShuttingDown else { return }
             show(error)
         }
+        guard !Task.isCancelled, !isShuttingDown else { return }
         rebuildSortedNodes()
     }
 
     private func persistRules(previous: [RoutingRule]) async -> Bool {
+        guard !Task.isCancelled, !isShuttingDown else {
+            rules = previous
+            return false
+        }
         let wasRunning = await engine.currentStatus().isRunning
+        var didPersistRules = false
         do {
             try await settings.replaceRules(rules)
+            didPersistRules = true
             if wasRunning {
                 try await reloadRunningEngine(selectedNode: selectedNode)
             } else {
                 try await engine.prepareConfiguration(selectedNode: selectedNode)
             }
             return true
+        } catch let cancellation as CancellationError {
+            // Once rules are durable, cancellation means a shutdown or a newer
+            // configuration operation superseded only the runtime reload.
+            // Rewriting `previous` would overwrite the newer persisted intent.
+            if AppRuntimeRecoveryPolicy.keepsPersistedRules(
+                after: cancellation,
+                didPersist: didPersistRules
+            ) {
+                return true
+            }
+            rules = previous
+            return false
         } catch {
             rules = previous
             try? await settings.replaceRules(previous)
@@ -1285,7 +1382,11 @@ final class AppModel: ObservableObject {
         do {
             try await engine.reload(selectedNode: selectedNode)
         } catch {
-            guard await engine.currentStatus().isRunning else { throw error }
+            // Only `.reload` failures occur after the validated candidate was
+            // committed and SIGHUP was sent. Configuration/startup/control
+            // failures leave the existing live file and process untouched.
+            guard AppRuntimeRecoveryPolicy.shouldRestartAfterReloadFailure(error),
+                  await engine.currentStatus().isRunning else { throw error }
             // A reload request can succeed in sing-box while the short status
             // confirmation is lost, leaving UI and runtime state ambiguous.
             // A bounded full restart gives every source/rule mutation one

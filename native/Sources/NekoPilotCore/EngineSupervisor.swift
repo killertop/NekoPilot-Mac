@@ -15,6 +15,7 @@ public actor EngineSupervisor {
     private var apiEndpoint: LocalAPIEndpoint?
     private var healthProbePort: Int?
     private var proxySessionID: UUID?
+    private let selectorControlGate = AsyncSerialGate()
     private var epoch: UInt64 = 0
     private var configurationGeneration: UInt64 = 0
     private var isShuttingDown = false
@@ -69,13 +70,13 @@ public actor EngineSupervisor {
                     logger.warning("recovering orphan sing-box pid=\(marker.childProcess.pid)")
                     terminateProcessGroup(pid: marker.childProcess.pid)
                     guard await waitUntilDead(marker.childProcess, attempts: 25) else {
-                        throw NekoPilotError.processFailed(EngineFailure(
+                        throw EngineFailure(
                             kind: .shutdown,
                             message: CoreL10n.text(
                                 "无法清理遗留的 sing-box 进程",
                                 "Could not terminate the orphaned sing-box process"
                             )
-                        ))
+                        )
                     }
                 }
                 try removeOwnershipMarker(at: ownershipURL)
@@ -141,20 +142,20 @@ public actor EngineSupervisor {
 
             guard await waitUntilReady(endpoint: apiEndpoint, epoch: startEpoch) else {
                 try ensureCurrent(startEpoch)
-                throw NekoPilotError.processFailed(EngineFailure(
+                throw EngineFailure(
                     kind: .startup,
                     message: CoreL10n.text("sing-box 启动超时", "sing-box startup timed out")
-                ))
+                )
             }
             try ensureCurrent(startEpoch)
             guard child.isRunning else {
-                throw NekoPilotError.processFailed(EngineFailure(
+                throw EngineFailure(
                     kind: .startup,
                     message: CoreL10n.text(
                         "sing-box 启动后意外退出",
                         "sing-box exited unexpectedly during startup"
                     )
-                ))
+                )
             }
 
             if !runtimeSettings.skipSystemProxy {
@@ -242,26 +243,44 @@ public actor EngineSupervisor {
     }
 
     public func reload(selectedNode: String?) async throws {
-        guard status.isRunning,
-              let child = process,
-              let runningSession = sessionID,
-              child.isRunning else {
+        guard status.isRunning else {
             try await prepareConfiguration(selectedNode: selectedNode)
             return
         }
 
+        var reloadEpoch: UInt64?
+        var reloadConfigurationGeneration: UInt64?
+        var didCommitCandidate = false
+        // Acquire before compilation so FIFO order reflects caller intent,
+        // not whichever validator happens to finish first. Manual selections
+        // submitted after this reload will therefore apply after it.
+        try await selectorControlGate.acquire()
         do {
-            let reloadConfigurationGeneration = beginConfigurationOperation()
+            // Cancellation while queued must not produce a candidate, supersede
+            // another reload, commit configuration, or signal sing-box.
+            try Task.checkCancellation()
+            // A preceding reload may have recovered the process while this
+            // request was queued. Capture the current session only after the
+            // gate is owned; never signal or poll a stale Process snapshot.
+            guard status.isRunning,
+                  let child = process,
+                  let runningSession = sessionID,
+                  child.isRunning else {
+                throw CancellationError()
+            }
+            let currentEpoch = epoch
+            reloadEpoch = currentEpoch
+            let configurationGeneration = beginConfigurationOperation()
+            reloadConfigurationGeneration = configurationGeneration
             guard let apiEndpoint else {
-                throw NekoPilotError.processFailed(EngineFailure(
+                throw EngineFailure(
                     kind: .control,
                     message: CoreL10n.text(
                         "sing-box API 会话已丢失",
                         "The sing-box API session was lost"
                     )
-                ))
+                )
             }
-            let reloadEpoch = epoch
             let candidate = try await compiler.makeRuntimeConfigurationCandidate(
                 selectedNode: selectedNode,
                 apiEndpoint: apiEndpoint,
@@ -269,72 +288,176 @@ public actor EngineSupervisor {
             )
             defer { candidate.discard() }
             try await validateConfigurationCandidate(candidate.configurationURL)
-            try ensureCurrent(reloadEpoch)
-            // A newer reload owns the eventual live file. Treat this older
-            // request as successfully superseded so its caller does not roll
-            // back settings that the newer request is applying.
-            guard reloadConfigurationGeneration == configurationGeneration else { return }
+            try ensureCurrent(currentEpoch)
+            // A newer request owns the eventual live file. Supersession is an
+            // observable cancellation, not success: the newer request may
+            // still fail validation without committing either candidate.
+            try ensureConfigurationCurrent(configurationGeneration)
             let expectedNodes = try expectedSelectorNodes(in: candidate.configurationURL)
-            // Commit the exact validated candidate immediately before SIGHUP.
-            // This keeps concurrent compilation from changing what sing-box
-            // observes when it reopens runtime.json.
             _ = try candidate.commit()
-            // The standard sing-box executable reloads atomically on SIGHUP.
-            // This preserves native rule-set refresh without reintroducing a
-            // private Go control host.
+            didCommitCandidate = true
+            // The standard sing-box executable reloads atomically on SIGHUP,
+            // preserving native rule-set refresh.
             guard kill(child.processIdentifier, SIGHUP) == 0 else {
-                throw NekoPilotError.processFailed(EngineFailure(
+                throw EngineFailure(
                     kind: .reload,
                     message: CoreL10n.text(
                         "无法请求 sing-box 重新加载",
                         "Could not request a sing-box reload"
                     )
-                ))
+                )
+            }
+            try await confirmReloadWhileHoldingGate(
+                child: child,
+                runningSession: runningSession,
+                expectedNodes: expectedNodes,
+                selectedNode: selectedNode,
+                epoch: currentEpoch,
+                configurationGeneration: configurationGeneration
+            )
+            await selectorControlGate.release()
+        } catch {
+            // A stale request must never publish its own failure after a newer
+            // lifecycle operation has taken ownership. Check while the gate is
+            // still held so a queued reload cannot change generation first.
+            do {
+                if let reloadEpoch { try ensureCurrent(reloadEpoch) }
+                if let reloadConfigurationGeneration {
+                    try ensureConfigurationCurrent(reloadConfigurationGeneration)
+                }
+            } catch {
+                await selectorControlGate.release()
+                throw error
             }
 
-            for _ in 0 ..< 50 {
-                try ensureCurrent(reloadEpoch)
-                guard reloadConfigurationGeneration == configurationGeneration else { return }
-                guard sessionID == runningSession, child.isRunning else {
-                    throw NekoPilotError.processFailed(EngineFailure(
-                        kind: .reload,
-                        message: CoreL10n.text(
-                            "sing-box 在重新加载时退出",
-                            "sing-box exited while reloading"
-                        )
-                    ))
-                }
-                if let selector = try? await nativeAPI.selector(knownNodes: Array(expectedNodes)) {
-                    try ensureCurrent(reloadEpoch)
-                    guard reloadConfigurationGeneration == configurationGeneration else { return }
-                    guard Set(selector.nodes) == expectedNodes else {
-                        try await Task.sleep(nanoseconds: 100_000_000)
-                        continue
-                    }
-                    if let selectedNode, selector.current != selectedNode {
-                        try await nativeAPI.select(node: selectedNode)
-                    }
-                    return
-                }
-                try await Task.sleep(nanoseconds: 100_000_000)
-            }
-            throw NekoPilotError.processFailed(EngineFailure(
-                kind: .reload,
-                message: CoreL10n.text(
-                    "规则重新加载未生效",
-                    "The routing rule reload did not take effect"
+            if didCommitCandidate {
+                let reloadFailure = Self.classifyReloadFailure(
+                    error,
+                    candidateWasCommitted: true
                 )
-            ))
-        } catch {
-            throw error
+                logger.warning(
+                    "reload result became ambiguous after commit; recovering before releasing control: "
+                        + error.localizedDescription
+                )
+                do {
+                    // Recovery remains inside the same FIFO transaction. A
+                    // following reload cannot validate against or signal the
+                    // ambiguous process, and will capture the recovered
+                    // session only after this completes.
+                    try await recoverCommittedReload(selectedNode: selectedNode)
+                    await selectorControlGate.release()
+                    return
+                } catch {
+                    await selectorControlGate.release()
+                    if isShuttingDown || error is CancellationError {
+                        throw CancellationError()
+                    }
+                    throw reloadFailure
+                }
+            }
+
+            await selectorControlGate.release()
+            if error is CancellationError { throw CancellationError() }
+            if let failure = error as? EngineFailure { throw failure }
+            throw Self.classifyReloadFailure(error, candidateWasCommitted: false)
         }
+    }
+
+    private func recoverCommittedReload(selectedNode: String?) async throws {
+        // Use a fresh task so cancellation of the user operation after commit
+        // cannot interrupt restoration halfway through. Application shutdown
+        // is still authoritative through `isShuttingDown`.
+        let recovery = Task { [self] in
+            await stop()
+            guard !isShuttingDown else { throw CancellationError() }
+            try await start(selectedNode: selectedNode)
+            guard status.isRunning else {
+                throw EngineFailure(
+                    kind: .reload,
+                    message: CoreL10n.text(
+                        "sing-box 重新加载恢复失败",
+                        "Could not recover from the sing-box reload"
+                    )
+                )
+            }
+        }
+        try await recovery.value
+    }
+
+    nonisolated static func classifyReloadFailure(
+        _ error: Error,
+        candidateWasCommitted: Bool
+    ) -> Error {
+        // Before commit, preserve validation/compiler/control errors so
+        // callers keep the working process. After commit, an untyped control
+        // error leaves the observed reload result ambiguous and must use the
+        // typed recovery path.
+        guard candidateWasCommitted else { return error }
+        return EngineFailure(kind: .reload, message: error.localizedDescription)
+    }
+
+    private func confirmReloadWhileHoldingGate(
+        child: Process,
+        runningSession: UUID,
+        expectedNodes: Set<String>,
+        selectedNode: String?,
+        epoch expectedEpoch: UInt64,
+        configurationGeneration expectedGeneration: UInt64
+    ) async throws {
+        for _ in 0 ..< 50 {
+            try ensureCurrent(expectedEpoch)
+            try ensureConfigurationCurrent(expectedGeneration)
+            guard sessionID == runningSession, child.isRunning else {
+                throw EngineFailure(
+                    kind: .reload,
+                    message: CoreL10n.text(
+                        "sing-box 在重新加载时退出",
+                        "sing-box exited while reloading"
+                    )
+                )
+            }
+            if let selector = try? await nativeAPI.selector(knownNodes: Array(expectedNodes)) {
+                try ensureCurrent(expectedEpoch)
+                try ensureConfigurationCurrent(expectedGeneration)
+                guard Set(selector.nodes) == expectedNodes else {
+                    try await Task.sleep(nanoseconds: 100_000_000)
+                    continue
+                }
+                if let selectedNode, selector.current != selectedNode {
+                    try await nativeAPI.select(node: selectedNode)
+                    // `select` crosses an actor boundary. A newer reload may
+                    // have started while it was in flight, so never report the
+                    // old mutation as current after the await.
+                    try ensureCurrent(expectedEpoch)
+                    try ensureConfigurationCurrent(expectedGeneration)
+                }
+                return
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        throw EngineFailure(
+            kind: .reload,
+            message: CoreL10n.text(
+                "规则重新加载未生效",
+                "The routing rule reload did not take effect"
+            )
+        )
     }
 
     public func select(node: String) async throws {
         guard !isShuttingDown else { throw CancellationError() }
         switch status {
         case .running:
-            try await nativeAPI.select(node: node)
+            try await selectorControlGate.acquire()
+            do {
+                try Task.checkCancellation()
+                guard !isShuttingDown, status.isRunning else { throw CancellationError() }
+                try await nativeAPI.select(node: node)
+                await selectorControlGate.release()
+            } catch {
+                await selectorControlGate.release()
+                throw error
+            }
         case .stopped, .failed:
             try await prepareConfiguration(selectedNode: node)
         case .starting, .stopping:
@@ -354,12 +477,21 @@ public actor EngineSupervisor {
         }
         let preparationEpoch = epoch
         let preparationGeneration = beginConfigurationOperation()
-        let candidate = try await compiler.makeRuntimeConfigurationCandidate(selectedNode: selectedNode)
-        defer { candidate.discard() }
-        try await validateConfigurationCandidate(candidate.configurationURL)
-        try ensureCurrent(preparationEpoch)
-        guard preparationGeneration == configurationGeneration else { return }
-        _ = try candidate.commit()
+        do {
+            let candidate = try await compiler.makeRuntimeConfigurationCandidate(selectedNode: selectedNode)
+            defer { candidate.discard() }
+            try await validateConfigurationCandidate(candidate.configurationURL)
+            try ensureCurrent(preparationEpoch)
+            try ensureConfigurationCurrent(preparationGeneration)
+            _ = try candidate.commit()
+        } catch {
+            // Validation may finish with an error only after a newer request
+            // has already committed. Supersession takes precedence over that
+            // stale error so callers cannot roll back newer persisted intent.
+            try ensureCurrent(preparationEpoch)
+            try ensureConfigurationCurrent(preparationGeneration)
+            throw error
+        }
     }
 
     private func validateConfigurationCandidate(_ url: URL) async throws {
@@ -367,18 +499,27 @@ public actor EngineSupervisor {
             try await configurationValidator(url)
         } catch is CancellationError {
             throw CancellationError()
+        } catch let failure as EngineFailure {
+            throw failure
+        } catch let NekoPilotError.processFailed(message) {
+            // SingBoxValidator historically reports a non-zero `check` exit
+            // through the source-compatible string error. At this boundary it
+            // specifically means that sing-box rejected the candidate.
+            throw EngineFailure(kind: .configuration, message: message)
+        } catch let error as NekoPilotError {
+            // Preserve actionable infrastructure errors such as a missing
+            // bundled core rather than disguising them as invalid JSON.
+            throw error
         } catch {
-            throw NekoPilotError.processFailed(EngineFailure(
+            throw EngineFailure(
                 kind: .configuration,
                 message: error.localizedDescription
-            ))
+            )
         }
     }
 
     private func failure(from error: Error, fallback: EngineFailure.Kind) -> EngineFailure {
-        if case let NekoPilotError.processFailed(failure) = error {
-            return failure
-        }
+        if let failure = error as? EngineFailure { return failure }
         return EngineFailure(kind: fallback, message: error.localizedDescription)
     }
 
@@ -495,13 +636,13 @@ public actor EngineSupervisor {
                 return candidate
             }
         }
-        throw NekoPilotError.processFailed(EngineFailure(
+        throw EngineFailure(
             kind: .startup,
             message: CoreL10n.text(
                 "无法分配节点健康检查端口",
                 "Could not allocate the node health-check port"
             )
-        ))
+        )
     }
 
     @discardableResult
@@ -591,13 +732,13 @@ public actor EngineSupervisor {
             pid: child.processIdentifier,
             expectedExecutablePath: executable.path
         ) else {
-            throw NekoPilotError.processFailed(EngineFailure(
+            throw EngineFailure(
                 kind: .startup,
                 message: CoreL10n.text(
                     "无法确认 sing-box 进程身份",
                     "Could not verify the sing-box process identity"
                 )
-            ))
+            )
         }
         let marker = EngineOwnershipMarker(
             sessionID: session.uuidString,

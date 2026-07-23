@@ -3,20 +3,38 @@ import Testing
 @testable import NekoPilotCore
 
 private actor RuntimeCandidateValidationGate {
+    private let rejectSecondValidation: Bool
+    private let rejectFirstAfterRelease: Bool
     private var invocationCount = 0
     private var firstValidationStarted = false
     private var startWaiters: [CheckedContinuation<Void, Never>] = []
     private var firstRelease: CheckedContinuation<Void, Never>?
 
+    init(
+        rejectSecondValidation: Bool = false,
+        rejectFirstAfterRelease: Bool = false
+    ) {
+        self.rejectSecondValidation = rejectSecondValidation
+        self.rejectFirstAfterRelease = rejectFirstAfterRelease
+    }
+
     func validate(_ configuration: URL) async throws {
         _ = configuration
         invocationCount += 1
-        guard invocationCount == 1 else { return }
+        guard invocationCount == 1 else {
+            if rejectSecondValidation {
+                throw NekoPilotError.processFailed("newer candidate rejected")
+            }
+            return
+        }
         firstValidationStarted = true
         for waiter in startWaiters { waiter.resume() }
         startWaiters.removeAll()
         await withCheckedContinuation { continuation in
             firstRelease = continuation
+        }
+        if rejectFirstAfterRelease {
+            throw NekoPilotError.processFailed("older candidate rejected")
         }
     }
 
@@ -92,6 +110,10 @@ struct ConfigurationCompilerRulePriorityTests {
         let firstData = try Data(contentsOf: first.configurationURL)
         let secondData = try Data(contentsOf: second.configurationURL)
         #expect(firstData != secondData)
+
+        await compiler.removeAbandonedRuntimeCandidates()
+        #expect(FileManager.default.fileExists(atPath: first.configurationURL.path))
+        #expect(FileManager.default.fileExists(atPath: second.configurationURL.path))
 
         let committedURL = try first.commit()
         #expect(committedURL == paths.runtimeConfig)
@@ -171,7 +193,7 @@ struct ConfigurationCompilerRulePriorityTests {
         do {
             try await engine.start(selectedNode: "@np:\(identifier):node")
             Issue.record("Engine started with a rejected candidate")
-        } catch let NekoPilotError.processFailed(failure) {
+        } catch let failure as EngineFailure {
             #expect(failure.kind == .configuration)
             #expect(failure.message == "validator rejected candidate")
         } catch {
@@ -182,8 +204,7 @@ struct ConfigurationCompilerRulePriorityTests {
             Issue.record("Engine did not publish a failure state")
             return
         }
-        #expect(failure.kind == .configuration)
-        #expect(failure.message == "validator rejected candidate")
+        #expect(failure == "validator rejected candidate")
     }
 
     @Test("A newer preparation cannot be overwritten by an older validation")
@@ -243,13 +264,225 @@ struct ConfigurationCompilerRulePriorityTests {
         }
         try await newerPreparation.value
         await gate.releaseFirstValidation()
-        try await olderPreparation.value
+        do {
+            try await olderPreparation.value
+            Issue.record("Superseded preparation reported success")
+        } catch is CancellationError {
+            // Explicit supersession is the expected observable result.
+        } catch {
+            Issue.record("Unexpected older preparation error: \(error)")
+        }
 
         let liveConfiguration = try JSONValue.decodeObject(from: Data(contentsOf: paths.runtimeConfig))
         let selector = try #require(liveConfiguration["outbounds"]?.arrayValue?.first(where: {
             $0.objectValue?["tag"]?.stringValue == "ExitGateway"
         })?.objectValue)
         #expect(selector["outbounds"]?.arrayValue?.first?.stringValue == newerNode)
+    }
+
+    @Test("An older preparation cannot report success when its replacement fails")
+    func failedNewerPreparationStillSupersedesOlderRequest() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NekoPilot-Failed-Newer-Preparation-Test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let support = root.appendingPathComponent("Application Support", isDirectory: true)
+        let logs = root.appendingPathComponent("Logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+
+        let paths = AppPaths(applicationSupport: support, logs: logs)
+        let settings = try SettingsStore(fileURL: paths.settings)
+        let repository = try SubscriptionRepository(databaseURL: paths.database)
+        let identifier = try await repository.upsert(
+            url: nil,
+            name: "Failed newest",
+            sourceType: .localLink,
+            config: [
+                "outbounds": .array([
+                    .object([
+                        "type": .string("vless"),
+                        "tag": .string("older"),
+                        "server": .string("older.example.com"),
+                        "server_port": .number(443),
+                        "uuid": .string("00000000-0000-4000-8000-000000000001"),
+                    ]),
+                    .object([
+                        "type": .string("vless"),
+                        "tag": .string("newer"),
+                        "server": .string("newer.example.com"),
+                        "server_port": .number(443),
+                        "uuid": .string("00000000-0000-4000-8000-000000000002"),
+                    ]),
+                ]),
+            ]
+        )
+        let compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
+        let sentinel = Data("last-known-good".utf8)
+        try AtomicFile.write(sentinel, to: paths.runtimeConfig)
+        let gate = RuntimeCandidateValidationGate(rejectSecondValidation: true)
+        let engine = EngineSupervisor(
+            settings: settings,
+            compiler: compiler,
+            systemProxy: SystemProxyManager(markerURL: paths.proxyOwnership),
+            nativeAPI: NativeControlClient(),
+            configurationValidator: { try await gate.validate($0) }
+        )
+
+        let olderPreparation = Task {
+            try await engine.prepareConfiguration(selectedNode: "@np:\(identifier):older")
+        }
+        await gate.waitUntilFirstValidationStarts()
+        do {
+            try await engine.prepareConfiguration(selectedNode: "@np:\(identifier):newer")
+            Issue.record("Rejected newer preparation reported success")
+        } catch let failure as EngineFailure {
+            #expect(failure.kind == .configuration)
+            #expect(failure.message == "newer candidate rejected")
+        } catch {
+            Issue.record("Unexpected newer preparation error: \(error)")
+        }
+        await gate.releaseFirstValidation()
+        do {
+            try await olderPreparation.value
+            Issue.record("Superseded older preparation reported success")
+        } catch is CancellationError {
+            // The caller can now distinguish supersession from persistence.
+        } catch {
+            Issue.record("Unexpected older preparation error: \(error)")
+        }
+        #expect(try Data(contentsOf: paths.runtimeConfig) == sentinel)
+    }
+
+    @Test("A stale validation error cannot replace a newer successful preparation")
+    func failedOlderPreparationIsReportedAsSuperseded() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NekoPilot-Failed-Older-Preparation-Test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let support = root.appendingPathComponent("Application Support", isDirectory: true)
+        let logs = root.appendingPathComponent("Logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+
+        let paths = AppPaths(applicationSupport: support, logs: logs)
+        let settings = try SettingsStore(fileURL: paths.settings)
+        let repository = try SubscriptionRepository(databaseURL: paths.database)
+        let identifier = try await repository.upsert(
+            url: nil,
+            name: "Failed older",
+            sourceType: .localLink,
+            config: [
+                "outbounds": .array([
+                    .object([
+                        "type": .string("vless"),
+                        "tag": .string("older"),
+                        "server": .string("older.example.com"),
+                        "server_port": .number(443),
+                        "uuid": .string("00000000-0000-4000-8000-000000000001"),
+                    ]),
+                    .object([
+                        "type": .string("vless"),
+                        "tag": .string("newer"),
+                        "server": .string("newer.example.com"),
+                        "server_port": .number(443),
+                        "uuid": .string("00000000-0000-4000-8000-000000000002"),
+                    ]),
+                ]),
+            ]
+        )
+        let compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
+        let gate = RuntimeCandidateValidationGate(rejectFirstAfterRelease: true)
+        let engine = EngineSupervisor(
+            settings: settings,
+            compiler: compiler,
+            systemProxy: SystemProxyManager(markerURL: paths.proxyOwnership),
+            nativeAPI: NativeControlClient(),
+            configurationValidator: { try await gate.validate($0) }
+        )
+
+        let olderPreparation = Task {
+            try await engine.prepareConfiguration(selectedNode: "@np:\(identifier):older")
+        }
+        await gate.waitUntilFirstValidationStarts()
+        try await engine.prepareConfiguration(selectedNode: "@np:\(identifier):newer")
+        await gate.releaseFirstValidation()
+
+        do {
+            try await olderPreparation.value
+            Issue.record("Stale validation failure was reported as current")
+        } catch is CancellationError {
+            // The newer successful preparation owns the observable result.
+        } catch {
+            Issue.record("Unexpected stale preparation error: \(error)")
+        }
+
+        let liveConfiguration = try JSONValue.decodeObject(from: Data(contentsOf: paths.runtimeConfig))
+        let selector = try #require(liveConfiguration["outbounds"]?.arrayValue?.first(where: {
+            $0.objectValue?["tag"]?.stringValue == "ExitGateway"
+        })?.objectValue)
+        #expect(selector["outbounds"]?.arrayValue?.first?.stringValue == "@np:\(identifier):newer")
+    }
+
+    @Test("Candidate validation preserves actionable typed errors")
+    func candidateValidationPreservesTypedErrors() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NekoPilot-Typed-Validator-Error-Test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let support = root.appendingPathComponent("Application Support", isDirectory: true)
+        let logs = root.appendingPathComponent("Logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+
+        let paths = AppPaths(applicationSupport: support, logs: logs)
+        let settings = try SettingsStore(fileURL: paths.settings)
+        let repository = try SubscriptionRepository(databaseURL: paths.database)
+        let identifier = try await repository.upsert(
+            url: nil,
+            name: "Typed validator error",
+            sourceType: .localLink,
+            config: [
+                "outbounds": .array([.object([
+                    "type": .string("vless"),
+                    "tag": .string("node"),
+                    "server": .string("example.com"),
+                    "server_port": .number(443),
+                    "uuid": .string("00000000-0000-4000-8000-000000000001"),
+                ])]),
+            ]
+        )
+        let compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
+        let engine = EngineSupervisor(
+            settings: settings,
+            compiler: compiler,
+            systemProxy: SystemProxyManager(markerURL: paths.proxyOwnership),
+            nativeAPI: NativeControlClient(),
+            configurationValidator: { _ in throw NekoPilotError.singBoxMissing }
+        )
+
+        do {
+            try await engine.prepareConfiguration(selectedNode: "@np:\(identifier):node")
+            Issue.record("Missing sing-box error was swallowed")
+        } catch let error as NekoPilotError {
+            #expect(error == .singBoxMissing)
+        } catch {
+            Issue.record("Unexpected validator error: \(error)")
+        }
+
+        let controlFailure = EngineFailure(kind: .control, message: "validator transport unavailable")
+        let typedEngine = EngineSupervisor(
+            settings: settings,
+            compiler: compiler,
+            systemProxy: SystemProxyManager(markerURL: paths.proxyOwnership),
+            nativeAPI: NativeControlClient(),
+            configurationValidator: { _ in throw controlFailure }
+        )
+        do {
+            try await typedEngine.prepareConfiguration(selectedNode: "@np:\(identifier):node")
+            Issue.record("Typed validator error was swallowed")
+        } catch let failure as EngineFailure {
+            #expect(failure == controlFailure)
+        } catch {
+            Issue.record("Unexpected typed validator error: \(error)")
+        }
     }
 
     @Test("Health probe routing is inbound-scoped, optional, and highest priority")

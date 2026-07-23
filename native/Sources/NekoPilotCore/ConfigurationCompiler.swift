@@ -27,6 +27,13 @@ struct RuntimeConfigurationCandidate: Sendable {
     }
 }
 
+private enum RuntimeCandidateOwnership {
+    /// Shared by every compiler created in this process. A random token,
+    /// instead of the PID alone, also distinguishes a relaunched process when
+    /// macOS happens to reuse the same PID.
+    static let currentProcessToken = UUID().uuidString.lowercased()
+}
+
 public actor ConfigurationCompiler {
     private let paths: AppPaths
     private let settings: SettingsStore
@@ -38,16 +45,20 @@ public actor ConfigurationCompiler {
         self.repository = repository
     }
 
-    /// Removes candidates left by a previous abnormal process exit. This is
-    /// called during startup recovery, before any new compilation can begin.
+    /// Removes candidates left by a previous abnormal process exit while
+    /// preserving every candidate owned by this process. Recovery can suspend
+    /// while terminating an orphan, so a current start/reload may legitimately
+    /// create a candidate before cleanup resumes.
     func removeAbandonedRuntimeCandidates() {
         let directory = paths.runtimeConfig.deletingLastPathComponent()
+        let currentProcessPrefix = ".runtime.json.\(RuntimeCandidateOwnership.currentProcessToken)."
         guard let contents = try? FileManager.default.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: nil
         ) else { return }
         for url in contents where url.lastPathComponent.hasPrefix(".runtime.json.")
-            && url.lastPathComponent.hasSuffix(".candidate") {
+            && url.lastPathComponent.hasSuffix(".candidate")
+            && !url.lastPathComponent.hasPrefix(currentProcessPrefix) {
             try? FileManager.default.removeItem(at: url)
         }
     }
@@ -111,7 +122,9 @@ public actor ConfigurationCompiler {
         )
         let candidateURL = paths.runtimeConfig
             .deletingLastPathComponent()
-            .appendingPathComponent(".runtime.json.\(UUID().uuidString).candidate")
+            .appendingPathComponent(
+                ".runtime.json.\(RuntimeCandidateOwnership.currentProcessToken).\(UUID().uuidString).candidate"
+            )
         try AtomicFile.write(try JSONValue.encodeObject(config, pretty: true), to: candidateURL)
         return RuntimeConfigurationCandidate(
             configurationURL: candidateURL,
