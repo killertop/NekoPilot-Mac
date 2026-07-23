@@ -731,6 +731,28 @@ struct ConfigurationCompilerRulePriorityTests {
         #expect(routeRules[customDirectRouteIndex].objectValue?["inbound"] == nil)
 
         let dnsRules = config["dns"]?.objectValue?["rules"]?.arrayValue ?? []
+        let localPreferredDNSIndex = try #require(dnsRules.firstIndex(where: { value in
+            let rule = value.objectValue
+            return rule?["preferred_by"]?.arrayValue?.compactMap(\.stringValue) == ["local"]
+                && rule?["action"]?.stringValue == "route"
+                && rule?["server"]?.stringValue == "local"
+        }))
+        let localSuffixDNSIndex = try #require(dnsRules.firstIndex(where: { value in
+            let rule = value.objectValue
+            let suffixes: Set<String> = Set(rule?["domain_suffix"]?.arrayValue?.compactMap(\.stringValue) ?? [])
+            return Set(["local", "lan", "localdomain", "localhost"]).isSubset(of: suffixes)
+                && rule?["action"]?.stringValue == "route"
+                && rule?["server"]?.stringValue == "local"
+        }))
+        let proxyEvaluationDNSIndex = try #require(dnsRules.firstIndex(where: { value in
+            let rule = value.objectValue
+            return rule?["action"]?.stringValue == "evaluate"
+                && rule?["server"]?.stringValue == "dns_proxy"
+        }))
+        #expect(localPreferredDNSIndex < proxyEvaluationDNSIndex)
+        #expect(localSuffixDNSIndex < proxyEvaluationDNSIndex)
+        #expect(!dnsRules.contains(where: { $0.objectValue?["race"]?.boolValue == true }))
+        #expect(!dnsRules.contains(where: { $0.objectValue?["speculative"]?.boolValue == true }))
         let proxyDNSIndex = try #require(dnsRules.firstIndex(where: { value in
             let rule = value.objectValue
             let suffixes: Set<String> = Set(rule?["domain_suffix"]?.arrayValue?.compactMap { $0.stringValue } ?? [])
@@ -742,6 +764,8 @@ struct ConfigurationCompilerRulePriorityTests {
             return ruleSets.contains("geosite-cn") || ruleSets.contains("geoip-cn")
         }))
         #expect(proxyDNSIndex < chinaDNSIndex)
+        #expect(proxyDNSIndex < localPreferredDNSIndex)
+        #expect(proxyDNSIndex < localSuffixDNSIndex)
         let healthDNSIndex = try #require(dnsRules.firstIndex(where: { value in
             let rule = value.objectValue
             return rule?["server"]?.stringValue == "dns_proxy"
@@ -756,6 +780,10 @@ struct ConfigurationCompilerRulePriorityTests {
                 && domains.contains(ProxyHealthEndpoint.host)
         }))
         #expect(healthDNSIndex < customDirectDNSIndex)
+        #expect(healthDNSIndex < localPreferredDNSIndex)
+        #expect(healthDNSIndex < localSuffixDNSIndex)
+        #expect(customDirectDNSIndex < localPreferredDNSIndex)
+        #expect(customDirectDNSIndex < localSuffixDNSIndex)
         #expect(dnsRules[customDirectDNSIndex].objectValue?["inbound"] == nil)
 
         // sing-box 1.14 beta no longer merges multi-rule, logical, or inverted

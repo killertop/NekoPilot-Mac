@@ -127,6 +127,55 @@ checks.append(("repository and config compiler", {
         proxyDNSRule?["server"]?.stringValue == "dns_proxy",
         "custom proxy domain did not override the China direct DNS rule set"
     )
+    let localPreferredIndex = dnsRules.firstIndex { rule in
+        rule["preferred_by"]?.arrayValue?.compactMap(\.stringValue) == ["local"]
+            && rule["action"]?.stringValue == "route"
+            && rule["server"]?.stringValue == "local"
+    }
+    let localSuffixIndex = dnsRules.firstIndex { rule in
+        let suffixes = Set(rule["domain_suffix"]?.arrayValue?.compactMap(\.stringValue) ?? [])
+        return Set(["local", "lan", "localdomain", "localhost"]).isSubset(of: suffixes)
+            && rule["action"]?.stringValue == "route"
+            && rule["server"]?.stringValue == "local"
+    }
+    let proxyEvaluationIndex = dnsRules.firstIndex { rule in
+        rule["action"]?.stringValue == "evaluate" && rule["server"]?.stringValue == "dns_proxy"
+    }
+    let localRulesPrecedeProxy = {
+        guard let localPreferredIndex, let localSuffixIndex, let proxyEvaluationIndex else {
+            return false
+        }
+        return localPreferredIndex < proxyEvaluationIndex && localSuffixIndex < proxyEvaluationIndex
+    }()
+    try expect(
+        localRulesPrecedeProxy,
+        "local DNS rules must be evaluated before dns_proxy so LAN names do not leak"
+    )
+    try expect(
+        !dnsRules.contains(where: { $0["race"]?.boolValue == true || $0["speculative"]?.boolValue == true }),
+        "DNS race/speculative must remain off until resolver-level leakage tests justify them"
+    )
+    let customDirectIndex = dnsRules.firstIndex { rule in
+        rule["domain"]?.arrayValue?.contains(.string("direct.example")) == true
+            && rule["server"]?.stringValue == "system"
+    }
+    let customProxyIndex = dnsRules.firstIndex { rule in
+        rule["domain_suffix"]?.arrayValue?.contains(.string(".proxy.example")) == true
+            && rule["server"]?.stringValue == "dns_proxy"
+    }
+    let customRulesPrecedeLocal = {
+        guard let customDirectIndex, let customProxyIndex, let localPreferredIndex, let localSuffixIndex else {
+            return false
+        }
+        return customDirectIndex < localPreferredIndex
+            && customDirectIndex < localSuffixIndex
+            && customProxyIndex < localPreferredIndex
+            && customProxyIndex < localSuffixIndex
+    }()
+    try expect(
+        customRulesPrecedeLocal,
+        "explicit user DNS routes must retain priority over the default local DNS rules"
+    )
     try await SingBoxValidator.validate(configuration: output)
     let runtimeConfigurationBeforeOfflineTest = try Data(contentsOf: output)
     let offlineAPI = try LocalAPIEndpoint.make()

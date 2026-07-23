@@ -105,7 +105,11 @@ final class StatusItemController: NSObject {
             fallback?.isTemplate = true
             return fallback
         }
-        image.size = NSSize(width: 18, height: 18)
+        // Keep the source at its native 72 pt canvas. `statusImage(for:)`
+        // crops the transparent export padding before downscaling it into the
+        // 18 pt menu-bar slot, so the visible mark uses the available space
+        // instead of appearing about one fifth too small.
+        image.size = NSSize(width: 72, height: 72)
         image.isTemplate = true
         return image
     }
@@ -116,12 +120,15 @@ final class StatusItemController: NSObject {
             NSColor.black.setStroke()
             NSColor.black.setFill()
             baseTemplateImage.draw(
-                // The shield is geometrically centered but visually top-heavy.
-                // Lower the top-heavy shield by 1.5pt to match the optical
-                // baseline of standard macOS menu-bar icons without changing
-                // its size. The status badge has its own balanced position.
-                in: NSRect(x: 1, y: 0.5, width: 16, height: 16),
-                from: .zero,
+                // The 72 px source has horizontal and vertical
+                // transparent safety border. Render its visible art at the
+                // full status-item width rather than scaling that padding too.
+                // The slight low offset keeps the top-heavy shield aligned
+                // with Apple's standard menu-bar symbols.
+                in: NSRect(x: 0, y: 1.1, width: 18, height: 15.35),
+                // Keep one source pixel of antialiasing room on every edge;
+                // the mask stays large without being clipped at the right.
+                from: NSRect(x: 1, y: 6, width: 70, height: 60),
                 operation: .sourceOver,
                 fraction: 1
             )

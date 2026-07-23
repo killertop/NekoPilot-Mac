@@ -26,6 +26,16 @@
     ],
     "rules": [
       {
+        "preferred_by": ["local"],
+        "action": "route",
+        "server": "local"
+      },
+      {
+        "domain_suffix": ["local", "lan", "localdomain", "localhost"],
+        "action": "route",
+        "server": "local"
+      },
+      {
         "action": "evaluate",
         "server": "dns_proxy"
       },
@@ -39,11 +49,6 @@
         "rule_set": ["geosite-cn"],
         "action": "route",
         "server": "system"
-      },
-      {
-        "domain_suffix": ["local", "lan", "localdomain", "localhost"],
-        "action": "route",
-        "server": "local"
       }
     ],
     "final": "dns_proxy",
