@@ -655,19 +655,23 @@ private struct SourceDetailSheet: View {
     }
 
     private func endpointSummary(_ node: ProxyNode) -> String {
-        let server = node.outbound["server"]?.stringValue ?? "—"
-        let port = node.outbound["server_port"]?.numberValue.map { String(Int($0)) } ?? "—"
+        let server = node.endpointSummary.server ?? "—"
+        let port = node.endpointSummary.port.map(String.init) ?? "—"
         return "\(server):\(port)"
     }
 
     private func tlsSummary(_ node: ProxyNode) -> String {
-        guard let tls = node.outbound["tls"]?.objectValue,
-              tls["enabled"]?.boolValue == true else {
+        let mode: String
+        switch node.endpointSummary.security {
+        case .none:
             return L10n.text("TLS：关闭", "TLS: Off")
+        case .tls:
+            mode = "TLS"
+        case .reality:
+            mode = "Reality"
         }
-        let mode = tls["reality"]?.objectValue == nil ? "TLS" : "Reality"
-        if let serverName = tls["server_name"]?.stringValue, !serverName.isEmpty {
-            return "\(mode) · SNI \(serverName)"
+        if let sni = node.endpointSummary.sni {
+            return "\(mode) · SNI \(sni)"
         }
         return mode
     }

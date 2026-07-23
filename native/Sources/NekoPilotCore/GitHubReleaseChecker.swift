@@ -20,9 +20,15 @@ public actor GitHubReleaseChecker {
 
     private let settings: SettingsStore
     private let session: URLSession
+    private let logger: any AppLogging
 
-    public init(settings: SettingsStore, session: URLSession? = nil) {
+    public init(
+        settings: SettingsStore,
+        session: URLSession? = nil,
+        logger: any AppLogging = AppLogger.shared
+    ) {
         self.settings = settings
+        self.logger = logger
         if let session {
             self.session = session
         } else {
@@ -44,7 +50,7 @@ public actor GitHubReleaseChecker {
         do {
             try await settings.set(.number(now.timeIntervalSince1970), for: SettingsStore.Key.lastUpdateCheck)
         } catch {
-            AppLogger.shared.warning("update-check timestamp could not be saved: \(error.localizedDescription)")
+            logger.warning("update-check timestamp could not be saved: \(error.localizedDescription)")
             return nil
         }
 
@@ -65,7 +71,7 @@ public actor GitHubReleaseChecker {
         } catch is CancellationError {
             return nil
         } catch {
-            AppLogger.shared.info("GitHub update check skipped: \(error.localizedDescription)")
+            logger.info("GitHub update check skipped: \(error.localizedDescription)")
             return nil
         }
     }

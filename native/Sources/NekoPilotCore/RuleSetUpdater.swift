@@ -26,10 +26,12 @@ public actor RuleSetUpdater {
     public static let retryInterval: TimeInterval = 60 * 60
     private static let maximumBytes = 64 * 1024 * 1024
     private let paths: AppPaths
+    private let logger: any AppLogging
     private var isRefreshing = false
 
-    public init(paths: AppPaths) {
+    public init(paths: AppPaths, logger: any AppLogging = AppLogger.shared) {
         self.paths = paths
+        self.logger = logger
     }
 
     /// Refreshes both managed rule sets together, or tells the caller exactly
@@ -60,10 +62,10 @@ public actor RuleSetUpdater {
             }
             try Self.installGeneration(in: paths.ruleSets, files: downloads, label: "remote")
             try AtomicFile.write(Data(String(now.timeIntervalSince1970).utf8), to: timestampURL)
-            AppLogger.shared.info("refreshed managed SagerNet China rule sets")
+            logger.info("refreshed managed SagerNet China rule sets")
             return .updated
         } catch {
-            AppLogger.shared.info("managed rule-set refresh deferred: \(error.localizedDescription)")
+            logger.info("managed rule-set refresh deferred: \(error.localizedDescription)")
             return .failed(retryDelay: Self.retryInterval)
         }
     }

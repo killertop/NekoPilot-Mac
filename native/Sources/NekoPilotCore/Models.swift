@@ -11,12 +11,39 @@ enum CoreL10n {
     }
 }
 
+public struct EngineFailure: Equatable, Sendable {
+    public enum Kind: String, Equatable, Sendable {
+        case configuration
+        case startup
+        case control
+        case reload
+        case unexpectedExit
+        case shutdown
+        case systemProxy
+        case operation
+    }
+
+    public let kind: Kind
+    public let message: String
+
+    public init(kind: Kind, message: String) {
+        self.kind = kind
+        self.message = message
+    }
+}
+
 public enum EngineStatus: Equatable, Sendable {
     case stopped
     case starting
     case running
     case stopping
-    case failed(String)
+    case failed(EngineFailure)
+
+    /// Keeps existing construction call sites working when they only have
+    /// display text. New engine code should provide a concrete failure kind.
+    public static func failed(_ message: String) -> EngineStatus {
+        .failed(EngineFailure(kind: .operation, message: message))
+    }
 
     public var isRunning: Bool {
         if case .running = self { return true }
@@ -61,12 +88,47 @@ public struct Subscription: Identifiable, Equatable, Sendable {
     }
 }
 
+/// The small, typed subset of an outbound that presentation code needs.
+/// The complete outbound remains on ``ProxyNode`` for sing-box compilation.
+public struct NodeEndpointSummary: Equatable, Sendable {
+    public enum Security: Equatable, Sendable {
+        case none
+        case tls
+        case reality
+    }
+
+    public let server: String?
+    public let port: Int?
+    public let security: Security
+    public let sni: String?
+
+    fileprivate init(outbound: [String: JSONValue]) {
+        server = outbound["server"]?.stringValue
+        port = outbound["server_port"]?.numberValue.flatMap { Int(exactly: $0) }
+
+        guard let tls = outbound["tls"]?.objectValue,
+              tls["enabled"]?.boolValue == true else {
+            security = .none
+            sni = nil
+            return
+        }
+
+        security = tls["reality"]?.objectValue == nil ? .tls : .reality
+        if let serverName = tls["server_name"]?.stringValue, !serverName.isEmpty {
+            sni = serverName
+        } else {
+            sni = nil
+        }
+    }
+}
+
 public struct ProxyNode: Identifiable, Equatable, Sendable {
     public let sourceIdentifier: String
     public let sourceName: String
     public let originalTag: String
     public let runtimeTag: String
     public let protocolName: String
+    public let endpointSummary: NodeEndpointSummary
     public let outbound: [String: JSONValue]
     public let locationFingerprint: String
 
@@ -110,6 +172,7 @@ public struct ProxyNode: Identifiable, Equatable, Sendable {
         self.originalTag = originalTag
         self.runtimeTag = runtimeTag
         self.protocolName = protocolName
+        endpointSummary = NodeEndpointSummary(outbound: outbound)
         self.outbound = outbound
         locationFingerprint = Self.makeLocationFingerprint(
             from: outbound,
@@ -206,8 +269,14 @@ public enum NekoPilotError: LocalizedError, Equatable {
     case duplicateRule
     case singBoxMissing
     case portOccupied(Int)
-    case processFailed(String)
+    case processFailed(EngineFailure)
     case invalidSetting(String)
+
+    /// Keeps existing construction call sites working while engine-owned sites
+    /// provide an `EngineFailure` with a precise kind.
+    public static func processFailed(_ message: String) -> NekoPilotError {
+        .processFailed(EngineFailure(kind: .operation, message: message))
+    }
 
     public var errorDescription: String? {
         switch self {
@@ -229,7 +298,7 @@ public enum NekoPilotError: LocalizedError, Equatable {
         case .duplicateRule: CoreL10n.text("规则已存在", "The rule already exists")
         case .singBoxMissing: CoreL10n.text("缺少 sing-box 代理核心", "The sing-box core is missing")
         case let .portOccupied(port): CoreL10n.text("端口 \(port) 已被占用", "Port \(port) is already in use")
-        case let .processFailed(message): message
+        case let .processFailed(failure): failure.message
         case let .invalidSetting(key): CoreL10n.text("设置项无效：\(key)", "Invalid setting: \(key)")
         }
     }

@@ -6,7 +6,9 @@ import Foundation
 public enum DNSResolverDetector {
     public static let fallback = "223.5.5.5"
 
-    public static func detectSystemResolver() async -> String? {
+    public static func detectSystemResolver(
+        logger: any AppLogging = AppLogger.shared
+    ) async -> String? {
         do {
             let result = try await CommandRunner.run(
                 executable: URL(fileURLWithPath: "/usr/sbin/scutil"),
@@ -16,7 +18,7 @@ public enum DNSResolverDetector {
             guard result.status == 0 else { return nil }
             return parseResolvers(from: result.output).first
         } catch {
-            AppLogger.shared.warning("system DNS detection failed: \(error.localizedDescription)")
+            logger.warning("system DNS detection failed: \(error.localizedDescription)")
             return nil
         }
     }

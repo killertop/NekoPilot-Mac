@@ -1,6 +1,32 @@
 import Foundation
 import Darwin
 
+/// A uniquely named runtime configuration that has not yet been promoted to
+/// the live `runtime.json`.  Keeping compilation separate from promotion lets
+/// the engine validate the exact bytes it will run before replacing the live
+/// file.
+struct RuntimeConfigurationCandidate: Sendable {
+    let configurationURL: URL
+    private let liveConfigurationURL: URL
+
+    init(configurationURL: URL, liveConfigurationURL: URL) {
+        self.configurationURL = configurationURL
+        self.liveConfigurationURL = liveConfigurationURL
+    }
+
+    @discardableResult
+    func commit() throws -> URL {
+        let data = try Data(contentsOf: configurationURL)
+        try AtomicFile.write(data, to: liveConfigurationURL)
+        discard()
+        return liveConfigurationURL
+    }
+
+    func discard() {
+        try? FileManager.default.removeItem(at: configurationURL)
+    }
+}
+
 public actor ConfigurationCompiler {
     private let paths: AppPaths
     private let settings: SettingsStore
@@ -10,6 +36,20 @@ public actor ConfigurationCompiler {
         self.paths = paths
         self.settings = settings
         self.repository = repository
+    }
+
+    /// Removes candidates left by a previous abnormal process exit. This is
+    /// called during startup recovery, before any new compilation can begin.
+    func removeAbandonedRuntimeCandidates() {
+        let directory = paths.runtimeConfig.deletingLastPathComponent()
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        ) else { return }
+        for url in contents where url.lastPathComponent.hasPrefix(".runtime.json.")
+            && url.lastPathComponent.hasSuffix(".candidate") {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     @discardableResult
@@ -34,14 +74,49 @@ public actor ConfigurationCompiler {
         healthProbePort: Int? = nil,
         runtimeSettings: RuntimeConfigurationSettings
     ) async throws -> URL {
+        let candidate = try await makeRuntimeConfigurationCandidate(
+            selectedNode: selectedNode,
+            apiEndpoint: apiEndpoint,
+            healthProbePort: healthProbePort,
+            runtimeSettings: runtimeSettings
+        )
+        defer { candidate.discard() }
+        return try candidate.commit()
+    }
+
+    func makeRuntimeConfigurationCandidate(
+        selectedNode: String?,
+        apiEndpoint: LocalAPIEndpoint? = nil,
+        healthProbePort: Int? = nil
+    ) async throws -> RuntimeConfigurationCandidate {
+        try await makeRuntimeConfigurationCandidate(
+            selectedNode: selectedNode,
+            apiEndpoint: apiEndpoint,
+            healthProbePort: healthProbePort,
+            runtimeSettings: await settings.runtimeConfiguration()
+        )
+    }
+
+    func makeRuntimeConfigurationCandidate(
+        selectedNode: String?,
+        apiEndpoint: LocalAPIEndpoint? = nil,
+        healthProbePort: Int? = nil,
+        runtimeSettings: RuntimeConfigurationSettings
+    ) async throws -> RuntimeConfigurationCandidate {
         let config = try await makeConfiguration(
             selectedNode: selectedNode,
             apiEndpoint: apiEndpoint,
             healthProbePort: healthProbePort,
             runtimeSettings: runtimeSettings
         )
-        try AtomicFile.write(try JSONValue.encodeObject(config, pretty: true), to: paths.runtimeConfig)
-        return paths.runtimeConfig
+        let candidateURL = paths.runtimeConfig
+            .deletingLastPathComponent()
+            .appendingPathComponent(".runtime.json.\(UUID().uuidString).candidate")
+        try AtomicFile.write(try JSONValue.encodeObject(config, pretty: true), to: candidateURL)
+        return RuntimeConfigurationCandidate(
+            configurationURL: candidateURL,
+            liveConfigurationURL: paths.runtimeConfig
+        )
     }
 
     public func makeOfflineTestConfiguration(

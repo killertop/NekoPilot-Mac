@@ -3,6 +3,33 @@ import Foundation
 import Testing
 @testable import NekoPilotCore
 
+private actor SubscriptionValidationGate {
+    private var validationStarted = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var release: CheckedContinuation<Void, Never>?
+
+    func validate() async {
+        validationStarted = true
+        for waiter in startWaiters { waiter.resume() }
+        startWaiters.removeAll()
+        await withCheckedContinuation { continuation in
+            release = continuation
+        }
+    }
+
+    func waitUntilValidationStarts() async {
+        if validationStarted { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func releaseValidation() {
+        release?.resume()
+        release = nil
+    }
+}
+
 @Suite("Subscription import validation")
 struct SubscriptionImporterTests {
     @Test("Candidate validation failure never writes the real repository")
@@ -50,6 +77,38 @@ struct SubscriptionImporterTests {
         let nodes = try await repository.nodes()
         #expect(subscriptions.count == 1)
         #expect(nodes.map(\.originalTag) == ["VLESS · Accepted"])
+    }
+
+    @Test("Cancellation after validation never persists the candidate")
+    func cancellationAfterValidationNeverPersistsCandidate() async throws {
+        let location = try temporaryRepositoryLocation()
+        defer { try? FileManager.default.removeItem(at: location.directory) }
+        let repository = try SubscriptionRepository(databaseURL: location.database)
+        let gate = SubscriptionValidationGate()
+        let importer = SubscriptionImporter(
+            repository: repository,
+            candidateValidator: { _ in await gate.validate() }
+        )
+        let importTask = Task {
+            try await importer.importInput(
+                "vless://00000000-0000-0000-0000-000000000001@example.com:443?security=tls#Cancelled"
+            )
+        }
+
+        await gate.waitUntilValidationStarts()
+        importTask.cancel()
+        await gate.releaseValidation()
+        do {
+            _ = try await importTask.value
+            Issue.record("A cancelled candidate was imported")
+        } catch is CancellationError {
+            // Expected: cancellation is checked immediately before persistence.
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+
+        #expect(try await repository.subscriptions().isEmpty)
+        #expect(try await repository.nodes().isEmpty)
     }
 
     @Test("Editing a local node replaces its name and link atomically")

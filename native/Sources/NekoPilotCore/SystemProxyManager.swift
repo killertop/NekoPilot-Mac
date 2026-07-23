@@ -6,20 +6,22 @@ public actor SystemProxyManager {
     private let executable = URL(fileURLWithPath: "/usr/sbin/networksetup")
     private let host = "127.0.0.1"
     private let transaction = AsyncMutex()
+    private let logger: any AppLogging
     private var activeSession: UUID?
 
-    public init(markerURL: URL) {
+    public init(markerURL: URL, logger: any AppLogging = AppLogger.shared) {
         self.markerURL = markerURL
+        self.logger = logger
     }
 
     public func recoverStaleOwnership() async throws {
         try await withTransaction {
             guard let marker = try self.readMarker() else { return }
             if self.markerBelongsToLiveOtherProcess(marker) {
-                AppLogger.shared.info("system proxy belongs to live NekoPilot pid=\(marker.pid); preserving")
+                self.logger.info("system proxy belongs to live NekoPilot pid=\(marker.pid); preserving")
                 return
             }
-            AppLogger.shared.warning("recovering stale system proxy session=\(marker.sessionID)")
+            self.logger.warning("recovering stale system proxy session=\(marker.sessionID)")
             try await self.restoreLocked(marker)
         }
     }
@@ -70,14 +72,14 @@ public actor SystemProxyManager {
                     return true
                 }
                 self.activeSession = session
-                AppLogger.shared.info("system proxy applied to \(prepared.count) services on \(self.host):\(port)")
+                self.logger.info("system proxy applied to \(prepared.count) services on \(self.host):\(port)")
                 return session
             } catch {
-                AppLogger.shared.error("system proxy apply failed: \(error.localizedDescription)")
+                self.logger.error("system proxy apply failed: \(error.localizedDescription)")
                 do {
                     try await self.restoreLocked(marker)
                 } catch {
-                    AppLogger.shared.error("system proxy rollback failed; marker retained: \(error.localizedDescription)")
+                    self.logger.error("system proxy rollback failed; marker retained: \(error.localizedDescription)")
                 }
                 throw error
             }
@@ -91,7 +93,7 @@ public actor SystemProxyManager {
                 return
             }
             if let expectedSession, marker.sessionID != expectedSession.uuidString {
-                AppLogger.shared.info("skipping proxy cleanup for superseded session=\(expectedSession)")
+                self.logger.info("skipping proxy cleanup for superseded session=\(expectedSession)")
                 return
             }
             try await self.restoreLocked(marker)
@@ -114,7 +116,7 @@ public actor SystemProxyManager {
         let availableServices = Set(try await networkServices())
         let failures = await marker.services.concurrentMap { backup -> String? in
             guard availableServices.contains(backup.name) else {
-                AppLogger.shared.info("network service removed; skipping proxy restore for \(backup.name)")
+                self.logger.info("network service removed; skipping proxy restore for \(backup.name)")
                 return nil
             }
             do {
@@ -141,7 +143,7 @@ public actor SystemProxyManager {
             try FileManager.default.removeItem(at: markerURL)
         }
         activeSession = nil
-        AppLogger.shared.info("system proxy ownership released")
+        logger.info("system proxy ownership released")
     }
 
     private func restore(

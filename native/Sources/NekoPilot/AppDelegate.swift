@@ -87,7 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let clean = await completion.wait()
             if !clean {
                 cleanup.cancel()
-                AppLogger.shared.error("termination cleanup exceeded 20 seconds; ownership markers retained for recovery")
+                model.logger.error("termination cleanup exceeded 20 seconds; ownership markers retained for recovery")
             }
             self?.statusItemController?.remove()
             self?.statusItemController = nil

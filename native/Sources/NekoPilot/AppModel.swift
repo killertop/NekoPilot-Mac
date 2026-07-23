@@ -59,6 +59,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var subscriptionRefreshErrors: [String: String] = [:]
 
     let paths: AppPaths
+    let logger: AppLogger
     let settings: SettingsStore
     let repository: SubscriptionRepository
     let importer: SubscriptionImporter
@@ -76,6 +77,9 @@ final class AppModel: ObservableObject {
     private var statusTask: Task<Void, Never>?
     private var selectionTask: Task<Void, Never>?
     private var automaticSwitchTask: Task<Void, Never>?
+    private var bootstrapTask: Task<Void, Never>?
+    private var lanConfirmationTasks: [UUID: Task<Void, Never>] = [:]
+    private var deepLinkTasks: [UUID: Task<Void, Never>] = [:]
     private var urlTestTask: Task<Void, Never>?
     private var nodeLocationTask: Task<Void, Never>?
     private var nodeLocationPredecessorTask: Task<Void, Never>?
@@ -102,22 +106,25 @@ final class AppModel: ObservableObject {
     init() throws {
         let storage = try AppStorageBootstrap.resolve()
         paths = storage.paths
+        logger = AppLogger()
+        logger.configure(destination: paths.logFile)
         settings = storage.settings
         repository = storage.repository
         storageAvailable = storage.isPersistent
         bootstrapError = storage.recoveryMessage
         importer = SubscriptionImporter(repository: repository, settings: settings)
         compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
-        nativeAPI = NativeControlClient()
-        systemProxy = SystemProxyManager(markerURL: paths.proxyOwnership)
+        nativeAPI = NativeControlClient(logger: logger)
+        systemProxy = SystemProxyManager(markerURL: paths.proxyOwnership, logger: logger)
         engine = EngineSupervisor(
             settings: settings,
             compiler: compiler,
             systemProxy: systemProxy,
             nativeAPI: nativeAPI,
-            ownershipURL: paths.engineOwnership
+            ownershipURL: paths.engineOwnership,
+            logger: logger
         )
-        tester = URLTester(compiler: compiler)
+        tester = URLTester(compiler: compiler, logger: logger)
         locationProbe = NodeLocationProbe(compiler: compiler)
         selection = NodeSelectionCoordinator(engine: engine, settings: settings)
         automaticSwitching = AutoNodeSwitchService(
@@ -127,17 +134,20 @@ final class AppModel: ObservableObject {
             tester: tester,
             nativeAPI: nativeAPI,
             selection: selection,
-            networkReadiness: networkReadiness
+            networkReadiness: networkReadiness,
+            logger: logger
         )
-        ruleSetUpdater = RuleSetUpdater(paths: paths)
-        releaseChecker = GitHubReleaseChecker(settings: settings)
-        AppLogger.shared.configure(destination: paths.logFile)
+        ruleSetUpdater = RuleSetUpdater(paths: paths, logger: logger)
+        releaseChecker = GitHubReleaseChecker(settings: settings, logger: logger)
     }
 
     deinit {
         statusTask?.cancel()
         selectionTask?.cancel()
         automaticSwitchTask?.cancel()
+        bootstrapTask?.cancel()
+        lanConfirmationTasks.values.forEach { $0.cancel() }
+        deepLinkTasks.values.forEach { $0.cancel() }
         trafficTask?.cancel()
         urlTestTask?.cancel()
         nodeLocationTask?.cancel()
@@ -157,8 +167,8 @@ final class AppModel: ObservableObject {
             for await next in stream {
                 guard !Task.isCancelled else { return }
                 status = next
-                if case let .failed(message) = next, errorMessage == nil {
-                    errorMessage = message
+                if case let .failed(failure) = next, errorMessage == nil {
+                    errorMessage = failure.message
                 }
                 await automaticSwitching.updateConnectionState(isRunning: next.isRunning)
                 if next.isRunning {
@@ -193,17 +203,23 @@ final class AppModel: ObservableObject {
                 rebuildSortedNodes()
             }
         }
-        Task { [weak self] in
+        bootstrapTask = Task { [weak self] in
             guard let self else { return }
             await engine.recoverOwnedProcess()
             await engine.recoverSystemProxy()
+            guard !Task.isCancelled, !isShuttingDown else { return }
             guard storageAvailable else {
                 if let bootstrapError { errorMessage = bootstrapError }
                 return
             }
             await loadSettings()
+            guard !Task.isCancelled, !isShuttingDown else { return }
             await refreshData()
-            await automaticSwitching.start(enabled: autoSwitch, engineRunning: status.isRunning)
+            guard !Task.isCancelled, !isShuttingDown else { return }
+            let engineRunning = await engine.currentStatus().isRunning
+            guard !Task.isCancelled, !isShuttingDown else { return }
+            await automaticSwitching.start(enabled: autoSwitch, engineRunning: engineRunning)
+            guard !Task.isCancelled, !isShuttingDown else { return }
             scheduleReleaseCheck()
         }
     }
@@ -244,7 +260,7 @@ final class AppModel: ObservableObject {
                 // Location metadata is optional presentation state. A cache
                 // read must never prevent the freshly imported nodes from
                 // becoming usable.
-                AppLogger.shared.warning("server-location cache refresh failed: \(error.localizedDescription)")
+                logger.warning("server-location cache refresh failed: \(error.localizedDescription)")
                 let currentNodes = nodes.reduce(into: [String: String]()) {
                     $0[$1.runtimeTag] = $1.locationFingerprint
                 }
@@ -282,7 +298,8 @@ final class AppModel: ObservableObject {
             if let bootstrapError { errorMessage = bootstrapError }
             return
         }
-        if status.isRunning || status.isBusy {
+        let engineStatus = await engine.currentStatus()
+        if engineStatus.isRunning || engineStatus.isBusy {
             await engine.stop()
             return
         }
@@ -318,7 +335,8 @@ final class AppModel: ObservableObject {
     }
 
     func selectNode(_ node: ProxyNode) async {
-        guard storageAvailable, !isShuttingDown, !status.isBusy else { return }
+        let engineStatus = await engine.currentStatus()
+        guard storageAvailable, !isShuttingDown, !engineStatus.isBusy else { return }
         selectionGeneration += 1
         let generation = selectionGeneration
         selectedNode = node.runtimeTag
@@ -458,10 +476,14 @@ final class AppModel: ObservableObject {
             let identifier = try await importer.importInput(input, name: name)
             await refreshData()
             if let node = nodes.first(where: { $0.sourceIdentifier == identifier }) {
-                if status.isRunning { try await reloadRunningEngine(selectedNode: node.runtimeTag) }
+                if await engine.currentStatus().isRunning {
+                    try await reloadRunningEngine(selectedNode: node.runtimeTag)
+                }
                 await selectNode(node)
             }
             return true
+        } catch is CancellationError {
+            return false
         } catch {
             show(error)
             return false
@@ -469,14 +491,17 @@ final class AppModel: ObservableObject {
     }
 
     func refresh(_ subscription: NekoPilotCore.Subscription) async {
-        guard subscription.sourceType == .subscription,
+        guard storageAvailable, !isShuttingDown,
+              subscription.sourceType == .subscription,
               refreshingSubscriptionIDs.insert(subscription.identifier).inserted else { return }
         defer { refreshingSubscriptionIDs.remove(subscription.identifier) }
         do {
             try await importer.refresh(identifier: subscription.identifier)
             subscriptionRefreshErrors.removeValue(forKey: subscription.identifier)
             await refreshData()
-            if status.isRunning { try await reloadRunningEngine(selectedNode: selectedNode) }
+            if await engine.currentStatus().isRunning {
+                try await reloadRunningEngine(selectedNode: selectedNode)
+            }
         } catch {
             subscriptionRefreshErrors[subscription.identifier] = error.localizedDescription
             show(error)
@@ -492,7 +517,7 @@ final class AppModel: ObservableObject {
                 name: name
             )
             await refreshData()
-            if replacement == .contentChanged, status.isRunning {
+            if replacement == .contentChanged, await engine.currentStatus().isRunning {
                 try await reloadRunningEngine(selectedNode: selectedNode)
             }
             return true
@@ -503,10 +528,13 @@ final class AppModel: ObservableObject {
     }
 
     func delete(_ subscription: NekoPilotCore.Subscription) async {
+        guard storageAvailable, !isShuttingDown else { return }
         do {
             try await repository.delete(identifier: subscription.identifier)
             await refreshData()
-            if status.isRunning { try await reloadRunningEngine(selectedNode: selectedNode) }
+            if await engine.currentStatus().isRunning {
+                try await reloadRunningEngine(selectedNode: selectedNode)
+            }
         } catch {
             show(error)
         }
@@ -565,6 +593,7 @@ final class AppModel: ObservableObject {
     }
 
     func setAutoSwitch(_ value: Bool) async {
+        guard !isShuttingDown else { return }
         let previous = autoSwitch
         autoSwitch = value
         // Disabling must cancel an in-flight cycle before the preference write
@@ -585,6 +614,7 @@ final class AppModel: ObservableObject {
     }
 
     func setShowProtocol(_ value: Bool) async {
+        guard !isShuttingDown else { return }
         let previous = showProtocol
         showProtocol = value
         do {
@@ -596,6 +626,7 @@ final class AppModel: ObservableObject {
     }
 
     func setShowServerLocation(_ value: Bool) async {
+        guard !isShuttingDown else { return }
         nodeLocationSettingGeneration += 1
         let settingGeneration = nodeLocationSettingGeneration
         let previous = showServerLocation
@@ -608,7 +639,7 @@ final class AppModel: ObservableObject {
                 do {
                     nodeLocations = try await repository.nodeLocationCache(retaining: nodes)
                 } catch {
-                    AppLogger.shared.warning("server-location cache load failed: \(error.localizedDescription)")
+                    logger.warning("server-location cache load failed: \(error.localizedDescription)")
                 }
                 guard settingGeneration == nodeLocationSettingGeneration, showServerLocation else { return }
                 scheduleNodeLocationProbeIfNeeded(forceRetryFailures: !previous)
@@ -641,7 +672,13 @@ final class AppModel: ObservableObject {
 
     func confirmAllowLAN() {
         pendingLANEnable = false
-        Task { [weak self] in await self?.applyAllowLAN(true) }
+        lanConfirmationTasks.values.forEach { $0.cancel() }
+        let identifier = UUID()
+        lanConfirmationTasks[identifier] = Task { [weak self] in
+            guard let self, !Task.isCancelled, !isShuttingDown else { return }
+            defer { lanConfirmationTasks[identifier] = nil }
+            await applyAllowLAN(true)
+        }
     }
 
     func cancelAllowLAN() {
@@ -659,13 +696,15 @@ final class AppModel: ObservableObject {
     }
 
     private func applyAllowLAN(_ value: Bool) async {
+        guard !isShuttingDown else { return }
         let previous = allowLAN
-        let wasRunning = status.isRunning
+        let wasRunning = await engine.currentStatus().isRunning
         allowLAN = value
         do {
             try await settings.set(.bool(value), for: SettingsStore.Key.allowLAN)
             try await applyConnectionSettingChange()
         } catch {
+            if error is CancellationError, isShuttingDown { return }
             allowLAN = previous
             try? await settings.set(.bool(previous), for: SettingsStore.Key.allowLAN)
             await restoreConnectionIfNeeded(wasRunning)
@@ -674,13 +713,15 @@ final class AppModel: ObservableObject {
     }
 
     func setSkipSystemProxy(_ value: Bool) async {
+        guard !isShuttingDown else { return }
         let previous = skipSystemProxy
-        let wasRunning = status.isRunning
+        let wasRunning = await engine.currentStatus().isRunning
         skipSystemProxy = value
         do {
             try await settings.set(.bool(value), for: SettingsStore.Key.skipSystemProxy)
             try await applyConnectionSettingChange()
         } catch {
+            if error is CancellationError, isShuttingDown { return }
             skipSystemProxy = previous
             try? await settings.set(.bool(previous), for: SettingsStore.Key.skipSystemProxy)
             await restoreConnectionIfNeeded(wasRunning)
@@ -689,18 +730,20 @@ final class AppModel: ObservableObject {
     }
 
     func setProxyPort(_ value: Int) async -> Bool {
+        guard !isShuttingDown else { return false }
         guard (1 ... 65_535).contains(value) else {
             show(NekoPilotError.invalidSetting("proxy_port"))
             return false
         }
         let previous = proxyPort
-        let wasRunning = status.isRunning
+        let wasRunning = await engine.currentStatus().isRunning
         proxyPort = value
         do {
             try await settings.set(.number(Double(value)), for: SettingsStore.Key.proxyPort)
             try await applyConnectionSettingChange()
             return true
         } catch {
+            if error is CancellationError, isShuttingDown { return false }
             proxyPort = previous
             try? await settings.set(.number(Double(previous)), for: SettingsStore.Key.proxyPort)
             await restoreConnectionIfNeeded(wasRunning)
@@ -710,15 +753,17 @@ final class AppModel: ObservableObject {
     }
 
     func setDirectDNS(_ value: String) async -> Bool {
+        guard !isShuttingDown else { return false }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         let previous = directDNS
-        let wasRunning = status.isRunning
+        let wasRunning = await engine.currentStatus().isRunning
         directDNS = trimmed
         do {
             try await settings.set(.string(trimmed), for: SettingsStore.Key.directDNS)
             try await applyConnectionSettingChange()
             return true
         } catch {
+            if error is CancellationError, isShuttingDown { return false }
             directDNS = previous
             try? await settings.set(.string(previous), for: SettingsStore.Key.directDNS)
             await restoreConnectionIfNeeded(wasRunning)
@@ -728,6 +773,7 @@ final class AppModel: ObservableObject {
     }
 
     func setUserAgent(_ value: String) async -> Bool {
+        guard !isShuttingDown else { return false }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         let previous = userAgent
         userAgent = trimmed
@@ -745,7 +791,7 @@ final class AppModel: ObservableObject {
         wakeTask?.cancel()
         wakeTask = nil
         sleepStartedAt = Date()
-        wasRunningBeforeSleep = status.isRunning
+        wasRunningBeforeSleep = await engine.currentStatus().isRunning
         lifecycleGeneration += 1
         // Awaiting the actor call preserves event order: a subsequent wake can
         // enqueue only after this suspension request, so it always owns the
@@ -768,7 +814,7 @@ final class AppModel: ObservableObject {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             guard generation == lifecycleGeneration else { return }
             guard await networkReadiness.waitUntilReady() else {
-                AppLogger.shared.warning("wake restart deferred because network is not ready")
+                logger.warning("wake restart deferred because network is not ready")
                 await automaticSwitching.setLifecycleSuspended(false)
                 return
             }
@@ -796,9 +842,17 @@ final class AppModel: ObservableObject {
     func confirmDeepLink() {
         guard let request = pendingDeepLink else { return }
         pendingDeepLink = nil
-        Task { [weak self] in
-            guard let self, await importNode(request.input, name: nil) else { return }
-            if request.shouldConnect, !status.isRunning { await toggleConnection() }
+        deepLinkTasks.values.forEach { $0.cancel() }
+        let identifier = UUID()
+        deepLinkTasks[identifier] = Task { [weak self] in
+            guard let self else { return }
+            defer { deepLinkTasks[identifier] = nil }
+            guard !Task.isCancelled, !isShuttingDown else { return }
+            guard await importNode(request.input, name: nil) else { return }
+            guard !Task.isCancelled, !isShuttingDown else { return }
+            if request.shouldConnect, !(await engine.currentStatus().isRunning) {
+                await toggleConnection()
+            }
         }
     }
 
@@ -810,6 +864,15 @@ final class AppModel: ObservableObject {
         guard !isShuttingDown else { return }
         isShuttingDown = true
         lifecycleGeneration += 1
+        let bootstrapping = bootstrapTask
+        let confirmingLAN = Array(lanConfirmationTasks.values)
+        let importingDeepLink = Array(deepLinkTasks.values)
+        bootstrapping?.cancel()
+        confirmingLAN.forEach { $0.cancel() }
+        importingDeepLink.forEach { $0.cancel() }
+        bootstrapTask = nil
+        lanConfirmationTasks.removeAll()
+        deepLinkTasks.removeAll()
         wakeTask?.cancel()
         wakeTask = nil
         let testing = urlTestTask
@@ -841,16 +904,19 @@ final class AppModel: ObservableObject {
         // Network-backed maintenance tasks can take until their URLSession
         // timeout even after cancellation, so they must never stand in front
         // of engine cleanup.
-        AppLogger.shared.info("shutdown: stopping proxy engine")
+        logger.info("shutdown: stopping proxy engine")
         await engine.shutdown()
-        AppLogger.shared.info("shutdown: proxy engine stopped")
+        logger.info("shutdown: proxy engine stopped")
+        await bootstrapping?.value
+        for task in confirmingLAN { await task.value }
+        for task in importingDeepLink { await task.value }
         await testing?.value
         await locating?.value
         nodeLocationPredecessorTask = nil
         // Rule-set refresh owns no child process or system state. URLSession
         // cancellation is enough here; waiting for a remote server timeout
         // would make the app appear stuck after all critical cleanup finished.
-        AppLogger.shared.info("shutdown: critical cleanup complete")
+        logger.info("shutdown: critical cleanup complete")
     }
 
     private func rebuildSortedNodes() {
@@ -962,7 +1028,7 @@ final class AppModel: ObservableObject {
                 // group completes makes the published snapshot authoritative.
                 nodeLocations = persisted
             } catch {
-                AppLogger.shared.warning("server-location cache reload failed: \(error.localizedDescription)")
+                logger.warning("server-location cache reload failed: \(error.localizedDescription)")
             }
             isNodeLocationProbing = false
             nodeLocationTask = nil
@@ -1001,7 +1067,7 @@ final class AppModel: ObservableObject {
             // Country labels are optional metadata. Report the failure in the
             // diagnostic log without interrupting proxy use or showing one
             // alert per node.
-            AppLogger.shared.warning("server-location result persistence failed: \(error.localizedDescription)")
+            logger.warning("server-location result persistence failed: \(error.localizedDescription)")
         }
     }
 
@@ -1029,7 +1095,7 @@ final class AppModel: ObservableObject {
                     return
                 } catch {
                     guard status.isRunning, !isShuttingDown else { return }
-                    AppLogger.shared.warning("traffic stream interrupted: \(error.localizedDescription)")
+                    logger.warning("traffic stream interrupted: \(error.localizedDescription)")
                 }
                 guard !Task.isCancelled, status.isRunning, !isShuttingDown else { return }
                 currentNodeTraffic = .zero
@@ -1139,7 +1205,7 @@ final class AppModel: ObservableObject {
         if DNSResolverDetector.isUsableIPAddress(storedDNS) {
             directDNS = storedDNS
         } else {
-            directDNS = await DNSResolverDetector.detectSystemResolver() ?? DNSResolverDetector.fallback
+            directDNS = await DNSResolverDetector.detectSystemResolver(logger: logger) ?? DNSResolverDetector.fallback
             try? await settings.set(.string(directDNS), for: SettingsStore.Key.directDNS)
         }
         userAgent = await settings.string(SettingsStore.Key.userAgent, default: "sing-box 1.14.0-alpha.48")
@@ -1162,26 +1228,30 @@ final class AppModel: ObservableObject {
     }
 
     private func persistRules(previous: [RoutingRule]) async -> Bool {
-        let wasRunning = status.isRunning
+        let wasRunning = await engine.currentStatus().isRunning
         do {
             try await settings.replaceRules(rules)
-            _ = try await compiler.compile(selectedNode: selectedNode)
-            if wasRunning { try await reloadRunningEngine(selectedNode: selectedNode) }
+            if wasRunning {
+                try await reloadRunningEngine(selectedNode: selectedNode)
+            } else {
+                try await engine.prepareConfiguration(selectedNode: selectedNode)
+            }
             return true
         } catch {
             rules = previous
             try? await settings.replaceRules(previous)
-            _ = try? await compiler.compile(selectedNode: selectedNode)
             if wasRunning {
                 do {
-                    if status.isRunning {
+                    if await engine.currentStatus().isRunning {
                         try await reloadRunningEngine(selectedNode: selectedNode)
                     } else {
                         try await engine.start(selectedNode: selectedNode)
                     }
                 } catch {
-                    AppLogger.shared.error("failed to restore previous routing rules: \(error.localizedDescription)")
+                    logger.error("failed to restore previous routing rules: \(error.localizedDescription)")
                 }
+            } else {
+                try? await engine.prepareConfiguration(selectedNode: selectedNode)
             }
             show(error)
             return false
@@ -1189,34 +1259,39 @@ final class AppModel: ObservableObject {
     }
 
     private func applyConnectionSettingChange() async throws {
-        if status.isRunning {
+        guard !isShuttingDown else { throw CancellationError() }
+        if await engine.currentStatus().isRunning {
             await engine.stop()
+            guard !isShuttingDown else { throw CancellationError() }
             try await engine.start(selectedNode: selectedNode)
         } else {
-            _ = try await compiler.compile(selectedNode: selectedNode)
+            try await engine.prepareConfiguration(selectedNode: selectedNode)
         }
     }
 
     private func restoreConnectionIfNeeded(_ wasRunning: Bool) async {
-        guard wasRunning, !status.isRunning, !status.isBusy else { return }
+        guard !isShuttingDown else { return }
+        let engineStatus = await engine.currentStatus()
+        guard wasRunning, !engineStatus.isRunning, !engineStatus.isBusy else { return }
         do {
             try await engine.start(selectedNode: selectedNode)
         } catch {
-            AppLogger.shared.error("failed to restore previous connection settings: \(error.localizedDescription)")
+            logger.error("failed to restore previous connection settings: \(error.localizedDescription)")
         }
     }
 
     private func reloadRunningEngine(selectedNode: String?) async throws {
+        guard !isShuttingDown else { throw CancellationError() }
         do {
             try await engine.reload(selectedNode: selectedNode)
         } catch {
-            guard status.isRunning else { throw error }
+            guard await engine.currentStatus().isRunning else { throw error }
             // A reload request can succeed in sing-box while the short status
             // confirmation is lost, leaving UI and runtime state ambiguous.
             // A bounded full restart gives every source/rule mutation one
             // deterministic final state instead of silently running an older
             // or only partially observed configuration.
-            AppLogger.shared.warning("live reload failed; restarting sing-box: \(error.localizedDescription)")
+            logger.warning("live reload failed; restarting sing-box: \(error.localizedDescription)")
             await engine.stop()
             try await engine.start(selectedNode: selectedNode)
         }
@@ -1235,7 +1310,7 @@ final class AppModel: ObservableObject {
                     do {
                         try await reloadRunningEngine(selectedNode: selectedNode)
                     } catch {
-                        AppLogger.shared.warning("updated rule sets require a later reload: \(error.localizedDescription)")
+                        logger.warning("updated rule sets require a later reload: \(error.localizedDescription)")
                     }
                 }
                 let delay = result.nextCheckDelay
@@ -1276,56 +1351,4 @@ final class AppModel: ObservableObject {
 
 private extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
-}
-
-private struct AppStorageBootstrap {
-    let paths: AppPaths
-    let settings: SettingsStore
-    let repository: SubscriptionRepository
-    let isPersistent: Bool
-    let recoveryMessage: String?
-
-    static func resolve() throws -> AppStorageBootstrap {
-        do {
-            let paths = try AppPaths.live()
-            do {
-                return AppStorageBootstrap(
-                    paths: paths,
-                    settings: try SettingsStore(fileURL: paths.settings),
-                    repository: try SubscriptionRepository(databaseURL: paths.database),
-                    isPersistent: true,
-                    recoveryMessage: nil
-                )
-            } catch {
-                return try recovery(
-                    message: L10n.text(
-                        "本地数据无法读取，应用已进入安全恢复模式；原文件没有被覆盖。\n\(error.localizedDescription)",
-                        "Local data could not be read. NekoPilot opened in safe recovery mode without overwriting the original files.\n\(error.localizedDescription)"
-                    )
-                )
-            }
-        } catch {
-            return try recovery(
-                message: L10n.text(
-                    "无法访问应用数据目录，连接功能已停用。\n\(error.localizedDescription)",
-                    "The application data directory is unavailable, so connection features are disabled.\n\(error.localizedDescription)"
-                )
-            )
-        }
-    }
-
-    private static func recovery(message: String) throws -> AppStorageBootstrap {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("NekoPilot-Recovery-\(UUID().uuidString)", isDirectory: true)
-        let paths = AppPaths(applicationSupport: root, logs: root.appendingPathComponent("logs", isDirectory: true))
-        try FileManager.default.createDirectory(at: paths.applicationSupport, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: paths.logs, withIntermediateDirectories: true)
-        return AppStorageBootstrap(
-            paths: paths,
-            settings: try SettingsStore(fileURL: paths.settings),
-            repository: try SubscriptionRepository(databaseURL: paths.database),
-            isPersistent: false,
-            recoveryMessage: message
-        )
-    }
 }

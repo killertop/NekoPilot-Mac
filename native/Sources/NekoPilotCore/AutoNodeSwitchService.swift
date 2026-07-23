@@ -145,6 +145,7 @@ public actor AutoNodeSwitchService {
     private let selection: NodeSelectionCoordinator
     private let networkReadiness: NetworkReadiness
     private let healthProbe: ProxyHealthProbe
+    private let logger: any AppLogging
     private var timerTask: Task<Void, Never>?
     private var generation = 0
     private var isStarted = false
@@ -163,7 +164,8 @@ public actor AutoNodeSwitchService {
         tester: URLTester,
         nativeAPI: NativeControlClient,
         selection: NodeSelectionCoordinator,
-        networkReadiness: NetworkReadiness
+        networkReadiness: NetworkReadiness,
+        logger: any AppLogging = AppLogger.shared
     ) {
         self.engine = engine
         self.repository = repository
@@ -172,6 +174,7 @@ public actor AutoNodeSwitchService {
         self.nativeAPI = nativeAPI
         self.selection = selection
         self.networkReadiness = networkReadiness
+        self.logger = logger
         healthProbe = ProxyHealthProbe()
     }
 
@@ -379,7 +382,7 @@ public actor AutoNodeSwitchService {
             history = try await repository.delayHistory()
         } catch {
             guard cycleIsCurrent(scheduledGeneration) else { return }
-            AppLogger.shared.warning("saved node delays could not be read: \(error.localizedDescription)")
+            logger.warning("saved node delays could not be read: \(error.localizedDescription)")
             publish(AutoNodeSwitchUpdate(outcome: .failed(node: currentNode)))
             finishCycle(generation: scheduledGeneration, nextDelay: Self.networkRetryDelay)
             return
@@ -481,7 +484,7 @@ public actor AutoNodeSwitchService {
                 return
             }
             decisionState.reset()
-            AppLogger.shared.info("failed-over from unavailable node to verified candidate delay=\(verified.delay)ms")
+            logger.info("failed-over from unavailable node to verified candidate delay=\(verified.delay)ms")
             publish(AutoNodeSwitchUpdate(outcome: .switched(
                 from: currentNode,
                 to: verified.node.runtimeTag,
@@ -492,7 +495,7 @@ public actor AutoNodeSwitchService {
             return
         } catch {
             guard cycleIsCurrent(scheduledGeneration) else { return }
-            AppLogger.shared.warning("automatic node failover failed: \(error.localizedDescription)")
+            logger.warning("automatic node failover failed: \(error.localizedDescription)")
             publish(AutoNodeSwitchUpdate(outcome: .failed(node: currentNode)))
             finishCycle(generation: scheduledGeneration, nextDelay: Self.networkRetryDelay)
         }

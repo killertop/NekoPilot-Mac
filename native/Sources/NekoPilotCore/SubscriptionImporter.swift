@@ -11,11 +11,7 @@ public enum SubscriptionReplacement: Sendable, Equatable {
 }
 
 public actor SubscriptionImporter {
-    private static let maximumResponseBytes = 8 * 1024 * 1024
     private static let maximumURLBytes = 16 * 1024
-    private static let maximumOutbounds = 20_000
-    private static let maximumTagBytes = 1_024
-    private static let maximumTypeBytes = 64
     private let repository: SubscriptionRepository
     private let settings: SettingsStore?
     private let candidateValidator: SubscriptionCandidateValidator
@@ -42,12 +38,13 @@ public actor SubscriptionImporter {
         guard !input.isEmpty else { throw NekoPilotError.invalidLink }
         if let scheme = URLComponents(string: input)?.scheme?.lowercased(),
            ProxyLinkParser.supportedSchemes.contains(scheme) {
-            let config = try Self.validateConfiguration(ProxyLinkParser.parse(input))
+            let config = try SubscriptionPayloadParser.validate(ProxyLinkParser.parse(input))
             let nodeName = name?.trimmingCharacters(in: .whitespacesAndNewlines)
             let fallback = config["outbounds"]?.arrayValue?.first?["tag"]?.stringValue
                 ?? CoreL10n.text("本地节点", "Local Node")
             let resolvedName = nodeName.flatMap { $0.isEmpty ? nil : $0 } ?? fallback
             try await candidateValidator(config)
+            try Task.checkCancellation()
             return try await repository.upsert(
                 url: input,
                 name: resolvedName,
@@ -64,6 +61,7 @@ public actor SubscriptionImporter {
         let resolvedName = displayName.flatMap { $0.isEmpty ? nil : $0 }
             ?? (url.host ?? CoreL10n.text("机场订阅", "Subscription"))
         try await candidateValidator(config)
+        try Task.checkCancellation()
         return try await repository.upsert(
             url: url.absoluteString,
             name: resolvedName,
@@ -86,6 +84,7 @@ public actor SubscriptionImporter {
         // depend on the airport's availability and unnecessarily reloaded the
         // running proxy engine.
         if input == existing.subscriptionURL {
+            try Task.checkCancellation()
             try await repository.rename(identifier: identifier, name: resolvedName)
             return .renamed
         }
@@ -98,7 +97,7 @@ public actor SubscriptionImporter {
                   ProxyLinkParser.supportedSchemes.contains(scheme) else {
                 throw NekoPilotError.invalidLink
             }
-            config = try Self.validateConfiguration(ProxyLinkParser.parse(input))
+            config = try SubscriptionPayloadParser.validate(ProxyLinkParser.parse(input))
             sourceURL = input
         case .subscription:
             guard let url = URL(string: input),
@@ -110,6 +109,7 @@ public actor SubscriptionImporter {
         }
 
         try await candidateValidator(config)
+        try Task.checkCancellation()
         _ = try await repository.upsert(
             url: sourceURL,
             name: resolvedName,
@@ -127,6 +127,7 @@ public actor SubscriptionImporter {
               let url = URL(string: rawURL) else { throw NekoPilotError.invalidLink }
         let config = try await fetchConfiguration(from: url)
         try await candidateValidator(config)
+        try Task.checkCancellation()
         _ = try await repository.upsert(
             url: rawURL,
             name: subscription.name,
@@ -144,130 +145,26 @@ public actor SubscriptionImporter {
         let userAgent = Self.validUserAgent(configuredUserAgent) ?? "sing-box 1.14.0-alpha.48"
         let data = try await PinnedHTTPClient.fetch(
             url: url,
-            maximumBodyBytes: Self.maximumResponseBytes,
+            maximumBodyBytes: SubscriptionPayloadParser.maximumPayloadBytes,
             maximumURLBytes: Self.maximumURLBytes,
             userAgent: userAgent
         )
-        return try Self.parsePayload(data)
+        return try SubscriptionPayloadParser.parse(data)
     }
 
+    /// Compatibility entry point for existing Core clients. New parsing code
+    /// should depend directly on `SubscriptionPayloadParser`.
     public static func parsePayload(_ data: Data) throws -> [String: JSONValue] {
-        guard data.count <= maximumResponseBytes else { throw NekoPilotError.responseTooLarge }
-        if let object = try? JSONValue.decodeObject(from: data), hasUsableNode(object) {
-            return try validateConfiguration(object)
-        }
-        guard let text = String(data: data, encoding: .utf8) else {
-            throw NekoPilotError.invalidSubscription
-        }
-        let candidates = [text, decodeBase64Text(text)].compactMap { $0 }
-        for candidate in candidates {
-            let links = candidate
-                .components(separatedBy: .newlines)
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty && !$0.hasPrefix("#") }
-            var outbounds: [[String: JSONValue]] = []
-            var seenTags = Set<String>()
-            for link in links {
-                guard let scheme = URLComponents(string: link)?.scheme?.lowercased(),
-                      ProxyLinkParser.supportedSchemes.contains(scheme),
-                      let config = try? ProxyLinkParser.parse(link),
-                      let outbound = config["outbounds"]?.arrayValue?.first?.objectValue else { continue }
-                var unique = outbound
-                let baseTag = outbound["tag"]?.stringValue ?? CoreL10n.text("节点", "Node")
-                var tag = baseTag
-                var index = 2
-                while !seenTags.insert(tag).inserted {
-                    tag = "\(baseTag) (\(index))"
-                    index += 1
-                }
-                unique["tag"] = .string(tag)
-                outbounds.append(unique)
-            }
-            if !outbounds.isEmpty {
-                return try validateConfiguration([
-                    "outbounds": .array(outbounds.map(JSONValue.object)),
-                ])
-            }
-        }
-        throw NekoPilotError.invalidSubscription
+        try SubscriptionPayloadParser.parse(data)
     }
 
-    /// Performs deterministic structural checks that do not launch sing-box or
-    /// touch persistent state. Full sing-box validation still belongs at the
-    /// compiled configuration boundary, but malformed subscriptions must not be
-    /// allowed to poison the shared node pool before reaching that boundary.
+    /// Compatibility entry point for existing Core clients. New validation code
+    /// should depend directly on `SubscriptionPayloadParser`.
     @discardableResult
     public static func validateConfiguration(
         _ object: [String: JSONValue]
     ) throws -> [String: JSONValue] {
-        let encoded = try JSONValue.encodeObject(object)
-        guard encoded.count <= maximumResponseBytes,
-              let outbounds = object["outbounds"]?.arrayValue,
-              !outbounds.isEmpty,
-              outbounds.count <= maximumOutbounds else {
-            throw NekoPilotError.invalidSubscription
-        }
-
-        let ignored = Set(["selector", "urltest", "direct", "block", "dns"])
-        let endpointTypes = Set([
-            "vless", "trojan", "anytls", "hysteria", "hysteria2", "tuic", "vmess",
-            "shadowsocks", "socks", "http", "ssh", "shadowtls", "naive",
-        ])
-        var seenTags = Set<String>()
-        var usableNodes = 0
-        for value in outbounds {
-            guard let outbound = value.objectValue,
-                  let type = outbound["type"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !type.isEmpty, type.utf8.count <= maximumTypeBytes else {
-                throw NekoPilotError.invalidSubscription
-            }
-            if let tag = outbound["tag"]?.stringValue {
-                let normalized = tag.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !normalized.isEmpty,
-                      normalized.utf8.count <= maximumTagBytes,
-                      seenTags.insert(tag).inserted else {
-                    throw NekoPilotError.invalidSubscription
-                }
-            }
-            if let server = outbound["server"] {
-                guard let server = server.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
-                      !server.isEmpty, server.utf8.count <= 4_096 else {
-                    throw NekoPilotError.invalidSubscription
-                }
-            }
-            if let rawPort = outbound["server_port"] {
-                guard let port = rawPort.numberValue,
-                      port.isFinite, port.rounded() == port,
-                      port >= 1, port <= 65_535 else {
-                    throw NekoPilotError.invalidSubscription
-                }
-            }
-            guard !ignored.contains(type) else { continue }
-            guard let tag = outbound["tag"]?.stringValue, !tag.isEmpty else {
-                throw NekoPilotError.invalidSubscription
-            }
-            if endpointTypes.contains(type) {
-                guard outbound["server"]?.stringValue?.isEmpty == false,
-                      let port = outbound["server_port"]?.numberValue,
-                      port.isFinite, port.rounded() == port,
-                      port >= 1, port <= 65_535 else {
-                    throw NekoPilotError.invalidSubscription
-                }
-            }
-            usableNodes += 1
-        }
-        guard usableNodes > 0 else { throw NekoPilotError.invalidSubscription }
-        return object
-    }
-
-    private static func hasUsableNode(_ object: [String: JSONValue]) -> Bool {
-        let ignored = Set(["selector", "urltest", "direct", "block", "dns"])
-        return (object["outbounds"]?.arrayValue ?? []).contains {
-            guard let outbound = $0.objectValue,
-                  let type = outbound["type"]?.stringValue,
-                  let tag = outbound["tag"]?.stringValue else { return false }
-            return !ignored.contains(type) && !tag.isEmpty
-        }
+        try SubscriptionPayloadParser.validate(object)
     }
 
     private static func validUserAgent(_ raw: String?) -> String? {
@@ -276,16 +173,6 @@ public actor SubscriptionImporter {
               value.utf8.count <= 512,
               !value.contains("\r"), !value.contains("\n") else { return nil }
         return value
-    }
-
-    private static func decodeBase64Text(_ raw: String) -> String? {
-        var normalized = raw
-            .filter { !$0.isWhitespace }
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        normalized += String(repeating: "=", count: (4 - normalized.count % 4) % 4)
-        guard let data = Data(base64Encoded: normalized) else { return nil }
-        return String(data: data, encoding: .utf8)
     }
 
     private static func validateCandidateWithSingBox(

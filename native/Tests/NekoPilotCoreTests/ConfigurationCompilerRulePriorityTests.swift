@@ -2,8 +2,256 @@ import Foundation
 import Testing
 @testable import NekoPilotCore
 
+private actor RuntimeCandidateValidationGate {
+    private var invocationCount = 0
+    private var firstValidationStarted = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var firstRelease: CheckedContinuation<Void, Never>?
+
+    func validate(_ configuration: URL) async throws {
+        _ = configuration
+        invocationCount += 1
+        guard invocationCount == 1 else { return }
+        firstValidationStarted = true
+        for waiter in startWaiters { waiter.resume() }
+        startWaiters.removeAll()
+        await withCheckedContinuation { continuation in
+            firstRelease = continuation
+        }
+    }
+
+    func waitUntilFirstValidationStarts() async {
+        if firstValidationStarted { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func releaseFirstValidation() {
+        firstRelease?.resume()
+        firstRelease = nil
+    }
+}
+
 @Suite("Configuration compiler rule priority", .serialized)
 struct ConfigurationCompilerRulePriorityTests {
+    @Test("Runtime candidates are isolated until their atomic commit")
+    func runtimeCandidatesAreIsolatedUntilCommit() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NekoPilot-Candidate-Test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let support = root.appendingPathComponent("Application Support", isDirectory: true)
+        let logs = root.appendingPathComponent("Logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+
+        let paths = AppPaths(applicationSupport: support, logs: logs)
+        let settings = try SettingsStore(fileURL: paths.settings)
+        let repository = try SubscriptionRepository(databaseURL: paths.database)
+        let identifier = try await repository.upsert(
+            url: nil,
+            name: "Candidates",
+            sourceType: .localLink,
+            config: [
+                "outbounds": .array([
+                    .object([
+                        "type": .string("vless"),
+                        "tag": .string("first"),
+                        "server": .string("first.example.com"),
+                        "server_port": .number(443),
+                        "uuid": .string("00000000-0000-4000-8000-000000000001"),
+                    ]),
+                    .object([
+                        "type": .string("vless"),
+                        "tag": .string("second"),
+                        "server": .string("second.example.com"),
+                        "server_port": .number(443),
+                        "uuid": .string("00000000-0000-4000-8000-000000000002"),
+                    ]),
+                ]),
+            ]
+        )
+        let compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
+        let sentinel = Data("validated-live-configuration".utf8)
+        try AtomicFile.write(sentinel, to: paths.runtimeConfig)
+
+        async let firstCandidate = compiler.makeRuntimeConfigurationCandidate(
+            selectedNode: "@np:\(identifier):first"
+        )
+        async let secondCandidate = compiler.makeRuntimeConfigurationCandidate(
+            selectedNode: "@np:\(identifier):second"
+        )
+        let (first, second) = try await (firstCandidate, secondCandidate)
+        defer {
+            first.discard()
+            second.discard()
+        }
+
+        #expect(first.configurationURL != second.configurationURL)
+        #expect(try Data(contentsOf: paths.runtimeConfig) == sentinel)
+        let firstData = try Data(contentsOf: first.configurationURL)
+        let secondData = try Data(contentsOf: second.configurationURL)
+        #expect(firstData != secondData)
+
+        let committedURL = try first.commit()
+        #expect(committedURL == paths.runtimeConfig)
+        #expect(try Data(contentsOf: paths.runtimeConfig) == firstData)
+        #expect(!FileManager.default.fileExists(atPath: first.configurationURL.path))
+        #expect(FileManager.default.fileExists(atPath: second.configurationURL.path))
+
+        _ = try second.commit()
+        #expect(try Data(contentsOf: paths.runtimeConfig) == secondData)
+        #expect(!FileManager.default.fileExists(atPath: second.configurationURL.path))
+    }
+
+    @Test("Startup recovery removes only abandoned runtime candidates")
+    func startupRecoveryRemovesOnlyAbandonedCandidates() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NekoPilot-Candidate-Cleanup-Test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let support = root.appendingPathComponent("Application Support", isDirectory: true)
+        let logs = root.appendingPathComponent("Logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        let paths = AppPaths(applicationSupport: support, logs: logs)
+        let settings = try SettingsStore(fileURL: paths.settings)
+        let repository = try SubscriptionRepository(databaseURL: paths.database)
+        let compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
+        let abandoned = support.appendingPathComponent(".runtime.json.crashed.candidate")
+        let unrelated = support.appendingPathComponent("keep.candidate")
+        let live = paths.runtimeConfig
+        try AtomicFile.write(Data("secret".utf8), to: abandoned)
+        try AtomicFile.write(Data("keep".utf8), to: unrelated)
+        try AtomicFile.write(Data("live".utf8), to: live)
+
+        await compiler.removeAbandonedRuntimeCandidates()
+
+        #expect(!FileManager.default.fileExists(atPath: abandoned.path))
+        #expect(FileManager.default.fileExists(atPath: unrelated.path))
+        #expect(try Data(contentsOf: live) == Data("live".utf8))
+    }
+
+    @Test("Candidate validation failure publishes a configuration failure")
+    func candidateValidationFailureIsTyped() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NekoPilot-Configuration-Failure-Test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let support = root.appendingPathComponent("Application Support", isDirectory: true)
+        let logs = root.appendingPathComponent("Logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        let paths = AppPaths(applicationSupport: support, logs: logs)
+        let settings = try SettingsStore(fileURL: paths.settings)
+        let repository = try SubscriptionRepository(databaseURL: paths.database)
+        let identifier = try await repository.upsert(
+            url: nil,
+            name: "Invalid candidate",
+            sourceType: .localLink,
+            config: [
+                "outbounds": .array([.object([
+                    "type": .string("vless"),
+                    "tag": .string("node"),
+                    "server": .string("example.com"),
+                    "server_port": .number(443),
+                    "uuid": .string("00000000-0000-4000-8000-000000000001"),
+                ])]),
+            ]
+        )
+        let compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
+        let engine = EngineSupervisor(
+            settings: settings,
+            compiler: compiler,
+            systemProxy: SystemProxyManager(markerURL: paths.proxyOwnership),
+            nativeAPI: NativeControlClient(),
+            configurationValidator: { _ in
+                throw NekoPilotError.processFailed("validator rejected candidate")
+            }
+        )
+
+        do {
+            try await engine.start(selectedNode: "@np:\(identifier):node")
+            Issue.record("Engine started with a rejected candidate")
+        } catch let NekoPilotError.processFailed(failure) {
+            #expect(failure.kind == .configuration)
+            #expect(failure.message == "validator rejected candidate")
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+
+        guard case let .failed(failure) = await engine.currentStatus() else {
+            Issue.record("Engine did not publish a failure state")
+            return
+        }
+        #expect(failure.kind == .configuration)
+        #expect(failure.message == "validator rejected candidate")
+    }
+
+    @Test("A newer preparation cannot be overwritten by an older validation")
+    func newerPreparationWins() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NekoPilot-Preparation-Test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let support = root.appendingPathComponent("Application Support", isDirectory: true)
+        let logs = root.appendingPathComponent("Logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+
+        let paths = AppPaths(applicationSupport: support, logs: logs)
+        let settings = try SettingsStore(fileURL: paths.settings)
+        let repository = try SubscriptionRepository(databaseURL: paths.database)
+        let identifier = try await repository.upsert(
+            url: nil,
+            name: "Newest wins",
+            sourceType: .localLink,
+            config: [
+                "outbounds": .array([
+                    .object([
+                        "type": .string("vless"),
+                        "tag": .string("older"),
+                        "server": .string("older.example.com"),
+                        "server_port": .number(443),
+                        "uuid": .string("00000000-0000-4000-8000-000000000001"),
+                    ]),
+                    .object([
+                        "type": .string("vless"),
+                        "tag": .string("newer"),
+                        "server": .string("newer.example.com"),
+                        "server_port": .number(443),
+                        "uuid": .string("00000000-0000-4000-8000-000000000002"),
+                    ]),
+                ]),
+            ]
+        )
+        let compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
+        let gate = RuntimeCandidateValidationGate()
+        let engine = EngineSupervisor(
+            settings: settings,
+            compiler: compiler,
+            systemProxy: SystemProxyManager(markerURL: paths.proxyOwnership),
+            nativeAPI: NativeControlClient(),
+            configurationValidator: { try await gate.validate($0) }
+        )
+        let olderNode = "@np:\(identifier):older"
+        let newerNode = "@np:\(identifier):newer"
+
+        let olderPreparation = Task {
+            try await engine.prepareConfiguration(selectedNode: olderNode)
+        }
+        await gate.waitUntilFirstValidationStarts()
+        let newerPreparation = Task {
+            try await engine.prepareConfiguration(selectedNode: newerNode)
+        }
+        try await newerPreparation.value
+        await gate.releaseFirstValidation()
+        try await olderPreparation.value
+
+        let liveConfiguration = try JSONValue.decodeObject(from: Data(contentsOf: paths.runtimeConfig))
+        let selector = try #require(liveConfiguration["outbounds"]?.arrayValue?.first(where: {
+            $0.objectValue?["tag"]?.stringValue == "ExitGateway"
+        })?.objectValue)
+        #expect(selector["outbounds"]?.arrayValue?.first?.stringValue == newerNode)
+    }
+
     @Test("Health probe routing is inbound-scoped, optional, and highest priority")
     func healthProbeRoutingIsInboundScopedAndOptional() async throws {
         let root = FileManager.default.temporaryDirectory

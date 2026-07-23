@@ -1,6 +1,12 @@
 import Foundation
 
-public final class AppLogger: @unchecked Sendable {
+public protocol AppLogging: Sendable {
+    func info(_ message: String)
+    func warning(_ message: String)
+    func error(_ message: String)
+}
+
+public final class AppLogger: AppLogging, @unchecked Sendable {
     public static let shared = AppLogger()
 
     private static let redactionRules: [(NSRegularExpression, String)] = [
@@ -20,7 +26,7 @@ public final class AppLogger: @unchecked Sendable {
     private var currentSize: UInt64 = 0
     private let formatter = ISO8601DateFormatter()
 
-    private init() {}
+    public init() {}
 
     public func configure(destination: URL) {
         lock.lock()

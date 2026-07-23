@@ -8,9 +8,14 @@ public actor URLTester {
     private static let maximumOfflineWorkers = 4
     private static let pollInterval: UInt64 = 200_000_000
     private let compiler: ConfigurationCompiler
+    private let logger: any AppLogging
 
-    public init(compiler: ConfigurationCompiler) {
+    public init(
+        compiler: ConfigurationCompiler,
+        logger: any AppLogging = AppLogger.shared
+    ) {
         self.compiler = compiler
+        self.logger = logger
     }
 
     public func test(
@@ -43,7 +48,8 @@ public actor URLTester {
                 nodes: batchAndEndpoint.0,
                 endpoint: batchAndEndpoint.1,
                 config: config,
-                executable: executable
+                executable: executable,
+                logger: logger
             )
         }
 
@@ -83,7 +89,7 @@ public actor URLTester {
         onResult: URLTestProgressHandler?
     ) async -> [String: DelayRecord] {
         let temporaryDirectory = job.config.deletingLastPathComponent()
-        let client = NativeControlClient(endpoint: job.endpoint)
+        let client = NativeControlClient(endpoint: job.endpoint, logger: job.logger)
         let process = Process()
         process.executableURL = job.executable
         process.arguments = ["run", "-c", job.config.path, "--disable-color"]
@@ -94,7 +100,7 @@ public actor URLTester {
         standardError.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             guard !data.isEmpty else { return }
-            AppLogger.shared.warning("[sing-box URL Test] \(String(decoding: data, as: UTF8.self))")
+            job.logger.warning("[sing-box URL Test] \(String(decoding: data, as: UTF8.self))")
         }
         do {
             try process.run()
@@ -116,7 +122,7 @@ public actor URLTester {
             }
         }
         guard await Self.waitUntilReady(endpoint: job.endpoint, process: process) else {
-            AppLogger.shared.warning("offline URL Test core did not become ready")
+            job.logger.warning("offline URL Test core did not become ready")
             await client.disconnect()
             return unavailable(job.nodes)
         }
@@ -124,6 +130,7 @@ public actor URLTester {
             client: client,
             nodes: job.nodes,
             maximumWait: maximumWait(for: job.nodes.count),
+            logger: job.logger,
             onResult: onResult
         )
         await client.disconnect()
@@ -134,6 +141,7 @@ public actor URLTester {
         client: NativeControlClient,
         nodes: [ProxyNode],
         maximumWait: TimeInterval,
+        logger: any AppLogging,
         onResult: URLTestProgressHandler?
     ) async -> [String: DelayRecord] {
         guard !Task.isCancelled else { return [:] }
@@ -141,7 +149,7 @@ public actor URLTester {
         do {
             try await client.runURLTest()
         } catch {
-            AppLogger.shared.warning("native URL Test request failed: \(error.localizedDescription)")
+            logger.warning("native URL Test request failed: \(error.localizedDescription)")
             return unavailable(nodes)
         }
         var results: [String: DelayRecord] = [:]
@@ -157,7 +165,7 @@ public actor URLTester {
                     }
                 }
             } catch {
-                AppLogger.shared.warning("native URL Test status read failed: \(error.localizedDescription)")
+                logger.warning("native URL Test status read failed: \(error.localizedDescription)")
             }
             if results.count == nodes.count { break }
             try? await Task.sleep(nanoseconds: pollInterval)
@@ -237,4 +245,5 @@ private struct OfflineTestJob: Sendable {
     let endpoint: LocalAPIEndpoint
     let config: URL
     let executable: URL
+    let logger: any AppLogging
 }

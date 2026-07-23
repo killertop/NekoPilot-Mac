@@ -19,11 +19,16 @@ public actor NativeControlClient {
     // is sufficient for the main core and the short-lived URL Test workers.
     private static let sharedGroup = PlatformSupport.makeEventLoopGroup(loopCount: 1)
     private let group = NativeControlClient.sharedGroup
+    private let logger: any AppLogging
     private var endpoint: LocalAPIEndpoint?
     private var connection: ClientConnection?
 
-    public init(endpoint: LocalAPIEndpoint? = nil) {
+    public init(
+        endpoint: LocalAPIEndpoint? = nil,
+        logger: any AppLogging = AppLogger.shared
+    ) {
         self.endpoint = endpoint
+        self.logger = logger
         if let endpoint {
             connection = ClientConnection.insecure(group: group)
                 .connect(host: endpoint.host, port: endpoint.port)
@@ -101,7 +106,7 @@ public actor NativeControlClient {
             do {
                 _ = try await call.response.get()
             } catch {
-                AppLogger.shared.warning("native URL Test request failed: \(error.localizedDescription)")
+                logger.warning("native URL Test request failed: \(error.localizedDescription)")
             }
         }
     }
