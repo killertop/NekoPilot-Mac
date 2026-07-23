@@ -49,7 +49,7 @@ final class AppModel: ObservableObject {
     @Published var skipSystemProxy = false
     @Published var proxyPort = SettingsStore.defaultProxyPort
     @Published var directDNS = "223.5.5.5"
-    @Published var userAgent = "sing-box 1.14.0-alpha.48"
+    @Published var userAgent = SubscriptionUserAgentPreset.defaultValue
     @Published var isInitialized = false
     @Published var pendingDeepLink: PendingDeepLink?
     @Published var pendingLANEnable = false
@@ -1279,7 +1279,7 @@ final class AppModel: ObservableObject {
             try? await settings.set(.string(directDNS), for: SettingsStore.Key.directDNS)
             guard !Task.isCancelled, !isShuttingDown else { return }
         }
-        userAgent = await settings.string(SettingsStore.Key.userAgent, default: "sing-box 1.14.0-alpha.48")
+        userAgent = await settings.string(SettingsStore.Key.userAgent, default: SubscriptionUserAgentPreset.defaultValue)
         guard !Task.isCancelled, !isShuttingDown else { return }
         selectedNode = (await settings.string(SettingsStore.Key.selectedNode)).nilIfEmpty
         guard !Task.isCancelled, !isShuttingDown else { return }

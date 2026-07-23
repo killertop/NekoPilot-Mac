@@ -749,11 +749,10 @@ public actor ConfigurationCompiler {
             ))
         }
         selector["outbounds"] = .array(nodes.compactMap { $0["tag"]?.stringValue }.map(JSONValue.string))
-        // A manual or automatic failover must move existing streams away from
-        // the old outbound as well as route new connections through the newly
-        // selected node. Otherwise a dead node can leave long-lived sessions
-        // stuck until each application times out on its own.
-        selector["interrupt_exist_connections"] = .bool(true)
+        // Selector changes apply to newly created connections. Existing
+        // WebSocket, SSE, and long-lived TCP streams retain their established
+        // outbound until they end naturally.
+        selector["interrupt_exist_connections"] = .bool(false)
         outbounds[selectorIndex] = .object(selector)
         outbounds.append(contentsOf: nodes.map(JSONValue.object))
         config["outbounds"] = .array(outbounds)

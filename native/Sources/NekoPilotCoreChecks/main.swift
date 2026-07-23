@@ -108,6 +108,10 @@ checks.append(("repository and config compiler", {
         selector?["outbounds"]?.arrayValue?.first?.stringValue == nodes[0].runtimeTag,
         "compiler did not select stable runtime node"
     )
+    try expect(
+        selector?["interrupt_exist_connections"]?.boolValue == false,
+        "runtime selector must preserve existing connections when its node changes"
+    )
     let dnsRules = config["dns"]?.objectValue?["rules"]?.arrayValue?.compactMap(\.objectValue) ?? []
     let directDNSRule = dnsRules.first { rule in
         rule["domain"]?.arrayValue?.contains(.string("direct.example")) == true
@@ -132,6 +136,7 @@ checks.append(("repository and config compiler", {
     )
     defer { try? FileManager.default.removeItem(at: offlineConfigURL.deletingLastPathComponent()) }
     let offlineConfig = try JSONValue.decodeObject(from: Data(contentsOf: offlineConfigURL))
+    try await SingBoxValidator.validate(configuration: offlineConfigURL)
     try expect(offlineConfig["inbounds"] == nil, "offline URL Test config unexpectedly exposed a proxy inbound")
     try expect(
         offlineConfig["services"]?.arrayValue?.first?.objectValue?["listen_port"]?.numberValue == Double(offlineAPI.port),
@@ -141,6 +146,13 @@ checks.append(("repository and config compiler", {
         .compactMap(\.objectValue)
         .first { $0["tag"]?.stringValue == "ExitGateway" }?["outbounds"]?.arrayValue?.compactMap(\.stringValue)
     try expect(offlineSelectorNodes == [nodes[0].runtimeTag], "offline URL Test did not isolate its node batch")
+    let offlineSelectorConfiguration = offlineConfig["outbounds"]?.arrayValue?
+        .compactMap(\.objectValue)
+        .first { $0["tag"]?.stringValue == "ExitGateway" }
+    try expect(
+        offlineSelectorConfiguration?["interrupt_exist_connections"]?.boolValue == false,
+        "offline URL Test selector must preserve existing connections"
+    )
     let offlineCachePath = offlineConfig["experimental"]?.objectValue?["cache_file"]?.objectValue?["path"]?.stringValue
     try expect(offlineCachePath != paths.cacheDatabase.path, "offline URL Test reused the live cache database")
     let experimentalKeys = Set(offlineConfig["experimental"]?.objectValue.map { Array($0.keys) } ?? [])

@@ -6,13 +6,13 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 NATIVE_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 
-SING_BOX_VERSION="1.14.0-alpha.48"
-SING_BOX_COMMIT="fa36eb769a200e9558c414a36eb16da9a2446ea9"
-SING_BOX_ARCHIVE_SHA256="f823c45154065b8707c85a02213dd1df9daee5ccb1c5f625de4cae67974d1d1e"
+SING_BOX_VERSION="1.14.0-beta.1"
+SING_BOX_COMMIT="8bc6787c7ff785e5f6343241affdadd5ca239bd7"
+SING_BOX_ARCHIVE_SHA256="90394c042267558802b88329e85b3669e9e229eccea1387bfd79805bfb710ebf"
 GO_VERSION="1.26.5"
 MACOS_DEPLOYMENT_TARGET="13.0"
 MACOS_SDK_VERSION="26.2"
-SOURCE_DATE_EPOCH="1779788717"
+SOURCE_DATE_EPOCH="1784812860"
 # Clash is deliberately absent: NekoPilot uses only the native sing-box 1.14
 # API service, bound to loopback with an ephemeral secret by Swift.
 # Keep the transport/runtime features used by NekoPilot's supported proxy
@@ -20,12 +20,16 @@ SOURCE_DATE_EPOCH="1779788717"
 # app has no TUN inbound, so the large gVisor userspace IP stack is deliberately
 # excluded along with server, mesh, and enterprise-management features.
 BUILD_TAGS="with_quic,with_dhcp,with_utls,with_naive_outbound,badlinkname,tfogo_checklinkname0"
+# The target tag's release/LDFLAGS are part of the source-pinned build
+# contract. Verify the checked source file before using it so the wrapper
+# cannot silently retain a linker symbol that the upstream release replaced.
+EXPECTED_UPSTREAM_LDFLAGS="-X runtime.godebugDefault=multipathtcp=0,tlssha1=1,tlsunsafeekm=1 -checklinkname=0"
 # The fixed Go build ID feeds `-B gobuildid`. macOS requires LC_UUID for dyld
 # to execute the sidecar; the linker may still emit a different UUID for two
 # otherwise identical builds, so the reproducibility check canonicalizes only
 # that runtime identifier rather than stripping the required load command.
 GO_BUILD_ID="nekopilot-sing-box-${SING_BOX_VERSION}-${SING_BOX_COMMIT}"
-LDFLAGS="-s -w -X github.com/sagernet/sing-box/constant.Version=${SING_BOX_VERSION} -X internal/godebug.defaultGODEBUG=multipathtcp=0 -checklinkname=0 -buildid=${GO_BUILD_ID} -B gobuildid"
+LDFLAGS=""
 
 OUTPUT=${NEKOPILOT_SING_BOX_OUTPUT:-"$NATIVE_DIR/.build/sidecar/sing-box"}
 VERIFY_REPRODUCIBLE=${NEKOPILOT_VERIFY_REPRODUCIBLE:-0}
@@ -188,6 +192,12 @@ tar -xzf "$ARCHIVE" -C "$SOURCE_PARENT"
 SOURCE_ROOT=$(find "$SOURCE_PARENT" -mindepth 1 -maxdepth 1 -type d -print -quit)
 [[ -n "$SOURCE_ROOT" && -f "$SOURCE_ROOT/go.mod" ]] || fail "Downloaded archive has no sing-box source root"
 grep -Fxq "module github.com/sagernet/sing-box" "$SOURCE_ROOT/go.mod" || fail "Unexpected Go module in source archive"
+[[ -f "$SOURCE_ROOT/release/LDFLAGS" ]] || fail "Downloaded source has no release/LDFLAGS"
+UPSTREAM_LDFLAGS=$(< "$SOURCE_ROOT/release/LDFLAGS")
+[[ "$UPSTREAM_LDFLAGS" == "$EXPECTED_UPSTREAM_LDFLAGS" ]] || \
+  fail "Unexpected upstream release/LDFLAGS: $UPSTREAM_LDFLAGS"
+LDFLAGS="-s -w -X github.com/sagernet/sing-box/constant.Version=${SING_BOX_VERSION} ${UPSTREAM_LDFLAGS} -buildid=${GO_BUILD_ID} -B gobuildid"
+echo "[sing-box-build] Verified upstream release LDFLAGS: $UPSTREAM_LDFLAGS"
 build_once() {
   local destination=$1
   local build_cache=$2

@@ -6,6 +6,8 @@ struct SubscriptionUserAgentPresetTests {
     @Test("Known values restore their matching preset")
     func knownValuesMatch() {
         #expect(SubscriptionUserAgentPreset.matching("default") == .standard)
+        #expect(SubscriptionUserAgentPreset.defaultValue == "sing-box 1.14.0-beta.1")
+        #expect(SubscriptionUserAgentPreset.matching(SubscriptionUserAgentPreset.defaultValue) == .standard)
         #expect(SubscriptionUserAgentPreset.matching("sing-box 1.14.0-alpha.48") == .standard)
         #expect(SubscriptionUserAgentPreset.matching(SubscriptionUserAgentPreset.sfm.detail ?? "") == .sfm)
     }

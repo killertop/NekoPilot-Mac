@@ -168,7 +168,12 @@ struct ConfigurationCompilerRulePriorityTests {
             healthProbePort: 16_791
         )
         defer { source.discard() }
+        try await SingBoxValidator.validate(configuration: source.configurationURL)
         let sourceConfig = try JSONValue.decodeObject(from: Data(contentsOf: source.configurationURL))
+        let sourceSelector = try #require(sourceConfig["outbounds"]?.arrayValue?.first(where: {
+            $0.objectValue?["tag"]?.stringValue == "ExitGateway"
+        })?.objectValue)
+        #expect(sourceSelector["interrupt_exist_connections"]?.boolValue == false)
 
         // Preference writes after the source candidate has been built must not
         // leak into the preflight derived from that candidate.
@@ -186,6 +191,10 @@ struct ConfigurationCompilerRulePriorityTests {
         try await SingBoxValidator.validate(configuration: candidate.configurationURL)
         let config = try JSONValue.decodeObject(from: Data(contentsOf: candidate.configurationURL))
         #expect(try Data(contentsOf: paths.runtimeConfig) == sentinel)
+        let preflightSelector = try #require(config["outbounds"]?.arrayValue?.first(where: {
+            $0.objectValue?["tag"]?.stringValue == "ExitGateway"
+        })?.objectValue)
+        #expect(preflightSelector["interrupt_exist_connections"]?.boolValue == false)
         let inbounds = config["inbounds"]?.arrayValue?.compactMap(\.objectValue) ?? []
         let mixed = try #require(inbounds.first(where: { $0["tag"]?.stringValue == "mixed" }))
         #expect(mixed["listen"]?.stringValue == "127.0.0.1")
@@ -675,6 +684,7 @@ struct ConfigurationCompilerRulePriorityTests {
             healthProbePort: healthProbePort,
             runtimeSettings: runtimeSettings
         )
+        try await SingBoxValidator.validate(configuration: configURL)
         let config = try JSONValue.decodeObject(from: Data(contentsOf: configURL))
 
         let inbounds = config["inbounds"]?.arrayValue ?? []
@@ -748,15 +758,36 @@ struct ConfigurationCompilerRulePriorityTests {
         #expect(healthDNSIndex < customDirectDNSIndex)
         #expect(dnsRules[customDirectDNSIndex].objectValue?["inbound"] == nil)
 
+        // sing-box 1.14 beta no longer merges multi-rule, logical, or inverted
+        // rule sets with outer matchers. NekoPilot's generated rule-set rules
+        // deliberately remain flat and contain only their routing action plus
+        // the documented DNS response context for geoip-cn.
+        let routeRuleSetRules = routeRules.compactMap(\.objectValue).filter { $0["rule_set"] != nil }
+        #expect(routeRuleSetRules.count == 1)
+        #expect(Set(routeRuleSetRules[0].keys) == ["rule_set", "outbound"])
+        let geoIPDNSRule = try #require(dnsRules.compactMap(\.objectValue).first {
+            $0["rule_set"]?.arrayValue?.compactMap(\.stringValue) == ["geoip-cn"]
+        })
+        #expect(Set(geoIPDNSRule.keys) == ["match_response", "rule_set", "action", "server"])
+        let geositeDNSRule = try #require(dnsRules.compactMap(\.objectValue).first {
+            $0["rule_set"]?.arrayValue?.compactMap(\.stringValue) == ["geosite-cn"]
+        })
+        #expect(Set(geositeDNSRule.keys) == ["rule_set", "action", "server"])
+
         let selector = try #require(config["outbounds"]?.arrayValue?.first(where: { value in
             let outbound = value.objectValue
             return outbound?["type"]?.stringValue == "selector"
                 && outbound?["tag"]?.stringValue == "ExitGateway"
         })?.objectValue)
-        #expect(selector["interrupt_exist_connections"]?.boolValue == true)
+        #expect(selector["interrupt_exist_connections"]?.boolValue == false)
 
         let disabledURL = try await compiler.compile(selectedNode: selectedNode)
+        try await SingBoxValidator.validate(configuration: disabledURL)
         let disabledConfig = try JSONValue.decodeObject(from: Data(contentsOf: disabledURL))
+        let disabledSelector = try #require(disabledConfig["outbounds"]?.arrayValue?.first(where: { value in
+            value.objectValue?["tag"]?.stringValue == "ExitGateway"
+        })?.objectValue)
+        #expect(disabledSelector["interrupt_exist_connections"]?.boolValue == false)
         let disabledInbounds = disabledConfig["inbounds"]?.arrayValue ?? []
         #expect(!disabledInbounds.contains(where: {
             $0.objectValue?["tag"]?.stringValue == ProxyHealthEndpoint.inboundTag
@@ -783,6 +814,18 @@ struct ConfigurationCompilerRulePriorityTests {
                 && rule?["domain"]?.arrayValue?.compactMap(\.stringValue)
                     .contains(ProxyHealthEndpoint.host) == true
         }))
+
+        let offlineURL = try await compiler.makeOfflineTestConfiguration(
+            selectedNode: selectedNode,
+            apiEndpoint: LocalAPIEndpoint(port: 39_877, secret: "offline-selector-test")
+        )
+        defer { try? FileManager.default.removeItem(at: offlineURL.deletingLastPathComponent()) }
+        try await SingBoxValidator.validate(configuration: offlineURL)
+        let offlineConfig = try JSONValue.decodeObject(from: Data(contentsOf: offlineURL))
+        let offlineSelector = try #require(offlineConfig["outbounds"]?.arrayValue?.first(where: { value in
+            value.objectValue?["tag"]?.stringValue == "ExitGateway"
+        })?.objectValue)
+        #expect(offlineSelector["interrupt_exist_connections"]?.boolValue == false)
     }
 
     @Test("Location probe worker is isolated and cannot bypass its selector")
@@ -889,7 +932,7 @@ struct ConfigurationCompilerRulePriorityTests {
             value.objectValue?["tag"]?.stringValue == "ExitGateway"
         })?.objectValue)
         #expect(selector["outbounds"]?.arrayValue?.compactMap(\.stringValue) == [selectedNode])
-        #expect(selector["interrupt_exist_connections"]?.boolValue == true)
+        #expect(selector["interrupt_exist_connections"]?.boolValue == false)
         let workerOutboundTags = Set(
             config["outbounds"]?.arrayValue?.compactMap {
                 $0.objectValue?["tag"]?.stringValue
