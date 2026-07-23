@@ -10,8 +10,4 @@ enum AppRuntimeRecoveryPolicy {
         didPersist && error is CancellationError
     }
 
-    static func shouldRestartAfterReloadFailure(_ error: Error) -> Bool {
-        guard let failure = error as? EngineFailure else { return false }
-        return failure.kind == .reload
-    }
 }

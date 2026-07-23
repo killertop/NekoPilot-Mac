@@ -1379,23 +1379,7 @@ final class AppModel: ObservableObject {
 
     private func reloadRunningEngine(selectedNode: String?) async throws {
         guard !isShuttingDown else { throw CancellationError() }
-        do {
-            try await engine.reload(selectedNode: selectedNode)
-        } catch {
-            // Only `.reload` failures occur after the validated candidate was
-            // committed and SIGHUP was sent. Configuration/startup/control
-            // failures leave the existing live file and process untouched.
-            guard AppRuntimeRecoveryPolicy.shouldRestartAfterReloadFailure(error),
-                  await engine.currentStatus().isRunning else { throw error }
-            // A reload request can succeed in sing-box while the short status
-            // confirmation is lost, leaving UI and runtime state ambiguous.
-            // A bounded full restart gives every source/rule mutation one
-            // deterministic final state instead of silently running an older
-            // or only partially observed configuration.
-            logger.warning("live reload failed; restarting sing-box: \(error.localizedDescription)")
-            await engine.stop()
-            try await engine.start(selectedNode: selectedNode)
-        }
+        try await engine.reload(selectedNode: selectedNode)
     }
 
     private func scheduleRuleSetRefresh() {

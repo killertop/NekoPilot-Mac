@@ -323,7 +323,17 @@ if ProcessInfo.processInfo.environment["NEKOPILOT_SKIP_ENGINE_VALIDATION"] != "1
         let compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
         let nativeAPI = NativeControlClient()
         let proxy = SystemProxyManager(markerURL: paths.proxyOwnership)
-        let engine = EngineSupervisor(settings: settings, compiler: compiler, systemProxy: proxy, nativeAPI: nativeAPI)
+        let engine = EngineSupervisor(
+            settings: settings,
+            compiler: compiler,
+            systemProxy: proxy,
+            nativeAPI: nativeAPI,
+            // This lifecycle check intentionally uses an example endpoint. The
+            // production default performs the real end-to-end 204 probe; this
+            // deterministic hook keeps the offline harness focused on process,
+            // API, reload, and shutdown ownership.
+            reloadHealthProbe: { _ in true }
+        )
         let node: ProxyNode
         if ProcessInfo.processInfo.environment["NEKOPILOT_TEST_APP_DATABASE"] != nil {
             node = try await importedStoredTestNode(repository: repository)

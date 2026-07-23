@@ -38,19 +38,6 @@ struct UserActionTaskOwnerTests {
         ))
     }
 
-    @Test("Only post-commit reload failure requests restart")
-    func testOnlyPostCommitReloadFailureRequestsRestart() {
-        #expect(AppRuntimeRecoveryPolicy.shouldRestartAfterReloadFailure(
-            EngineFailure(kind: .reload, message: "reload")
-        ))
-        #expect(!AppRuntimeRecoveryPolicy.shouldRestartAfterReloadFailure(
-            EngineFailure(kind: .configuration, message: "invalid")
-        ))
-        #expect(!AppRuntimeRecoveryPolicy.shouldRestartAfterReloadFailure(
-            NekoPilotError.processFailed("legacy")
-        ))
-    }
-
     @MainActor
     @Test("Cancelled import post-processing stops before reload and selection")
     func testCancelledImportPostprocessingStopsSideEffects() async {

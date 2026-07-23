@@ -8,10 +8,16 @@ import Darwin
 struct RuntimeConfigurationCandidate: Sendable {
     let configurationURL: URL
     private let liveConfigurationURL: URL
+    private let cleanupURLs: [URL]
 
-    init(configurationURL: URL, liveConfigurationURL: URL) {
+    init(
+        configurationURL: URL,
+        liveConfigurationURL: URL,
+        cleanupURLs: [URL] = []
+    ) {
         self.configurationURL = configurationURL
         self.liveConfigurationURL = liveConfigurationURL
+        self.cleanupURLs = cleanupURLs
     }
 
     @discardableResult
@@ -24,6 +30,9 @@ struct RuntimeConfigurationCandidate: Sendable {
 
     func discard() {
         try? FileManager.default.removeItem(at: configurationURL)
+        for url in cleanupURLs {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 }
 
@@ -129,6 +138,54 @@ public actor ConfigurationCompiler {
         return RuntimeConfigurationCandidate(
             configurationURL: candidateURL,
             liveConfigurationURL: paths.runtimeConfig
+        )
+    }
+
+    /// Builds an isolated configuration that can be started alongside the
+    /// active core. Its listeners and cache never overlap the live runtime, so
+    /// a reload can prove that the exact candidate starts and reaches its
+    /// selected gateway before asking the live core to adopt it.
+    func makeReloadPreflightCandidate(
+        selectedNode: String?,
+        apiEndpoint: LocalAPIEndpoint,
+        healthProbePort: Int,
+        proxyPort: Int
+    ) async throws -> RuntimeConfigurationCandidate {
+        let current = await settings.runtimeConfiguration()
+        let isolatedSettings = RuntimeConfigurationSettings(
+            proxyPort: proxyPort,
+            allowLAN: false,
+            skipSystemProxy: true,
+            directDNS: current.directDNS,
+            rules: current.rules
+        )
+        var config = try await makeConfiguration(
+            selectedNode: selectedNode,
+            apiEndpoint: apiEndpoint,
+            healthProbePort: healthProbePort,
+            runtimeSettings: isolatedSettings
+        )
+        let runtimeDirectory = paths.runtimeConfig.deletingLastPathComponent()
+        let token = UUID().uuidString.lowercased()
+        let cacheURL = runtimeDirectory.appendingPathComponent(".reload-preflight-\(token).db")
+        if var experimental = config["experimental"]?.objectValue,
+           var cache = experimental["cache_file"]?.objectValue {
+            cache["path"] = .string(cacheURL.path)
+            experimental["cache_file"] = .object(cache)
+            config["experimental"] = .object(experimental)
+        }
+        let candidateURL = runtimeDirectory.appendingPathComponent(
+            ".runtime.json.\(RuntimeCandidateOwnership.currentProcessToken).\(token).candidate"
+        )
+        try AtomicFile.write(try JSONValue.encodeObject(config, pretty: true), to: candidateURL)
+        return RuntimeConfigurationCandidate(
+            configurationURL: candidateURL,
+            liveConfigurationURL: paths.runtimeConfig,
+            cleanupURLs: [
+                cacheURL,
+                URL(fileURLWithPath: cacheURL.path + "-shm"),
+                URL(fileURLWithPath: cacheURL.path + "-wal"),
+            ]
         )
     }
 
@@ -645,11 +702,10 @@ public actor ConfigurationCompiler {
             ))
         }
         selector["outbounds"] = .array(nodes.compactMap { $0["tag"]?.stringValue }.map(JSONValue.string))
-        // A selector change caused by manual selection or failover must move
-        // existing connection pools away from the old node as well. Otherwise
-        // a blocked long-lived session can remain unusable after the UI has
-        // already switched to a healthy node.
-        selector["interrupt_exist_connections"] = .bool(true)
+        // Existing long-lived streams stay on their established outbound.
+        // New connections use the selected node, while reloads and manual
+        // selection no longer tear down WebSocket/SSE sessions.
+        selector["interrupt_exist_connections"] = .bool(false)
         outbounds[selectorIndex] = .object(selector)
         outbounds.append(contentsOf: nodes.map(JSONValue.object))
         config["outbounds"] = .array(outbounds)

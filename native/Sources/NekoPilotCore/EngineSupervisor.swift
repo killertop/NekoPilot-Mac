@@ -8,6 +8,7 @@ public actor EngineSupervisor {
     private let nativeAPI: NativeControlClient
     private let ownershipURL: URL?
     private let configurationValidator: @Sendable (URL) async throws -> Void
+    private let reloadHealthProbe: @Sendable (Int) async -> Bool
     private let logger: any AppLogging
     private var status: EngineStatus = .stopped
     private var process: Process?
@@ -30,7 +31,8 @@ public actor EngineSupervisor {
         logger: any AppLogging = AppLogger.shared,
         configurationValidator: @escaping @Sendable (URL) async throws -> Void = {
             try await SingBoxValidator.validate(configuration: $0)
-        }
+        },
+        reloadHealthProbe: (@Sendable (Int) async -> Bool)? = nil
     ) {
         self.settings = settings
         self.compiler = compiler
@@ -39,6 +41,12 @@ public actor EngineSupervisor {
         self.ownershipURL = ownershipURL
         self.logger = logger
         self.configurationValidator = configurationValidator
+        self.reloadHealthProbe = reloadHealthProbe ?? { port in
+            if case .reachable = await ProxyHealthProbe().check(port: port) {
+                return true
+            }
+            return false
+        }
     }
 
     public func currentStatus() -> EngineStatus { status }
@@ -294,27 +302,45 @@ public actor EngineSupervisor {
             // still fail validation without committing either candidate.
             try ensureConfigurationCurrent(configurationGeneration)
             let expectedNodes = try expectedSelectorNodes(in: candidate.configurationURL)
-            _ = try candidate.commit()
+            try await ReloadSafetyPipeline.prepare(
+                preflight: {
+                    try await self.preflightReloadCandidate(
+                        selectedNode: selectedNode,
+                        expectedNodes: expectedNodes,
+                        epoch: currentEpoch,
+                        configurationGeneration: configurationGeneration
+                    )
+                    try self.ensureCurrent(currentEpoch)
+                    try self.ensureConfigurationCurrent(configurationGeneration)
+                },
+                commit: {
+                    _ = try candidate.commit()
+                }
+            )
             didCommitCandidate = true
             // The standard sing-box executable reloads atomically on SIGHUP,
             // preserving native rule-set refresh.
-            guard kill(child.processIdentifier, SIGHUP) == 0 else {
-                throw EngineFailure(
-                    kind: .reload,
-                    message: CoreL10n.text(
-                        "无法请求 sing-box 重新加载",
-                        "Could not request a sing-box reload"
+            try ReloadSafetyPipeline.signal {
+                guard kill(child.processIdentifier, SIGHUP) == 0 else {
+                    throw EngineFailure(
+                        kind: .reload,
+                        message: CoreL10n.text(
+                            "无法请求 sing-box 重新加载",
+                            "Could not request a sing-box reload"
+                        )
                     )
+                }
+            }
+            try await ReloadSafetyPipeline.confirm {
+                try await self.confirmReloadWhileHoldingGate(
+                    child: child,
+                    runningSession: runningSession,
+                    expectedNodes: expectedNodes,
+                    selectedNode: selectedNode,
+                    epoch: currentEpoch,
+                    configurationGeneration: configurationGeneration
                 )
             }
-            try await confirmReloadWhileHoldingGate(
-                child: child,
-                runningSession: runningSession,
-                expectedNodes: expectedNodes,
-                selectedNode: selectedNode,
-                epoch: currentEpoch,
-                configurationGeneration: configurationGeneration
-            )
             await selectorControlGate.release()
         } catch {
             // A stale request must never publish its own failure after a newer
@@ -336,24 +362,18 @@ public actor EngineSupervisor {
                     candidateWasCommitted: true
                 )
                 logger.warning(
-                    "reload result became ambiguous after commit; recovering before releasing control: "
+                    "reload result became ambiguous after commit; preserving the live core and proxy ownership: "
                         + error.localizedDescription
                 )
-                do {
-                    // Recovery remains inside the same FIFO transaction. A
-                    // following reload cannot validate against or signal the
-                    // ambiguous process, and will capture the recovered
-                    // session only after this completes.
-                    try await recoverCommittedReload(selectedNode: selectedNode)
-                    await selectorControlGate.release()
-                    return
-                } catch {
-                    await selectorControlGate.release()
-                    if isShuttingDown || error is CancellationError {
-                        throw CancellationError()
-                    }
-                    throw reloadFailure
-                }
+                // The independently started preflight core already proved the
+                // candidate. If confirmation of SIGHUP is lost, killing the
+                // still-running live core would create the exact outage reload
+                // is meant to avoid. Keep its listener, existing connections,
+                // and system-proxy ownership intact; a later reload can safely
+                // reconcile the desired configuration.
+                await selectorControlGate.release()
+                if isShuttingDown { throw CancellationError() }
+                throw reloadFailure
             }
 
             await selectorControlGate.release()
@@ -361,27 +381,6 @@ public actor EngineSupervisor {
             if let failure = error as? EngineFailure { throw failure }
             throw Self.classifyReloadFailure(error, candidateWasCommitted: false)
         }
-    }
-
-    private func recoverCommittedReload(selectedNode: String?) async throws {
-        // Use a fresh task so cancellation of the user operation after commit
-        // cannot interrupt restoration halfway through. Application shutdown
-        // is still authoritative through `isShuttingDown`.
-        let recovery = Task { [self] in
-            await stop()
-            guard !isShuttingDown else { throw CancellationError() }
-            try await start(selectedNode: selectedNode)
-            guard status.isRunning else {
-                throw EngineFailure(
-                    kind: .reload,
-                    message: CoreL10n.text(
-                        "sing-box 重新加载恢复失败",
-                        "Could not recover from the sing-box reload"
-                    )
-                )
-            }
-        }
-        try await recovery.value
     }
 
     nonisolated static func classifyReloadFailure(
@@ -442,6 +441,81 @@ public actor EngineSupervisor {
                 "The routing rule reload did not take effect"
             )
         )
+    }
+
+    private func preflightReloadCandidate(
+        selectedNode: String?,
+        expectedNodes: Set<String>,
+        epoch expectedEpoch: UInt64,
+        configurationGeneration expectedGeneration: UInt64
+    ) async throws {
+        let livePort = await settings.runtimeConfiguration().proxyPort
+        let candidateAPI = try makeUniqueAPIEndpoint(excluding: [livePort])
+        let candidateMixedPort = try makeAvailablePort(excluding: [livePort, candidateAPI.port])
+        let candidateHealthPort = try makeAvailablePort(
+            excluding: [livePort, candidateAPI.port, candidateMixedPort]
+        )
+        let candidate = try await compiler.makeReloadPreflightCandidate(
+            selectedNode: selectedNode,
+            apiEndpoint: candidateAPI,
+            healthProbePort: candidateHealthPort,
+            proxyPort: candidateMixedPort
+        )
+        var candidateProcess: Process?
+        var candidateClient: NativeControlClient?
+        do {
+            try await validateConfigurationCandidate(candidate.configurationURL)
+            try ensureCurrent(expectedEpoch)
+            try ensureConfigurationCurrent(expectedGeneration)
+
+            let executable = try SingBoxLocator.executable()
+            let child = try spawnPreflight(
+                executable: executable,
+                config: candidate.configurationURL
+            )
+            candidateProcess = child
+            let client = NativeControlClient(endpoint: candidateAPI, logger: logger)
+            candidateClient = client
+
+            guard await waitUntilPreflightReady(
+                process: child,
+                client: client,
+                apiEndpoint: candidateAPI,
+                expectedNodes: expectedNodes,
+                selectedNode: selectedNode,
+                epoch: expectedEpoch,
+                configurationGeneration: expectedGeneration
+            ) else {
+                throw EngineFailure(
+                    kind: .reload,
+                    message: CoreL10n.text(
+                        "候选 sing-box 未通过启动健康检查",
+                        "The candidate sing-box failed its startup health check"
+                    )
+                )
+            }
+
+            let isHealthy = await reloadHealthProbe(candidateHealthPort)
+            try ensureCurrent(expectedEpoch)
+            try ensureConfigurationCurrent(expectedGeneration)
+            guard isHealthy, child.isRunning else {
+                throw EngineFailure(
+                    kind: .reload,
+                    message: CoreL10n.text(
+                        "候选 sing-box 无法通过所选节点访问网络",
+                        "The candidate sing-box could not reach the network through the selected node"
+                    )
+                )
+            }
+        } catch {
+            if let candidateClient { await candidateClient.disconnect() }
+            if let candidateProcess { await stopPreflightProcess(candidateProcess) }
+            candidate.discard()
+            throw error
+        }
+        if let candidateClient { await candidateClient.disconnect() }
+        if let candidateProcess { await stopPreflightProcess(candidateProcess) }
+        candidate.discard()
     }
 
     public func select(node: String) async throws {
@@ -616,6 +690,87 @@ public actor EngineSupervisor {
         return child
     }
 
+    private func spawnPreflight(executable: URL, config: URL) throws -> Process {
+        let child = Process()
+        let standardOutput = Pipe()
+        let standardError = Pipe()
+        let logger = logger
+        child.executableURL = executable
+        child.arguments = ["run", "-c", config.path, "--disable-color"]
+        child.currentDirectoryURL = config.deletingLastPathComponent()
+        child.standardOutput = standardOutput
+        child.standardError = standardError
+        standardOutput.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            logger.info("[sing-box preflight] \(String(decoding: data, as: UTF8.self))")
+        }
+        standardError.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            logger.warning("[sing-box preflight] \(String(decoding: data, as: UTF8.self))")
+        }
+        child.terminationHandler = { _ in
+            standardOutput.fileHandleForReading.readabilityHandler = nil
+            standardError.fileHandleForReading.readabilityHandler = nil
+        }
+        try child.run()
+        try? standardOutput.fileHandleForWriting.close()
+        try? standardError.fileHandleForWriting.close()
+        _ = setpgid(child.processIdentifier, child.processIdentifier)
+        return child
+    }
+
+    private func stopPreflightProcess(_ child: Process) async {
+        terminateProcessGroup(pid: child.processIdentifier)
+        for _ in 0 ..< 20 where child.isRunning {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        if child.isRunning {
+            terminateProcessGroup(pid: child.processIdentifier, force: true)
+            for _ in 0 ..< 20 where child.isRunning {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+        }
+    }
+
+    private func waitUntilPreflightReady(
+        process: Process,
+        client: NativeControlClient,
+        apiEndpoint: LocalAPIEndpoint,
+        expectedNodes: Set<String>,
+        selectedNode: String?,
+        epoch expectedEpoch: UInt64,
+        configurationGeneration expectedGeneration: UInt64
+    ) async -> Bool {
+        for _ in 0 ..< 100 {
+            do {
+                try ensureCurrent(expectedEpoch)
+                try ensureConfigurationCurrent(expectedGeneration)
+            } catch {
+                return false
+            }
+            guard process.isRunning else { return false }
+            if PortProbe.isListening(apiEndpoint.port), await client.isReady() {
+                guard let selector = try? await client.selector(knownNodes: Array(expectedNodes)),
+                      Set(selector.nodes) == expectedNodes else {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    continue
+                }
+                if let selectedNode, selector.current != selectedNode {
+                    do {
+                        try await client.select(node: selectedNode)
+                    } catch {
+                        return false
+                    }
+                }
+                return process.isRunning
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return false
+    }
+
     private func waitUntilReady(endpoint: LocalAPIEndpoint, epoch expectedEpoch: UInt64) async -> Bool {
         for _ in 0 ..< 100 {
             guard expectedEpoch == epoch, !isShuttingDown, process?.isRunning == true else { return false }
@@ -641,6 +796,38 @@ public actor EngineSupervisor {
             message: CoreL10n.text(
                 "无法分配节点健康检查端口",
                 "Could not allocate the node health-check port"
+            )
+        )
+    }
+
+    private func makeUniqueAPIEndpoint(excluding excludedPorts: Set<Int>) throws -> LocalAPIEndpoint {
+        for _ in 0 ..< 8 {
+            let endpoint = try LocalAPIEndpoint.make()
+            if !excludedPorts.contains(endpoint.port), !PortProbe.isListening(endpoint.port) {
+                return endpoint
+            }
+        }
+        throw EngineFailure(
+            kind: .reload,
+            message: CoreL10n.text(
+                "无法分配候选控制端口",
+                "Could not allocate the candidate control port"
+            )
+        )
+    }
+
+    private func makeAvailablePort(excluding excludedPorts: Set<Int>) throws -> Int {
+        for _ in 0 ..< 8 {
+            let port = try LocalAPIEndpoint.make().port
+            if !excludedPorts.contains(port), !PortProbe.isListening(port) {
+                return port
+            }
+        }
+        throw EngineFailure(
+            kind: .reload,
+            message: CoreL10n.text(
+                "无法分配候选监听端口",
+                "Could not allocate a candidate listener port"
             )
         )
     }

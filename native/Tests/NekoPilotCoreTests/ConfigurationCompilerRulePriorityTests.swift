@@ -126,6 +126,71 @@ struct ConfigurationCompilerRulePriorityTests {
         #expect(!FileManager.default.fileExists(atPath: second.configurationURL.path))
     }
 
+    @Test("Reload preflight uses isolated listeners and removes its cache family")
+    func reloadPreflightCandidateIsIsolated() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NekoPilot-Reload-Preflight-Test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let support = root.appendingPathComponent("Application Support", isDirectory: true)
+        let logs = root.appendingPathComponent("Logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+
+        let paths = AppPaths(applicationSupport: support, logs: logs)
+        let settings = try SettingsStore(fileURL: paths.settings)
+        try await settings.set(.number(16_789), for: SettingsStore.Key.proxyPort)
+        try await settings.set(.bool(true), for: SettingsStore.Key.allowLAN)
+        let repository = try SubscriptionRepository(databaseURL: paths.database)
+        let identifier = try await repository.upsert(
+            url: nil,
+            name: "Preflight",
+            sourceType: .localLink,
+            config: [
+                "outbounds": .array([.object([
+                    "type": .string("vless"),
+                    "tag": .string("node"),
+                    "server": .string("example.com"),
+                    "server_port": .number(443),
+                    "uuid": .string("00000000-0000-4000-8000-000000000000"),
+                ])]),
+            ]
+        )
+        let sentinel = Data("live-config-remains-owned-by-running-core".utf8)
+        try AtomicFile.write(sentinel, to: paths.runtimeConfig)
+        let compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
+        let candidate = try await compiler.makeReloadPreflightCandidate(
+            selectedNode: "@np:\(identifier):node",
+            apiEndpoint: LocalAPIEndpoint(port: 39_890, secret: "preflight-secret"),
+            healthProbePort: 39_892,
+            proxyPort: 39_891
+        )
+
+        let config = try JSONValue.decodeObject(from: Data(contentsOf: candidate.configurationURL))
+        #expect(try Data(contentsOf: paths.runtimeConfig) == sentinel)
+        let inbounds = config["inbounds"]?.arrayValue?.compactMap(\.objectValue) ?? []
+        let mixed = try #require(inbounds.first(where: { $0["tag"]?.stringValue == "mixed" }))
+        #expect(mixed["listen"]?.stringValue == "127.0.0.1")
+        #expect(mixed["listen_port"]?.numberValue == 39_891)
+        #expect(inbounds.contains(where: {
+            $0["tag"]?.stringValue == ProxyHealthEndpoint.inboundTag
+                && $0["listen_port"]?.numberValue == 39_892
+        }))
+        let cachePath = try #require(
+            config["experimental"]?.objectValue?["cache_file"]?.objectValue?["path"]?.stringValue
+        )
+        #expect(cachePath != paths.cacheDatabase.path)
+        #expect(cachePath.contains(".reload-preflight-"))
+
+        for path in [cachePath, cachePath + "-shm", cachePath + "-wal"] {
+            FileManager.default.createFile(atPath: path, contents: Data())
+        }
+        candidate.discard()
+        #expect(!FileManager.default.fileExists(atPath: candidate.configurationURL.path))
+        #expect(!FileManager.default.fileExists(atPath: cachePath))
+        #expect(!FileManager.default.fileExists(atPath: cachePath + "-shm"))
+        #expect(!FileManager.default.fileExists(atPath: cachePath + "-wal"))
+    }
+
     @Test("Startup recovery removes only abandoned runtime candidates")
     func startupRecoveryRemovesOnlyAbandonedCandidates() async throws {
         let root = FileManager.default.temporaryDirectory
@@ -610,7 +675,7 @@ struct ConfigurationCompilerRulePriorityTests {
             return outbound?["type"]?.stringValue == "selector"
                 && outbound?["tag"]?.stringValue == "ExitGateway"
         })?.objectValue)
-        #expect(selector["interrupt_exist_connections"]?.boolValue == true)
+        #expect(selector["interrupt_exist_connections"]?.boolValue == false)
 
         let disabledURL = try await compiler.compile(selectedNode: selectedNode)
         let disabledConfig = try JSONValue.decodeObject(from: Data(contentsOf: disabledURL))
@@ -746,7 +811,7 @@ struct ConfigurationCompilerRulePriorityTests {
             value.objectValue?["tag"]?.stringValue == "ExitGateway"
         })?.objectValue)
         #expect(selector["outbounds"]?.arrayValue?.compactMap(\.stringValue) == [selectedNode])
-        #expect(selector["interrupt_exist_connections"]?.boolValue == true)
+        #expect(selector["interrupt_exist_connections"]?.boolValue == false)
         let workerOutboundTags = Set(
             config["outbounds"]?.arrayValue?.compactMap {
                 $0.objectValue?["tag"]?.stringValue
