@@ -93,10 +93,21 @@ public actor SystemProxyManager {
                 return session
             } catch {
                 self.logger.error("system proxy apply failed: \(error.localizedDescription)")
+                var rollbackError: Error?
                 do {
                     try await self.restoreLocked(marker)
                 } catch {
+                    rollbackError = error
                     self.logger.error("system proxy rollback failed; marker retained: \(error.localizedDescription)")
+                }
+                if let rollbackError {
+                    throw EngineFailure(
+                        kind: .systemProxy,
+                        message: CoreL10n.text(
+                            "系统代理应用失败且回滚失败：\(rollbackError.localizedDescription)",
+                            "System proxy apply and rollback both failed: \(rollbackError.localizedDescription)"
+                        )
+                    )
                 }
                 throw error
             }
@@ -178,6 +189,7 @@ public actor SystemProxyManager {
                 // Roll back only to the old NekoPilot listener. Never call
                 // restoreLocked here: that would disable the proxy or restore
                 // the user's previous settings during a failed reload.
+                var rollbackError: Error?
                 for backup in moved {
                     do {
                         try await self.setOwnedProxy(
@@ -187,10 +199,20 @@ public actor SystemProxyManager {
                                 ?? self.ownedBypass(existing: backup.bypassDomains, extra: [])
                         )
                     } catch {
+                        rollbackError = error
                         self.logger.error(
                             "system proxy handoff rollback failed for \(backup.name): \(error.localizedDescription)"
                         )
                     }
+                }
+                if let rollbackError {
+                    throw EngineFailure(
+                        kind: .systemProxy,
+                        message: CoreL10n.text(
+                            "系统代理切换回滚失败：\(rollbackError.localizedDescription)",
+                            "System proxy handoff rollback failed: \(rollbackError.localizedDescription)"
+                        )
+                    )
                 }
                 throw error
             }

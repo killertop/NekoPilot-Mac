@@ -170,10 +170,27 @@ public actor EngineSupervisor {
                 )
             }
 
+            guard await reloadHealthProbe(healthProbePort) else {
+                throw EngineFailure(
+                    kind: .startup,
+                    message: CoreL10n.text(
+                        "sing-box 启动后无法通过当前节点访问网络",
+                        "sing-box started but could not reach the network through the selected node"
+                    )
+                )
+            }
+            try ensureCurrent(startEpoch)
+
             if !runtimeSettings.skipSystemProxy {
-                let proxySession = try await systemProxy.apply(port: mixedPort)
-                appliedProxySession = proxySession
-                proxySessionID = proxySession
+                do {
+                    let proxySession = try await systemProxy.apply(port: mixedPort)
+                    appliedProxySession = proxySession
+                    proxySessionID = proxySession
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    throw systemProxyFailure(error)
+                }
             }
             try ensureCurrent(startEpoch)
             if let selectedNode { try await nativeAPI.select(node: selectedNode) }
@@ -183,20 +200,40 @@ public actor EngineSupervisor {
         } catch is CancellationError {
             if let startedSession { _ = await stopProcessOnly(expectedSession: startedSession) }
             await nativeAPI.disconnect()
+            var proxyCleanupError: Error?
             if let appliedProxySession {
-                try? await systemProxy.removeOwnedProxy(expectedSession: appliedProxySession)
+                do {
+                    try await systemProxy.removeOwnedProxy(expectedSession: appliedProxySession)
+                } catch {
+                    proxyCleanupError = error
+                    logger.error("system proxy cleanup failed after cancelled start: \(error.localizedDescription)")
+                }
+            }
+            if let proxyCleanupError {
+                let failure = systemProxyFailure(proxyCleanupError)
+                if epoch == startEpoch { setStatus(.failed(failure)) }
+                throw failure
             }
             if epoch == startEpoch { setStatus(.stopped) }
             throw CancellationError()
         } catch {
             logger.error("engine start failed: \(error.localizedDescription)")
             if let startedSession { _ = await stopProcessOnly(expectedSession: startedSession) }
+            var proxyCleanupError: Error?
             if let appliedProxySession {
-                try? await systemProxy.removeOwnedProxy(expectedSession: appliedProxySession)
+                do {
+                    try await systemProxy.removeOwnedProxy(expectedSession: appliedProxySession)
+                } catch {
+                    proxyCleanupError = error
+                    logger.error("system proxy cleanup failed after failed start: \(error.localizedDescription)")
+                }
             }
             await nativeAPI.disconnect()
             if epoch == startEpoch {
-                setStatus(.failed(failure(from: error, fallback: .startup)))
+                setStatus(.failed(failure(from: proxyCleanupError ?? error, fallback: .startup)))
+            }
+            if let proxyCleanupError {
+                throw systemProxyFailure(proxyCleanupError)
             }
             throw error
         }
@@ -637,6 +674,7 @@ public actor EngineSupervisor {
             )
         } catch {
             reloadTransition = nil
+            var rollbackError: Error?
             if proxyWasHandedOff,
                let oldProxySession,
                let oldMixedPort {
@@ -648,10 +686,14 @@ public actor EngineSupervisor {
                         toPort: oldMixedPort
                     )
                 } catch {
+                    rollbackError = error
                     logger.error(
                         "system proxy handoff rollback failed: \(error.localizedDescription)"
                     )
                 }
+            }
+            if let rollbackError {
+                throw systemProxyFailure(rollbackError)
             }
             throw error
         }
@@ -748,6 +790,19 @@ public actor EngineSupervisor {
         return EngineFailure(kind: fallback, message: error.localizedDescription)
     }
 
+    private func systemProxyFailure(_ error: Error) -> EngineFailure {
+        if let failure = error as? EngineFailure, failure.kind == .systemProxy {
+            return failure
+        }
+        return EngineFailure(
+            kind: .systemProxy,
+            message: CoreL10n.text(
+                "系统代理操作失败：\(error.localizedDescription)",
+                "System proxy operation failed: \(error.localizedDescription)"
+            )
+        )
+    }
+
     public func shutdown() async {
         guard !isShuttingDown else { return }
         isShuttingDown = true
@@ -758,7 +813,18 @@ public actor EngineSupervisor {
     }
 
     private func stopForShutdown() async {
-        guard (try? await selectorControlGate.acquire()) != nil else { return }
+        do {
+            try await selectorControlGate.acquire()
+        } catch {
+            setStatus(.failed(EngineFailure(
+                kind: .shutdown,
+                message: CoreL10n.text(
+                    "关闭时无法获得引擎控制权",
+                    "Could not acquire engine control during shutdown"
+                )
+            )))
+            return
+        }
         let stoppingSession = sessionID
         let stoppingProxySession = proxySessionID
         setStatus(.stopping)
@@ -766,21 +832,29 @@ public actor EngineSupervisor {
         let didStop = await stopProcessOnly(expectedSession: stoppingSession)
         await nativeAPI.disconnect()
         logger.info("shutdown: sing-box child terminated=\(didStop)")
+        var proxyCleanupError: Error?
         do {
             logger.info("shutdown: restoring system proxy")
             try await systemProxy.removeOwnedProxy(expectedSession: stoppingProxySession)
             if proxySessionID == stoppingProxySession { proxySessionID = nil }
             logger.info("shutdown: system proxy restored")
         } catch {
+            proxyCleanupError = error
             logger.error("system proxy cleanup failed during shutdown: \(error.localizedDescription)")
         }
-        setStatus(didStop ? .stopped : .failed(EngineFailure(
-            kind: .shutdown,
-            message: CoreL10n.text(
-                "sing-box 无法停止",
-                "sing-box could not be stopped"
-            )
-        )))
+        if !didStop {
+            setStatus(.failed(EngineFailure(
+                kind: .shutdown,
+                message: CoreL10n.text(
+                    "sing-box 无法停止",
+                    "sing-box could not be stopped"
+                )
+            )))
+        } else if let proxyCleanupError {
+            setStatus(.failed(systemProxyFailure(proxyCleanupError)))
+        } else {
+            setStatus(.stopped)
+        }
         await selectorControlGate.release()
     }
 
@@ -1061,10 +1135,18 @@ public actor EngineSupervisor {
         activeReloadCandidate?.discard()
         activeReloadCandidate = nil
         removeOwnershipIfMatching(session: session)
-        try? await systemProxy.removeOwnedProxy(expectedSession: expectedProxySession)
+        var proxyCleanupError: Error?
+        do {
+            try await systemProxy.removeOwnedProxy(expectedSession: expectedProxySession)
+        } catch {
+            proxyCleanupError = error
+            logger.error("system proxy cleanup failed after sing-box exit: \(error.localizedDescription)")
+        }
         guard sessionID == nil else { return }
         if proxySessionID == expectedProxySession { proxySessionID = nil }
-        if status == .stopping || isShuttingDown {
+        if let proxyCleanupError {
+            setStatus(.failed(systemProxyFailure(proxyCleanupError)))
+        } else if status == .stopping || isShuttingDown {
             setStatus(.stopped)
         } else {
             let message = CoreL10n.text(
