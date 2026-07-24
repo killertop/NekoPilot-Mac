@@ -20,6 +20,11 @@ final class StatusItemController: NSObject {
         self.showWindowAction = showWindowAction
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
+        // A 20 pt mask fits inside the standard square status item. AppKit's
+        // default proportional-down scaling otherwise shrinks it back toward
+        // 18 pt, which made this slender shield look smaller than neighboring
+        // menu-bar symbols even after transparent padding was cropped.
+        statusItem.button?.imageScaling = .scaleNone
         configureMenu()
         statusItem.menu = menu
         model.$status
@@ -107,7 +112,7 @@ final class StatusItemController: NSObject {
         }
         // Keep the source at its native 72 pt canvas. `statusImage(for:)`
         // crops the transparent export padding before downscaling it into the
-        // 18 pt menu-bar slot, so the visible mark uses the available space
+        // 20 pt menu-bar slot, so the visible mark uses the available space
         // instead of appearing about one fifth too small.
         image.size = NSSize(width: 72, height: 72)
         image.isTemplate = true
@@ -116,7 +121,7 @@ final class StatusItemController: NSObject {
 
     private func statusImage(for status: EngineStatus) -> NSImage? {
         guard let baseTemplateImage else { return nil }
-        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+        let image = NSImage(size: NSSize(width: 20, height: 20), flipped: false) { _ in
             NSColor.black.setStroke()
             NSColor.black.setFill()
             baseTemplateImage.draw(
@@ -125,29 +130,29 @@ final class StatusItemController: NSObject {
                 // full status-item width rather than scaling that padding too.
                 // The slight low offset keeps the top-heavy shield aligned
                 // with Apple's standard menu-bar symbols.
-                in: NSRect(x: 0, y: 1.1, width: 18, height: 15.35),
+                in: NSRect(x: 0, y: 1.2, width: 20, height: 17.05),
                 // Keep one source pixel of antialiasing room on every edge;
                 // the mask stays large without being clipped at the right.
                 from: NSRect(x: 1, y: 6, width: 70, height: 60),
                 operation: .sourceOver,
                 fraction: 1
             )
-            let badgeRect = NSRect(x: 12.75, y: 1.5, width: 4, height: 4)
+            let badgeRect = NSRect(x: 14.15, y: 1.65, width: 4.45, height: 4.45)
             switch status {
             case .running:
                 NSBezierPath(ovalIn: badgeRect).fill()
             case .starting, .stopping:
-                let ring = NSBezierPath(ovalIn: badgeRect.insetBy(dx: 0.4, dy: 0.4))
-                ring.lineWidth = 1.1
+                let ring = NSBezierPath(ovalIn: badgeRect.insetBy(dx: 0.45, dy: 0.45))
+                ring.lineWidth = 1.2
                 ring.stroke()
             case .failed:
-                let inset = badgeRect.insetBy(dx: 0.6, dy: 0.6)
+                let inset = badgeRect.insetBy(dx: 0.65, dy: 0.65)
                 let cross = NSBezierPath()
                 cross.move(to: NSPoint(x: inset.minX, y: inset.minY))
                 cross.line(to: NSPoint(x: inset.maxX, y: inset.maxY))
                 cross.move(to: NSPoint(x: inset.minX, y: inset.maxY))
                 cross.line(to: NSPoint(x: inset.maxX, y: inset.minY))
-                cross.lineWidth = 1.15
+                cross.lineWidth = 1.25
                 cross.lineCapStyle = .round
                 cross.stroke()
             case .stopped:
