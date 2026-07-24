@@ -15,7 +15,10 @@ public actor EngineSupervisor {
     private var sessionID: UUID?
     private var apiEndpoint: LocalAPIEndpoint?
     private var healthProbePort: Int?
+    private var mixedPort: Int?
     private var proxySessionID: UUID?
+    private var activeReloadCandidate: RuntimeConfigurationCandidate?
+    private var reloadTransition: ReloadTransition?
     private let selectorControlGate = AsyncSerialGate()
     private var epoch: UInt64 = 0
     private var configurationGeneration: UInt64 = 0
@@ -147,6 +150,7 @@ public actor EngineSupervisor {
             sessionID = session
             self.apiEndpoint = apiEndpoint
             self.healthProbePort = healthProbePort
+            self.mixedPort = mixedPort
 
             guard await waitUntilReady(endpoint: apiEndpoint, epoch: startEpoch) else {
                 try ensureCurrent(startEpoch)
@@ -200,6 +204,11 @@ public actor EngineSupervisor {
 
     public func stop() async {
         guard status != .stopped else { return }
+        guard (try? await selectorControlGate.acquire()) != nil else { return }
+        guard status != .stopped else {
+            await selectorControlGate.release()
+            return
+        }
         epoch &+= 1
         let stopEpoch = epoch
         let stoppingSession = sessionID
@@ -218,7 +227,10 @@ public actor EngineSupervisor {
             proxyCleanupError = error
             logger.error("system proxy cleanup failed during stop: \(error.localizedDescription)")
         }
-        guard epoch == stopEpoch else { return }
+        guard epoch == stopEpoch else {
+            await selectorControlGate.release()
+            return
+        }
         if !didStop {
             setStatus(.failed(EngineFailure(
                 kind: .shutdown,
@@ -235,6 +247,7 @@ public actor EngineSupervisor {
         } else {
             setStatus(.stopped)
         }
+        await selectorControlGate.release()
     }
 
     public func restartAfterLifecycleEvent(selectedNode: String?) async {
@@ -259,13 +272,15 @@ public actor EngineSupervisor {
         var reloadEpoch: UInt64?
         var reloadConfigurationGeneration: UInt64?
         var didCommitCandidate = false
+        var preflightRuntime: ReloadPreflightRuntime?
         // Acquire before compilation so FIFO order reflects caller intent,
         // not whichever validator happens to finish first. Manual selections
         // submitted after this reload will therefore apply after it.
         try await selectorControlGate.acquire()
         do {
             // Cancellation while queued must not produce a candidate, supersede
-            // another reload, commit configuration, or signal sing-box.
+            // another reload, promote configuration, or hand off the live
+            // proxy.
             try Task.checkCancellation()
             // A preceding reload may have recovered the process while this
             // request was queued. Capture the current session only after the
@@ -275,6 +290,15 @@ public actor EngineSupervisor {
                   let runningSession = sessionID,
                   child.isRunning else {
                 throw CancellationError()
+            }
+            guard let liveMixedPort = mixedPort else {
+                throw EngineFailure(
+                    kind: .control,
+                    message: CoreL10n.text(
+                        "sing-box 代理监听端口已丢失",
+                        "The live sing-box proxy listener was lost"
+                    )
+                )
             }
             let currentEpoch = epoch
             reloadEpoch = currentEpoch
@@ -304,10 +328,11 @@ public actor EngineSupervisor {
             let expectedNodes = try expectedSelectorNodes(in: candidate.configurationURL)
             try await ReloadSafetyPipeline.prepare(
                 preflight: {
-                    try await self.preflightReloadCandidate(
+                    preflightRuntime = try await self.preflightReloadCandidate(
                         sourceConfigurationURL: candidate.configurationURL,
                         selectedNode: selectedNode,
                         expectedNodes: expectedNodes,
+                        liveMixedPort: liveMixedPort,
                         epoch: currentEpoch,
                         configurationGeneration: configurationGeneration
                     )
@@ -316,35 +341,51 @@ public actor EngineSupervisor {
                     try self.ensureConfigurationCurrent(configurationGeneration)
                 },
                 commit: {
-                    _ = try candidate.commit()
+                    guard let preflightRuntime else {
+                        throw EngineFailure(
+                            kind: .reload,
+                            message: CoreL10n.text(
+                                "候选 sing-box 未建立",
+                                "The candidate sing-box was not prepared"
+                            )
+                        )
+                    }
+                    // Promote the exact bytes that were started and proved
+                    // healthy. The source candidate is only the immutable
+                    // input used to build this isolated preflight runtime.
+                    _ = try preflightRuntime.candidate.promote()
                 }
             )
             didCommitCandidate = true
-            // The standard sing-box executable reloads atomically on SIGHUP,
-            // preserving native rule-set refresh.
-            try ReloadSafetyPipeline.signal {
-                guard kill(child.processIdentifier, SIGHUP) == 0 else {
-                    throw EngineFailure(
-                        kind: .reload,
-                        message: CoreL10n.text(
-                            "无法请求 sing-box 重新加载",
-                            "Could not request a sing-box reload"
-                        )
+            guard let runtime = preflightRuntime else {
+                throw EngineFailure(
+                    kind: .reload,
+                    message: CoreL10n.text(
+                        "候选 sing-box 未建立",
+                        "The candidate sing-box was not prepared"
                     )
-                }
+                )
             }
-            try await ReloadSafetyPipeline.confirm {
-                try await self.confirmReloadWhileHoldingGate(
-                    child: child,
-                    runningSession: runningSession,
-                    expectedNodes: expectedNodes,
-                    selectedNode: selectedNode,
+            try await ReloadSafetyPipeline.handoff {
+                try await self.adoptReloadCandidate(
+                    runtime,
+                    oldChild: child,
+                    oldSession: runningSession,
                     epoch: currentEpoch,
                     configurationGeneration: configurationGeneration
                 )
             }
+            preflightRuntime = nil
             await selectorControlGate.release()
         } catch {
+            // A preflight candidate is outside the live-engine state until the
+            // handoff returns. Clean it up before checking whether this reload
+            // became stale; otherwise cancellation/supersession could release
+            // the gate while leaving a healthy-but-unadopted core running.
+            if let preflightRuntime {
+                await abandonReloadCandidate(preflightRuntime)
+            }
+
             // A stale request must never publish its own failure after a newer
             // lifecycle operation has taken ownership. Check while the gate is
             // still held so a queued reload cannot change generation first.
@@ -364,15 +405,9 @@ public actor EngineSupervisor {
                     candidateWasCommitted: true
                 )
                 logger.warning(
-                    "reload result became ambiguous after commit; preserving the live core and proxy ownership: "
+                    "reload handoff failed after promotion; preserving the live core and proxy ownership: "
                         + error.localizedDescription
                 )
-                // The independently started preflight core already proved the
-                // candidate. If confirmation of SIGHUP is lost, killing the
-                // still-running live core would create the exact outage reload
-                // is meant to avoid. Keep its listener, existing connections,
-                // and system-proxy ownership intact; a later reload can safely
-                // reconcile the desired configuration.
                 await selectorControlGate.release()
                 if isShuttingDown { throw CancellationError() }
                 throw reloadFailure
@@ -391,72 +426,24 @@ public actor EngineSupervisor {
     ) -> Error {
         // Before commit, preserve validation/compiler/control errors so
         // callers keep the working process. After commit, an untyped control
-        // error leaves the observed reload result ambiguous and must use the
-        // typed recovery path.
+        // error means durable configuration changed while the old core stayed
+        // active; callers must use the typed recovery path.
         guard candidateWasCommitted else { return error }
         return EngineFailure(kind: .reloadCommitted, message: error.localizedDescription)
-    }
-
-    private func confirmReloadWhileHoldingGate(
-        child: Process,
-        runningSession: UUID,
-        expectedNodes: Set<String>,
-        selectedNode: String?,
-        epoch expectedEpoch: UInt64,
-        configurationGeneration expectedGeneration: UInt64
-    ) async throws {
-        for _ in 0 ..< 50 {
-            try ensureCurrent(expectedEpoch)
-            try ensureConfigurationCurrent(expectedGeneration)
-            guard sessionID == runningSession, child.isRunning else {
-                throw EngineFailure(
-                    kind: .reload,
-                    message: CoreL10n.text(
-                        "sing-box 在重新加载时退出",
-                        "sing-box exited while reloading"
-                    )
-                )
-            }
-            if let selector = try? await nativeAPI.selector(knownNodes: Array(expectedNodes)) {
-                try ensureCurrent(expectedEpoch)
-                try ensureConfigurationCurrent(expectedGeneration)
-                guard Set(selector.nodes) == expectedNodes else {
-                    try await Task.sleep(nanoseconds: 100_000_000)
-                    continue
-                }
-                if let selectedNode, selector.current != selectedNode {
-                    try await nativeAPI.select(node: selectedNode)
-                    // `select` crosses an actor boundary. A newer reload may
-                    // have started while it was in flight, so never report the
-                    // old mutation as current after the await.
-                    try ensureCurrent(expectedEpoch)
-                    try ensureConfigurationCurrent(expectedGeneration)
-                }
-                return
-            }
-            try await Task.sleep(nanoseconds: 100_000_000)
-        }
-        throw EngineFailure(
-            kind: .reload,
-            message: CoreL10n.text(
-                "规则重新加载未生效",
-                "The routing rule reload did not take effect"
-            )
-        )
     }
 
     private func preflightReloadCandidate(
         sourceConfigurationURL: URL,
         selectedNode: String?,
         expectedNodes: Set<String>,
+        liveMixedPort: Int,
         epoch expectedEpoch: UInt64,
         configurationGeneration expectedGeneration: UInt64
-    ) async throws {
-        let livePort = await settings.runtimeConfiguration().proxyPort
-        let candidateAPI = try makeUniqueAPIEndpoint(excluding: [livePort])
-        let candidateMixedPort = try makeAvailablePort(excluding: [livePort, candidateAPI.port])
+    ) async throws -> ReloadPreflightRuntime {
+        let candidateAPI = try makeUniqueAPIEndpoint(excluding: [liveMixedPort])
+        let candidateMixedPort = try makeAvailablePort(excluding: [liveMixedPort, candidateAPI.port])
         let candidateHealthPort = try makeAvailablePort(
-            excluding: [livePort, candidateAPI.port, candidateMixedPort]
+            excluding: [liveMixedPort, candidateAPI.port, candidateMixedPort]
         )
         let candidate = try await compiler.makeReloadPreflightCandidate(
             from: sourceConfigurationURL,
@@ -464,18 +451,20 @@ public actor EngineSupervisor {
             healthProbePort: candidateHealthPort,
             proxyPort: candidateMixedPort
         )
-        defer { candidate.discard() }
         var candidateProcess: Process?
         var candidateClient: NativeControlClient?
+        let candidateSession = UUID()
+        let executable: URL
         do {
             try await validateConfigurationCandidate(candidate.configurationURL)
             try ensureCurrent(expectedEpoch)
             try ensureConfigurationCurrent(expectedGeneration)
 
-            let executable = try SingBoxLocator.executable()
+            executable = try SingBoxLocator.executable()
             let child = try spawnPreflight(
                 executable: executable,
-                config: candidate.configurationURL
+                config: candidate.configurationURL,
+                session: candidateSession
             )
             candidateProcess = child
             let client = NativeControlClient(endpoint: candidateAPI, logger: logger)
@@ -513,17 +502,171 @@ public actor EngineSupervisor {
             }
         } catch {
             if let candidateClient { await candidateClient.disconnect() }
+            var cleanupError: Error?
             if let candidateProcess {
                 do {
                     try await stopPreflightProcess(candidateProcess)
                 } catch {
-                    throw error
+                    cleanupError = error
+                }
+            }
+            candidate.discard()
+            if let cleanupError { throw cleanupError }
+            throw error
+        }
+        guard let candidateProcess, let candidateClient else {
+            candidate.discard()
+            throw EngineFailure(
+                kind: .reload,
+                message: CoreL10n.text(
+                    "候选 sing-box 进程未建立",
+                    "The candidate sing-box process was not created"
+                )
+            )
+        }
+        return ReloadPreflightRuntime(
+            candidate: candidate,
+            process: candidateProcess,
+            client: candidateClient,
+            executable: executable,
+            session: candidateSession,
+            apiEndpoint: candidateAPI,
+            mixedPort: candidateMixedPort,
+            healthProbePort: candidateHealthPort
+        )
+    }
+
+    private func adoptReloadCandidate(
+        _ candidate: ReloadPreflightRuntime,
+        oldChild: Process,
+        oldSession: UUID,
+        epoch expectedEpoch: UInt64,
+        configurationGeneration expectedGeneration: UInt64
+    ) async throws {
+        try ensureCurrent(expectedEpoch)
+        try ensureConfigurationCurrent(expectedGeneration)
+        guard sessionID == oldSession, process === oldChild else {
+            throw CancellationError()
+        }
+        guard candidate.process.isRunning else {
+            throw EngineFailure(
+                kind: .reload,
+                message: CoreL10n.text(
+                    "候选 sing-box 在切换前退出",
+                    "The candidate sing-box exited before handoff"
+                )
+            )
+        }
+
+        let oldMixedPort = mixedPort
+        let oldProxySession = proxySessionID
+        reloadTransition = ReloadTransition(
+            oldSession: oldSession,
+            candidateSession: candidate.session
+        )
+        var proxyWasHandedOff = false
+        do {
+            if let oldProxySession {
+                guard oldMixedPort != nil else {
+                    throw EngineFailure(
+                        kind: .systemProxy,
+                        message: CoreL10n.text(
+                            "旧 core 的代理监听端口已丢失",
+                            "The old core's proxy listener was lost"
+                        )
+                    )
+                }
+                // This keeps the system proxy enabled and owned. It changes
+                // only the destination port after the candidate passed its
+                // end-to-end health check.
+                try await systemProxy.handoff(
+                    expectedSession: oldProxySession,
+                    toPort: candidate.mixedPort
+                )
+                proxyWasHandedOff = true
+                // Keep the old port for rollback until the new process is the
+                // active session. Do not insert a cancellation check here:
+                // once proxy ownership moved, the handoff must finish.
+            }
+
+            guard candidate.process.isRunning else {
+                throw EngineFailure(
+                    kind: .reload,
+                    message: CoreL10n.text(
+                        "候选 sing-box 在代理切换后退出",
+                        "The candidate sing-box exited during handoff"
+                    )
+                )
+            }
+
+            try writeOwnership(
+                child: candidate.process,
+                executable: candidate.executable,
+                config: candidate.candidate.configurationURL,
+                session: candidate.session,
+                mixedPort: candidate.mixedPort
+            )
+            await nativeAPI.configure(endpoint: candidate.apiEndpoint)
+
+            // From this point on the candidate owns the live session. The
+            // old termination callback sees a different session and cannot
+            // release the system proxy belonging to the new core.
+            process = candidate.process
+            sessionID = candidate.session
+            apiEndpoint = candidate.apiEndpoint
+            healthProbePort = candidate.healthProbePort
+            mixedPort = candidate.mixedPort
+            activeReloadCandidate = candidate.candidate
+            await candidate.client.disconnect()
+
+            // Stop only the old instance; stopProcessOnly intentionally acts
+            // on the current session, which is now the candidate.
+            guard await stopProcessInstance(oldChild) else {
+                reloadTransition = nil
+                logger.error(
+                    "old sing-box remained alive after successful reload handoff pid=\(oldChild.processIdentifier)"
+                )
+                return
+            }
+            // Keep termination callbacks fenced until the old child has been
+            // reaped. Neither side of the dual-core window may release the
+            // still-owned system proxy while this handoff is finishing.
+            reloadTransition = nil
+            logger.info(
+                "sing-box reload handed off old session=\(oldSession) to new session=\(candidate.session)"
+            )
+        } catch {
+            reloadTransition = nil
+            if proxyWasHandedOff,
+               let oldProxySession,
+               let oldMixedPort {
+                do {
+                    // Roll back to the old live listener, never to the
+                    // user's pre-NekoPilot settings and never via release.
+                    try await systemProxy.handoff(
+                        expectedSession: oldProxySession,
+                        toPort: oldMixedPort
+                    )
+                } catch {
+                    logger.error(
+                        "system proxy handoff rollback failed: \(error.localizedDescription)"
+                    )
                 }
             }
             throw error
         }
-        if let candidateClient { await candidateClient.disconnect() }
-        if let candidateProcess { try await stopPreflightProcess(candidateProcess) }
+    }
+
+    private func abandonReloadCandidate(_ candidate: ReloadPreflightRuntime) async {
+        await candidate.client.disconnect()
+        do {
+            try await stopPreflightProcess(candidate.process)
+        } catch {
+            logger.error(
+                "candidate sing-box cleanup failed: \(error.localizedDescription)"
+            )
+        }
+        candidate.candidate.discard()
     }
 
     public func select(node: String) async throws {
@@ -615,6 +758,7 @@ public actor EngineSupervisor {
     }
 
     private func stopForShutdown() async {
+        guard (try? await selectorControlGate.acquire()) != nil else { return }
         let stoppingSession = sessionID
         let stoppingProxySession = proxySessionID
         setStatus(.stopping)
@@ -637,6 +781,7 @@ public actor EngineSupervisor {
                 "sing-box could not be stopped"
             )
         )))
+        await selectorControlGate.release()
     }
 
     private func spawn(
@@ -698,7 +843,11 @@ public actor EngineSupervisor {
         return child
     }
 
-    private func spawnPreflight(executable: URL, config: URL) throws -> Process {
+    private func spawnPreflight(
+        executable: URL,
+        config: URL,
+        session: UUID
+    ) throws -> Process {
         let child = Process()
         let standardOutput = Pipe()
         let standardError = Pipe()
@@ -718,9 +867,15 @@ public actor EngineSupervisor {
             guard !data.isEmpty else { return }
             logger.warning("[sing-box preflight] \(String(decoding: data, as: UTF8.self))")
         }
-        child.terminationHandler = { _ in
+        child.terminationHandler = { process in
             standardOutput.fileHandleForReading.readabilityHandler = nil
             standardError.fileHandleForReading.readabilityHandler = nil
+            Task {
+                await self.processTerminated(
+                    session: session,
+                    statusCode: process.terminationStatus
+                )
+            }
         }
         try child.run()
         try? standardOutput.fileHandleForWriting.close()
@@ -730,10 +885,24 @@ public actor EngineSupervisor {
     }
 
     private func stopPreflightProcess(_ child: Process) async throws {
+        let stopped = await stopProcessInstance(child)
+        guard stopped else {
+            throw EngineFailure(
+                kind: .reload,
+                message: CoreL10n.text(
+                    "无法停止候选 sing-box 进程",
+                    "Could not stop the candidate sing-box process"
+                )
+            )
+        }
+    }
+
+    private func stopProcessInstance(_ child: Process) async -> Bool {
         // Cleanup must finish even if the user operation was cancelled after
         // the health probe passed. An unstructured task starts uncancelled, so
         // its bounded TERM/KILL waits cannot collapse into a busy loop.
         let stopped = await Task.detached { () -> Bool in
+            guard child.isRunning else { return true }
             terminateProcessGroup(pid: child.processIdentifier)
             for _ in 0 ..< 20 where child.isRunning {
                 try? await Task.sleep(nanoseconds: 50_000_000)
@@ -746,15 +915,7 @@ public actor EngineSupervisor {
             }
             return !child.isRunning
         }.value
-        guard stopped else {
-            throw EngineFailure(
-                kind: .reload,
-                message: CoreL10n.text(
-                    "无法停止候选 sing-box 进程",
-                    "Could not stop the candidate sing-box process"
-                )
-            )
-        }
+        return stopped
     }
 
     private func waitUntilPreflightReady(
@@ -863,18 +1024,9 @@ public actor EngineSupervisor {
         }
         guard sessionID == expectedSession, let child = process else { return true }
         let pid = child.processIdentifier
-        terminateProcessGroup(pid: pid, force: false)
-        for _ in 0 ..< 15 where child.isRunning {
-            try? await Task.sleep(nanoseconds: 100_000_000)
-        }
-        if child.isRunning {
-            terminateProcessGroup(pid: pid, force: true)
-            for _ in 0 ..< 15 where child.isRunning {
-                try? await Task.sleep(nanoseconds: 100_000_000)
-            }
-        }
+        let stopped = await stopProcessInstance(child)
         guard sessionID == expectedSession else { return true }
-        if child.isRunning {
+        if !stopped || child.isRunning {
             logger.error("sing-box remained alive after SIGKILL pid=\(pid)")
             return false
         }
@@ -882,17 +1034,32 @@ public actor EngineSupervisor {
         sessionID = nil
         apiEndpoint = nil
         healthProbePort = nil
+        mixedPort = nil
+        activeReloadCandidate?.discard()
+        activeReloadCandidate = nil
         removeOwnershipIfMatching(session: expectedSession)
         return true
     }
 
     private func processTerminated(session: UUID, statusCode: Int32) async {
+        if let reloadTransition,
+           (reloadTransition.oldSession == session || reloadTransition.candidateSession == session) {
+            // During a dual-core handoff neither the old callback nor an early
+            // candidate callback may release proxy ownership. The handoff
+            // transaction either adopts the candidate or rolls the proxy back
+            // to the old listener.
+            logger.warning("ignoring sing-box termination callback during reload handoff session=\(session)")
+            return
+        }
         guard sessionID == session else { return }
         let expectedProxySession = proxySessionID
         process = nil
         sessionID = nil
         apiEndpoint = nil
         healthProbePort = nil
+        mixedPort = nil
+        activeReloadCandidate?.discard()
+        activeReloadCandidate = nil
         removeOwnershipIfMatching(session: session)
         try? await systemProxy.removeOwnedProxy(expectedSession: expectedProxySession)
         guard sessionID == nil else { return }
@@ -983,6 +1150,22 @@ public actor EngineSupervisor {
     private func removeContinuation(_ identifier: UUID) {
         statusContinuations.removeValue(forKey: identifier)
     }
+}
+
+private struct ReloadTransition {
+    let oldSession: UUID
+    let candidateSession: UUID
+}
+
+private struct ReloadPreflightRuntime {
+    let candidate: RuntimeConfigurationCandidate
+    let process: Process
+    let client: NativeControlClient
+    let executable: URL
+    let session: UUID
+    let apiEndpoint: LocalAPIEndpoint
+    let mixedPort: Int
+    let healthProbePort: Int
 }
 
 private struct EngineOwnershipMarker: Codable, Sendable {

@@ -4,7 +4,7 @@ import Testing
 
 @Suite("Non-destructive live reload pipeline")
 struct ReloadSafetyPipelineTests {
-    @Test("Failed candidate health stops before commit and signal")
+    @Test("Failed candidate health stops before promotion and handoff")
     func failedPreflightHasNoLiveSideEffects() async {
         let events = EventRecorder()
 
@@ -56,25 +56,22 @@ struct ReloadSafetyPipelineTests {
         #expect(events.values == ["preflight"])
     }
 
-    @Test("Ambiguous confirmation has no stop start or proxy release stage")
-    func ambiguousConfirmationPreservesLiveRuntime() async {
+    @Test("Failed handoff has no stop start or proxy release stage")
+    func failedHandoffPreservesLiveRuntime() async {
         let events = EventRecorder()
 
         do {
-            try ReloadSafetyPipeline.signal {
-                events.append("sighup")
-            }
-            try await ReloadSafetyPipeline.confirm {
-                events.append("confirm")
+            try await ReloadSafetyPipeline.handoff {
+                events.append("handoff")
                 throw TestFailure.ambiguous
             }
-            Issue.record("Expected ambiguous confirmation")
+            Issue.record("Expected handoff failure")
         } catch {
             #expect(error as? TestFailure == .ambiguous)
         }
 
         let values = events.values
-        #expect(values == ["sighup", "confirm"])
+        #expect(values == ["handoff"])
         #expect(!values.contains("stop"))
         #expect(!values.contains("start"))
         #expect(!values.contains("release-system-proxy"))

@@ -406,6 +406,11 @@ if ProcessInfo.processInfo.environment["NEKOPILOT_SKIP_ENGINE_VALIDATION"] != "1
             try await engine.start(selectedNode: selected)
             let runningStatus = await engine.currentStatus()
             try expect(runningStatus.isRunning, "engine did not reach running state")
+            let healthPortBeforeReload = await engine.currentHealthProbePort()
+            try expect(
+                healthPortBeforeReload != nil,
+                "engine did not expose its initial health listener"
+            )
             let selector = try await nativeAPI.selector(knownNodes: [selected])
             try expect(selector.nodes.contains(selected), "native selector did not expose selected node")
             let trafficStream = try await nativeAPI.nodeTrafficStream(nodes: [selected], interval: 0.1)
@@ -421,6 +426,22 @@ if ProcessInfo.processInfo.environment["NEKOPILOT_SKIP_ENGINE_VALIDATION"] != "1
                 RoutingRule(action: .direct, kind: .domainSuffix, value: ".nekopilot-live-reload.invalid"),
             ])
             try await engine.reload(selectedNode: selected)
+            let healthPortAfterReload = await engine.currentHealthProbePort()
+            try expect(
+                healthPortAfterReload != healthPortBeforeReload,
+                "reload did not adopt a new healthy core"
+            )
+            let promotedConfiguration = try JSONValue.decodeObject(
+                from: Data(contentsOf: paths.runtimeConfig)
+            )
+            let promotedHealthPort = promotedConfiguration["inbounds"]?.arrayValue?
+                .compactMap(\.objectValue)
+                .first(where: { $0["tag"]?.stringValue == "nekopilot-health" })?["listen_port"]?
+                .numberValue
+            try expect(
+                promotedHealthPort == healthPortAfterReload.map(Double.init),
+                "live runtime configuration does not match the adopted healthy core"
+            )
             let reloadedSelector = try await nativeAPI.selector(knownNodes: [selected])
             try expect(reloadedSelector.nodes.contains(selected), "selector disappeared after live reload")
             await engine.stop()

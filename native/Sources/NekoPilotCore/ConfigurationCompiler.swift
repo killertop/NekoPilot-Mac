@@ -21,11 +21,17 @@ struct RuntimeConfigurationCandidate: Sendable {
     }
 
     @discardableResult
-    func commit() throws -> URL {
+    func promote() throws -> URL {
         let data = try Data(contentsOf: configurationURL)
         try AtomicFile.write(data, to: liveConfigurationURL)
-        discard()
         return liveConfigurationURL
+    }
+
+    @discardableResult
+    func commit() throws -> URL {
+        let liveURL = try promote()
+        discard()
+        return liveURL
     }
 
     func discard() {

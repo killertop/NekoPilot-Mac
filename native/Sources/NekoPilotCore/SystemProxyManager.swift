@@ -3,15 +3,32 @@ import Foundation
 
 public actor SystemProxyManager {
     private let markerURL: URL
-    private let executable = URL(fileURLWithPath: "/usr/sbin/networksetup")
     private let host = "127.0.0.1"
     private let transaction = AsyncMutex()
     private let logger: any AppLogging
     private var activeSession: UUID?
+    private let commandRunner: @Sendable ([String]) async throws -> CommandResult
 
     public init(markerURL: URL, logger: any AppLogging = AppLogger.shared) {
         self.markerURL = markerURL
+        self.commandRunner = { arguments in
+            try await CommandRunner.run(
+                executable: URL(fileURLWithPath: "/usr/sbin/networksetup"),
+                arguments: arguments,
+                timeout: 15
+            )
+        }
         self.logger = logger
+    }
+
+    init(
+        markerURL: URL,
+        logger: any AppLogging = AppLogger.shared,
+        commandRunner: @escaping @Sendable ([String]) async throws -> CommandResult
+    ) {
+        self.markerURL = markerURL
+        self.logger = logger
+        self.commandRunner = commandRunner
     }
 
     public func recoverStaleOwnership() async throws {
@@ -80,6 +97,100 @@ public actor SystemProxyManager {
                     try await self.restoreLocked(marker)
                 } catch {
                     self.logger.error("system proxy rollback failed; marker retained: \(error.localizedDescription)")
+                }
+                throw error
+            }
+        }
+    }
+
+    /// Moves NekoPilot's already-owned system proxy to another live core
+    /// without restoring the user's previous proxy state or removing the
+    /// ownership marker. This is the only system-proxy operation used by a
+    /// live core handoff: the old listener may remain active while the new
+    /// listener is proven healthy, and the proxy stays enabled throughout.
+    public func handoff(expectedSession: UUID, toPort: Int) async throws {
+        guard (1 ... 65_535).contains(toPort) else {
+            throw NekoPilotError.invalidSetting("proxy_port")
+        }
+        try await withTransaction {
+            guard let marker = try self.readMarker() else {
+                throw EngineFailure(
+                    kind: .systemProxy,
+                    message: CoreL10n.text(
+                        "系统代理所有权已丢失",
+                        "NekoPilot no longer owns the system proxy"
+                    )
+                )
+            }
+            guard marker.sessionID == expectedSession.uuidString else {
+                throw EngineFailure(
+                    kind: .systemProxy,
+                    message: CoreL10n.text(
+                        "系统代理会话已被替换",
+                        "The system proxy session was replaced"
+                    )
+                )
+            }
+            guard !self.markerBelongsToLiveOtherProcess(marker) else {
+                throw NekoPilotError.processFailed(CoreL10n.text(
+                    "另一个 NekoPilot 实例正在管理系统代理",
+                    "Another NekoPilot instance is managing the system proxy"
+                ))
+            }
+            guard marker.port != toPort else {
+                self.activeSession = expectedSession
+                return
+            }
+
+            let availableServices = Set(try await self.networkServices())
+            let services = marker.services.filter { availableServices.contains($0.name) }
+            var moved: [ServiceBackup] = []
+            do {
+                for backup in services {
+                    let current = try await self.snapshot(service: backup.name)
+                    guard self.isOwned(current, by: marker) else {
+                        throw EngineFailure(
+                            kind: .systemProxy,
+                            message: CoreL10n.text(
+                                "系统代理已被外部修改，已取消 core 切换",
+                                "The system proxy changed outside NekoPilot; the core handoff was cancelled"
+                            )
+                        )
+                    }
+                    // Record the service before issuing commands: a command
+                    // sequence can fail halfway through changing its three
+                    // proxy kinds, so that service still needs rollback.
+                    moved.append(backup)
+                    try await self.setOwnedProxy(
+                        service: backup.name,
+                        port: toPort,
+                        bypass: backup.appliedBypassDomains
+                            ?? self.ownedBypass(existing: backup.bypassDomains, extra: [])
+                    )
+                }
+
+                try self.writeMarker(marker.withPort(toPort))
+                self.activeSession = expectedSession
+                self.logger.info(
+                    "system proxy handed off from \(marker.port) to \(toPort) without releasing ownership"
+                )
+            } catch {
+                // Roll back only to the old NekoPilot listener. Never call
+                // restoreLocked here: that would disable the proxy or restore
+                // the user's previous settings during a failed reload.
+                for backup in moved {
+                    do {
+                        try await self.setOwnedProxy(
+                            service: backup.name,
+                            port: marker.port,
+                            bypass: backup.appliedBypassDomains
+                                ?? self.ownedBypass(existing: backup.bypassDomains, extra: [])
+                        )
+                    } catch {
+                        self.logger.error(
+                            "system proxy handoff rollback failed for \(backup.name): \(error.localizedDescription)"
+                        )
+                    }
                 }
                 throw error
             }
@@ -162,6 +273,17 @@ public actor SystemProxyManager {
         try await checked([kind.stateCommand, service, state.enabled ? "on" : "off"])
     }
 
+    private func isOwned(_ snapshot: ServiceBackup, by marker: OwnershipMarker) -> Bool {
+        let states = [snapshot.web, snapshot.secureWeb, snapshot.socks]
+        guard states.allSatisfy({ $0.enabled && $0.server == marker.host && $0.port == marker.port }) else {
+            return false
+        }
+        if let appliedBypass = marker.services.first(where: { $0.name == snapshot.name })?.appliedBypassDomains {
+            return Set(snapshot.bypassDomains) == Set(appliedBypass)
+        }
+        return true
+    }
+
     private func setOwnedProxy(service: String, port: Int, bypass: [String]) async throws {
         for kind in ProxyKind.allCases {
             try await checked([kind.setCommand, service, host, String(port)])
@@ -227,7 +349,7 @@ public actor SystemProxyManager {
 
     @discardableResult
     private func checked(_ arguments: [String]) async throws -> CommandResult {
-        let result = try await CommandRunner.run(executable: executable, arguments: arguments, timeout: 15)
+        let result = try await commandRunner(arguments)
         guard result.status == 0 else {
             let detail = (result.errorOutput.isEmpty ? result.output : result.errorOutput)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -349,6 +471,20 @@ private struct OwnershipMarker: Codable, Sendable {
     let sessionID: String
     let createdAt: Date
     let services: [ServiceBackup]
+
+    func withPort(_ port: Int) -> OwnershipMarker {
+        OwnershipMarker(
+            owner: owner,
+            host: host,
+            port: port,
+            pid: pid,
+            executablePath: executablePath,
+            processIdentity: processIdentity,
+            sessionID: sessionID,
+            createdAt: createdAt,
+            services: services
+        )
+    }
 }
 
 private func pidIsAlive(_ pid: Int32) -> Bool {

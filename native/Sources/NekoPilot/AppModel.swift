@@ -1341,7 +1341,8 @@ final class AppModel: ObservableObject {
             ) {
                 // The candidate is already the durable runtime configuration.
                 // Preserve the matching rules/settings snapshot; a later reload
-                // or restart can reconcile an ambiguous live-core confirmation.
+                // or restart can reconcile a promoted-but-not-yet-reconciled
+                // live-core handoff.
                 show(error)
                 return true
             }

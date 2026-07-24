@@ -38,9 +38,9 @@ struct UserActionTaskOwnerTests {
         ))
     }
 
-    @Test("Committed reload ambiguity never rolls back durable rules")
-    func testCommittedReloadAmbiguityNeverRollsBackDurableRules() {
-        let committed = EngineFailure(kind: .reloadCommitted, message: "confirmation lost")
+    @Test("Promoted reload handoff failure never rolls back durable rules")
+    func testPromotedReloadHandoffFailureNeverRollsBackDurableRules() {
+        let committed = EngineFailure(kind: .reloadCommitted, message: "handoff failed")
         let preflight = EngineFailure(kind: .reload, message: "candidate unhealthy")
 
         #expect(AppRuntimeRecoveryPolicy.keepsPersistedRules(
