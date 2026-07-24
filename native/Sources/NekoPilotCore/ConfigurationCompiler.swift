@@ -735,6 +735,11 @@ public actor ConfigurationCompiler {
                     outbound["detour"] = .string(mapped)
                 }
                 outbound["domain_resolver"] = .string("system")
+                // Prefer the currently usable Apple interface while keeping
+                // the other address family as a bounded fallback when Wi-Fi,
+                // Ethernet, or a VPN changes underneath sing-box.
+                outbound["network_strategy"] = .string("hybrid")
+                outbound["fallback_delay"] = .string("300ms")
                 nodes.append(outbound)
             }
         }

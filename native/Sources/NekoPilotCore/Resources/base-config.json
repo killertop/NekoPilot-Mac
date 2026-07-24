@@ -54,7 +54,11 @@
     "final": "dns_proxy",
     "strategy": "prefer_ipv4",
     "cache_capacity": 2048,
-    "timeout": "5s"
+    "timeout": "8s",
+    "optimistic": {
+      "enabled": true,
+      "timeout": "30m"
+    }
   },
   "inbounds": [
     {
@@ -126,7 +130,9 @@
     {
       "tag": "direct",
       "type": "direct",
-      "domain_resolver": "system"
+      "domain_resolver": "system",
+      "network_strategy": "hybrid",
+      "fallback_delay": "300ms"
     },
     {
       "tag": "ExitGateway",

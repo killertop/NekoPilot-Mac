@@ -147,6 +147,7 @@ public actor AutoNodeSwitchService {
     private let healthProbe: ProxyHealthProbe
     private let logger: any AppLogging
     private var timerTask: Task<Void, Never>?
+    private var networkTask: Task<Void, Never>?
     private var generation = 0
     private var isStarted = false
     private var isEnabled = true
@@ -183,6 +184,13 @@ public actor AutoNodeSwitchService {
         isStarted = true
         isEnabled = enabled
         isEngineRunning = engineRunning
+        let stream = networkReadiness.states()
+        networkTask = Task { [weak self] in
+            for await ready in stream {
+                guard let self else { return }
+                await self.handleNetworkReadinessChange(ready)
+            }
+        }
         reschedule(after: Self.interval)
     }
 
@@ -190,6 +198,8 @@ public actor AutoNodeSwitchService {
         isStarted = false
         decisionState.reset()
         failedNodeDeadlines.removeAll()
+        networkTask?.cancel()
+        networkTask = nil
         invalidateCycle()
     }
 
@@ -266,6 +276,20 @@ public actor AutoNodeSwitchService {
         generation += 1
         timerTask?.cancel()
         timerTask = nil
+    }
+
+    private func handleNetworkReadinessChange(_ ready: Bool) {
+        guard isStarted else { return }
+        decisionState.reset()
+        if ready {
+            // The path monitor is the first signal that a suspended or
+            // switched interface is usable again. Probe immediately so a
+            // recovered node is restored quickly and a dead node enters
+            // candidate verification without waiting for the 30-second timer.
+            reschedule(after: 0.5)
+        } else {
+            invalidateCycle()
+        }
     }
 
     private func reschedule(after delay: TimeInterval) {

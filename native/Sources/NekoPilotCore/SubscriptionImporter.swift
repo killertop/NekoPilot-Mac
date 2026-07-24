@@ -218,10 +218,19 @@ struct ResolvedPublicEndpoint: Sendable, Equatable {
 
 enum NetworkAddressPolicy {
     static func isPublic(url: URL) -> Bool {
-        (try? resolvePublicEndpoint(url: url)) != nil
+        guard let endpoints = try? resolvePublicEndpoints(url: url) else { return false }
+        return !endpoints.isEmpty
     }
 
     static func resolvePublicEndpoint(url: URL) throws -> ResolvedPublicEndpoint {
+        let endpoints = try resolvePublicEndpoints(url: url)
+        guard let endpoint = endpoints.first else {
+            throw NekoPilotError.remoteAddressBlocked
+        }
+        return endpoint
+    }
+
+    static func resolvePublicEndpoints(url: URL) throws -> [ResolvedPublicEndpoint] {
         guard let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme),
               url.user == nil, url.password == nil,
               let rawHost = url.host?.lowercased(),
@@ -234,16 +243,24 @@ enum NetworkAddressPolicy {
             throw NekoPilotError.remoteAddressBlocked
         }
 
-        let addresses = resolvedAddresses(host: host).filter { isPublicAddress($0.data) }
-        guard let selected = addresses.first(where: { $0.data.count == 4 }) ?? addresses.first else {
+        let addresses = resolvedAddresses(host: host)
+            .filter { isPublicAddress($0.data) }
+            .sorted { lhs, rhs in
+                let lhsIPv4 = lhs.data.count == 4
+                let rhsIPv4 = rhs.data.count == 4
+                return lhsIPv4 != rhsIPv4 ? lhsIPv4 : lhs.numericHost < rhs.numericHost
+            }
+        guard !addresses.isEmpty else {
             throw NekoPilotError.remoteAddressBlocked
         }
-        return ResolvedPublicEndpoint(
-            address: selected.numericHost,
-            serverName: host,
-            port: UInt16(portValue),
-            useTLS: scheme == "https"
-        )
+        return addresses.map {
+            ResolvedPublicEndpoint(
+                address: $0.numericHost,
+                serverName: host,
+                port: UInt16(portValue),
+                useTLS: scheme == "https"
+            )
+        }
     }
 
     struct ResolvedAddress: Sendable, Equatable {
@@ -555,10 +572,10 @@ enum PinnedHTTPClient {
                   visited.insert(current.absoluteString).inserted else {
                 throw NekoPilotError.invalidLink
             }
-            let endpoint = try NetworkAddressPolicy.resolvePublicEndpoint(url: current)
-            let response = try await requestWithTimeout(
+            let endpoints = try NetworkAddressPolicy.resolvePublicEndpoints(url: current)
+            let response = try await requestWithFallback(
                 url: current,
-                endpoint: endpoint,
+                endpoints: endpoints,
                 maximumBodyBytes: maximumBodyBytes,
                 userAgent: userAgent
             )
@@ -590,6 +607,57 @@ enum PinnedHTTPClient {
             "订阅重定向次数过多",
             "The subscription redirected too many times"
         ))
+    }
+
+    private static func requestWithFallback(
+        url: URL,
+        endpoints: [ResolvedPublicEndpoint],
+        maximumBodyBytes: Int,
+        userAgent: String
+    ) async throws -> PinnedHTTPResponse {
+        guard !endpoints.isEmpty else { throw NekoPilotError.remoteAddressBlocked }
+        if endpoints.count == 1 {
+            return try await requestWithTimeout(
+                url: url,
+                endpoint: endpoints[0],
+                maximumBodyBytes: maximumBodyBytes,
+                userAgent: userAgent
+            )
+        }
+        // Start IPv4 first, then stagger IPv6 candidates. This keeps the fast
+        // path cheap while allowing an unreachable address family to fail
+        // without blocking subscriptions behind its TCP timeout.
+        return try await withThrowingTaskGroup(of: PinnedHTTPResponse?.self) { group in
+            for (index, endpoint) in endpoints.enumerated() {
+                group.addTask {
+                    if index > 0 {
+                        try await Task.sleep(nanoseconds: UInt64(index) * 250_000_000)
+                    }
+                    do {
+                        return try await requestWithTimeout(
+                            url: url,
+                            endpoint: endpoint,
+                            maximumBodyBytes: maximumBodyBytes,
+                            userAgent: userAgent
+                        )
+                    } catch is CancellationError {
+                        return nil
+                    } catch {
+                        return nil
+                    }
+                }
+            }
+            while let response = try await group.next() {
+                if let response {
+                    group.cancelAll()
+                    return response
+                }
+            }
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "订阅下载失败：所有网络地址均不可达",
+                "The subscription download failed: all network addresses were unreachable"
+            ))
+        }
     }
 
     private static func requestWithTimeout(
