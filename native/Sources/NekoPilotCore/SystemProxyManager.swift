@@ -76,7 +76,8 @@ public actor SystemProxyManager {
                 processIdentity: ProcessIdentity.current(executablePath: executablePath),
                 sessionID: session.uuidString,
                 createdAt: Date(),
-                services: prepared
+                services: prepared,
+                transitionalPorts: nil
             )
             try self.writeMarker(marker)
             do {
@@ -148,18 +149,38 @@ public actor SystemProxyManager {
                     "Another NekoPilot instance is managing the system proxy"
                 ))
             }
-            guard marker.port != toPort else {
+            guard marker.port != toPort || marker.isTransitioning else {
                 self.activeSession = expectedSession
                 return
             }
 
             let availableServices = Set(try await self.networkServices())
             let services = marker.services.filter { availableServices.contains($0.name) }
-            var moved: [ServiceBackup] = []
+            // Detect a user/admin change before declaring the candidate port
+            // as NekoPilot-owned. Once the transition marker is written, any
+            // later partial command is recoverable using either live port.
+            for backup in services {
+                let current = try await self.snapshot(service: backup.name)
+                guard self.isOwned(current, by: marker) else {
+                    throw EngineFailure(
+                        kind: .systemProxy,
+                        message: CoreL10n.text(
+                            "系统代理已被外部修改，已取消 core 切换",
+                            "The system proxy changed outside NekoPilot; the core handoff was cancelled"
+                        )
+                    )
+                }
+            }
+            let transitionMarker = marker.withTransition(toPort: toPort)
+            // Persist both NekoPilot-owned listener ports before the first
+            // non-atomic networksetup command. If the app or a command fails
+            // halfway through, startup/stop recovery can still recognize and
+            // restore every proxy kind that points at either live core.
+            try self.writeMarker(transitionMarker)
             do {
                 for backup in services {
                     let current = try await self.snapshot(service: backup.name)
-                    guard self.isOwned(current, by: marker) else {
+                    guard self.isOwned(current, by: transitionMarker) else {
                         throw EngineFailure(
                             kind: .systemProxy,
                             message: CoreL10n.text(
@@ -168,10 +189,6 @@ public actor SystemProxyManager {
                             )
                         )
                     }
-                    // Record the service before issuing commands: a command
-                    // sequence can fail halfway through changing its three
-                    // proxy kinds, so that service still needs rollback.
-                    moved.append(backup)
                     try await self.setOwnedProxy(
                         service: backup.name,
                         port: toPort,
@@ -189,33 +206,61 @@ public actor SystemProxyManager {
                 // Roll back only to the old NekoPilot listener. Never call
                 // restoreLocked here: that would disable the proxy or restore
                 // the user's previous settings during a failed reload.
-                var rollbackError: Error?
-                for backup in moved {
-                    do {
-                        try await self.setOwnedProxy(
-                            service: backup.name,
-                            port: marker.port,
-                            bypass: backup.appliedBypassDomains
-                                ?? self.ownedBypass(existing: backup.bypassDomains, extra: [])
-                        )
-                    } catch {
-                        rollbackError = error
-                        self.logger.error(
-                            "system proxy handoff rollback failed for \(backup.name): \(error.localizedDescription)"
-                        )
-                    }
+                let didRestoreOldPort = await self.converge(
+                    services: services,
+                    marker: transitionMarker,
+                    toPort: marker.port,
+                    attempts: 3
+                )
+                if didRestoreOldPort {
+                    try self.writeMarker(marker)
+                    throw error
                 }
-                if let rollbackError {
-                    throw EngineFailure(
-                        kind: .systemProxy,
-                        message: CoreL10n.text(
-                            "系统代理切换回滚失败：\(rollbackError.localizedDescription)",
-                            "System proxy handoff rollback failed: \(rollbackError.localizedDescription)"
-                        )
+                // Keep the transition marker. Callers must keep both cores
+                // alive until a later convergence succeeds; stopping the
+                // candidate here could strand a partially moved service on a
+                // dead loopback listener.
+                throw SystemProxyHandoffRecoveryFailure(
+                    message: CoreL10n.text(
+                        "系统代理切换失败，部分网络服务仍处于过渡状态",
+                        "System proxy handoff failed and some network services remain in transition"
                     )
-                }
-                throw error
+                )
             }
+        }
+    }
+
+    /// Converges every still-owned service to one live listener. The marker
+    /// may describe a partially completed handoff, so ownership accepts either
+    /// transitional port while the commands are retried and verified.
+    func recoverHandoff(expectedSession: UUID, toPort: Int) async throws {
+        try await withTransaction {
+            guard let marker = try self.readMarker(),
+                  marker.sessionID == expectedSession.uuidString else {
+                throw SystemProxyHandoffRecoveryFailure(
+                    message: CoreL10n.text(
+                        "系统代理过渡会话已丢失",
+                        "The system proxy transition session was lost"
+                    )
+                )
+            }
+            let availableServices = Set(try await self.networkServices())
+            let services = marker.services.filter { availableServices.contains($0.name) }
+            guard await self.converge(
+                services: services,
+                marker: marker,
+                toPort: toPort,
+                attempts: 3
+            ) else {
+                throw SystemProxyHandoffRecoveryFailure(
+                    message: CoreL10n.text(
+                        "系统代理仍无法恢复到可用端口",
+                        "The system proxy could not be recovered to a live listener"
+                    )
+                )
+            }
+            try self.writeMarker(marker.withPort(toPort))
+            self.activeSession = expectedSession
         }
     }
 
@@ -286,7 +331,9 @@ public actor SystemProxyManager {
         service: String,
         marker: OwnershipMarker
     ) async throws {
-        guard current.enabled, current.server == marker.host, current.port == marker.port else {
+        guard current.enabled,
+              current.server == marker.host,
+              marker.ownedPorts.contains(current.port) else {
             return
         }
         if !state.server.isEmpty, state.port > 0 {
@@ -297,11 +344,18 @@ public actor SystemProxyManager {
 
     private func isOwned(_ snapshot: ServiceBackup, by marker: OwnershipMarker) -> Bool {
         let states = [snapshot.web, snapshot.secureWeb, snapshot.socks]
-        guard states.allSatisfy({ $0.enabled && $0.server == marker.host && $0.port == marker.port }) else {
+        guard states.allSatisfy({
+            $0.enabled && $0.server == marker.host && marker.ownedPorts.contains($0.port)
+        }) else {
             return false
         }
         if let appliedBypass = marker.services.first(where: { $0.name == snapshot.name })?.appliedBypassDomains {
-            return Set(snapshot.bypassDomains) == Set(appliedBypass)
+            if Set(snapshot.bypassDomains) == Set(appliedBypass) { return true }
+            if marker.isTransitioning,
+               let original = marker.services.first(where: { $0.name == snapshot.name })?.bypassDomains {
+                return Set(snapshot.bypassDomains) == Set(original)
+            }
+            return false
         }
         return true
     }
@@ -312,6 +366,44 @@ public actor SystemProxyManager {
             try await checked([kind.stateCommand, service, "on"])
         }
         try await setBypass(bypass, service: service)
+    }
+
+    private func converge(
+        services: [ServiceBackup],
+        marker: OwnershipMarker,
+        toPort: Int,
+        attempts: Int
+    ) async -> Bool {
+        for _ in 0 ..< max(1, attempts) {
+            for backup in services {
+                do {
+                    let current = try await snapshot(service: backup.name)
+                    guard isOwned(current, by: marker) else { return false }
+                    let alreadyConverged = [current.web, current.secureWeb, current.socks]
+                        .allSatisfy { $0.enabled && $0.server == marker.host && $0.port == toPort }
+                    if !alreadyConverged {
+                        try await setOwnedProxy(
+                            service: backup.name,
+                            port: toPort,
+                            bypass: backup.appliedBypassDomains
+                                ?? ownedBypass(existing: backup.bypassDomains, extra: [])
+                        )
+                    }
+                } catch {
+                    logger.error(
+                        "system proxy convergence failed for \(backup.name): \(error.localizedDescription)"
+                    )
+                }
+            }
+            let isConverged = await services.concurrentMap { backup -> Bool in
+                guard let current = try? await self.snapshot(service: backup.name) else { return false }
+                return [current.web, current.secureWeb, current.socks].allSatisfy {
+                    $0.enabled && $0.server == self.host && $0.port == toPort
+                }
+            }.allSatisfy { $0 }
+            if isConverged { return true }
+        }
+        return false
     }
 
     private func ownedBypass(existing: [String], extra: [String]) -> [String] {
@@ -493,6 +585,15 @@ private struct OwnershipMarker: Codable, Sendable {
     let sessionID: String
     let createdAt: Date
     let services: [ServiceBackup]
+    let transitionalPorts: [Int]?
+
+    var ownedPorts: Set<Int> {
+        Set([port] + (transitionalPorts ?? []))
+    }
+
+    var isTransitioning: Bool {
+        !(transitionalPorts ?? []).isEmpty
+    }
 
     func withPort(_ port: Int) -> OwnershipMarker {
         OwnershipMarker(
@@ -504,9 +605,30 @@ private struct OwnershipMarker: Codable, Sendable {
             processIdentity: processIdentity,
             sessionID: sessionID,
             createdAt: createdAt,
-            services: services
+            services: services,
+            transitionalPorts: nil
         )
     }
+
+    func withTransition(toPort: Int) -> OwnershipMarker {
+        OwnershipMarker(
+            owner: owner,
+            host: host,
+            port: port,
+            pid: pid,
+            executablePath: executablePath,
+            processIdentity: processIdentity,
+            sessionID: sessionID,
+            createdAt: createdAt,
+            services: services,
+            transitionalPorts: Array(Set([port, toPort])).sorted()
+        )
+    }
+}
+
+struct SystemProxyHandoffRecoveryFailure: Error, LocalizedError, Sendable {
+    let message: String
+    var errorDescription: String? { message }
 }
 
 private func pidIsAlive(_ pid: Int32) -> Bool {

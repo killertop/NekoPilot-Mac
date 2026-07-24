@@ -856,6 +856,63 @@ struct ConfigurationCompilerRulePriorityTests {
         #expect(offlineSelector["interrupt_exist_connections"]?.boolValue == false)
     }
 
+    @Test("Imported dial strategy is preserved while missing defaults are supplied")
+    func importedDialStrategyIsPreserved() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NekoPilot-Dial-Strategy-Test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let support = root.appendingPathComponent("Application Support", isDirectory: true)
+        let logs = root.appendingPathComponent("Logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+
+        let paths = AppPaths(applicationSupport: support, logs: logs)
+        let settings = try SettingsStore(fileURL: paths.settings)
+        let repository = try SubscriptionRepository(databaseURL: paths.database)
+        let identifier = try await repository.upsert(
+            url: nil,
+            name: "Dial Strategies",
+            sourceType: .localLink,
+            config: [
+                "outbounds": .array([
+                    .object([
+                        "type": .string("vless"),
+                        "tag": .string("explicit"),
+                        "server": .string("explicit.example.com"),
+                        "server_port": .number(443),
+                        "uuid": .string("00000000-0000-4000-8000-000000000001"),
+                        "network_strategy": .string("ipv4_only"),
+                        "fallback_delay": .string("900ms"),
+                    ]),
+                    .object([
+                        "type": .string("vless"),
+                        "tag": .string("defaulted"),
+                        "server": .string("defaulted.example.com"),
+                        "server_port": .number(443),
+                        "uuid": .string("00000000-0000-4000-8000-000000000002"),
+                    ]),
+                ]),
+            ]
+        )
+        let compiler = ConfigurationCompiler(paths: paths, settings: settings, repository: repository)
+        let configurationURL = try await compiler.compile(
+            selectedNode: "@np:\(identifier):explicit"
+        )
+        let configuration = try JSONValue.decodeObject(from: Data(contentsOf: configurationURL))
+        let outbounds = configuration["outbounds"]?.arrayValue ?? []
+        let explicit = try #require(outbounds.first(where: {
+            $0.objectValue?["tag"]?.stringValue == "@np:\(identifier):explicit"
+        })?.objectValue)
+        let defaulted = try #require(outbounds.first(where: {
+            $0.objectValue?["tag"]?.stringValue == "@np:\(identifier):defaulted"
+        })?.objectValue)
+
+        #expect(explicit["network_strategy"]?.stringValue == "ipv4_only")
+        #expect(explicit["fallback_delay"]?.stringValue == "900ms")
+        #expect(defaulted["network_strategy"]?.stringValue == "hybrid")
+        #expect(defaulted["fallback_delay"]?.stringValue == "300ms")
+    }
+
     @Test("Location probe worker is isolated and cannot bypass its selector")
     func locationProbeWorkerIsIsolated() async throws {
         let root = FileManager.default.temporaryDirectory

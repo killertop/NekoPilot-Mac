@@ -19,6 +19,8 @@ public actor EngineSupervisor {
     private var proxySessionID: UUID?
     private var activeReloadCandidate: RuntimeConfigurationCandidate?
     private var reloadTransition: ReloadTransition?
+    private var retainedReloadCandidates: [UUID: ReloadPreflightRuntime] = [:]
+    private var supersededProcesses: [Int32: Process] = [:]
     private let selectorControlGate = AsyncSerialGate()
     private var epoch: UInt64 = 0
     private var configurationGeneration: UInt64 = 0
@@ -264,14 +266,20 @@ public actor EngineSupervisor {
             proxyCleanupError = error
             logger.error("system proxy cleanup failed during stop: \(error.localizedDescription)")
         }
+        let auxiliaryCleanupSucceeded = proxyCleanupError == nil
+            ? await stopAuxiliaryProcesses()
+            : true
         guard epoch == stopEpoch else {
             await selectorControlGate.release()
             return
         }
-        if !didStop {
+        if !didStop || !auxiliaryCleanupSucceeded {
             setStatus(.failed(EngineFailure(
                 kind: .shutdown,
-                message: CoreL10n.text("sing-box 无法停止", "sing-box could not be stopped")
+                message: CoreL10n.text(
+                    "一个或多个 sing-box 进程无法停止",
+                    "One or more sing-box processes could not be stopped"
+                )
             )))
         } else if let proxyCleanupError {
             setStatus(.failed(EngineFailure(
@@ -337,6 +345,10 @@ public actor EngineSupervisor {
                     )
                 )
             }
+            try await reconcileRetainedReloadCandidatesBeforeReload(
+                proxySession: proxySessionID,
+                liveMixedPort: liveMixedPort
+            )
             let currentEpoch = epoch
             reloadEpoch = currentEpoch
             let configurationGeneration = beginConfigurationOperation()
@@ -420,7 +432,17 @@ public actor EngineSupervisor {
             // became stale; otherwise cancellation/supersession could release
             // the gate while leaving a healthy-but-unadopted core running.
             if let preflightRuntime {
-                await abandonReloadCandidate(preflightRuntime)
+                if error is SystemProxyHandoffRecoveryFailure,
+                   let oldProxySession = proxySessionID,
+                   let oldMixedPort = mixedPort {
+                    await retainReloadCandidate(
+                        preflightRuntime,
+                        proxySession: oldProxySession,
+                        recoveryPort: oldMixedPort
+                    )
+                } else {
+                    await abandonReloadCandidate(preflightRuntime)
+                }
             }
 
             // A stale request must never publish its own failure after a newer
@@ -585,7 +607,7 @@ public actor EngineSupervisor {
         guard sessionID == oldSession, process === oldChild else {
             throw CancellationError()
         }
-        guard candidate.process.isRunning else {
+        guard reloadCandidateIsAlive(candidate) else {
             throw EngineFailure(
                 kind: .reload,
                 message: CoreL10n.text(
@@ -597,11 +619,13 @@ public actor EngineSupervisor {
 
         let oldMixedPort = mixedPort
         let oldProxySession = proxySessionID
+        let oldAPIEndpoint = apiEndpoint
         reloadTransition = ReloadTransition(
             oldSession: oldSession,
             candidateSession: candidate.session
         )
         var proxyWasHandedOff = false
+        var oldRuntimeAvailable = true
         do {
             if let oldProxySession {
                 guard oldMixedPort != nil else {
@@ -626,7 +650,7 @@ public actor EngineSupervisor {
                 // once proxy ownership moved, the handoff must finish.
             }
 
-            guard candidate.process.isRunning else {
+            guard reloadCandidateIsAlive(candidate) else {
                 throw EngineFailure(
                     kind: .reload,
                     message: CoreL10n.text(
@@ -636,6 +660,53 @@ public actor EngineSupervisor {
                 )
             }
 
+            await nativeAPI.configure(endpoint: candidate.apiEndpoint)
+            await candidate.client.disconnect()
+            guard reloadCandidateIsAlive(candidate) else {
+                throw EngineFailure(
+                    kind: .reload,
+                    message: CoreL10n.text(
+                        "候选 sing-box 在接管前退出",
+                        "The candidate sing-box exited before adoption"
+                    )
+                )
+            }
+
+            let stopOutcome = await stopOldProcessDuringHandoff(
+                oldChild,
+                candidate: candidate
+            )
+            switch stopOutcome {
+            case .candidateExitedWhileOldAlive:
+                throw EngineFailure(
+                    kind: .reload,
+                    message: CoreL10n.text(
+                        "候选 sing-box 退出，已保留旧 core",
+                        "The candidate sing-box exited; the old core was preserved"
+                    )
+                )
+            case let .bothExited(oldStatus):
+                // There is no live listener to roll back to. Let the normal
+                // termination path restore the user's proxy settings instead
+                // of moving the proxy to the already-dead old port.
+                proxyWasHandedOff = false
+                oldRuntimeAvailable = false
+                reloadTransition = nil
+                await processTerminated(
+                    session: oldSession,
+                    statusCode: oldStatus
+                )
+                throw EngineFailure(
+                    kind: .reload,
+                    message: CoreL10n.text(
+                        "新旧 sing-box 均在切换期间退出",
+                        "Both sing-box processes exited during handoff"
+                    )
+                )
+            case .oldStopped, .oldStillAlive:
+                break
+            }
+
             try writeOwnership(
                 child: candidate.process,
                 executable: candidate.executable,
@@ -643,8 +714,6 @@ public actor EngineSupervisor {
                 session: candidate.session,
                 mixedPort: candidate.mixedPort
             )
-            await nativeAPI.configure(endpoint: candidate.apiEndpoint)
-
             // From this point on the candidate owns the live session. The
             // old termination callback sees a different session and cannot
             // release the system proxy belonging to the new core.
@@ -654,26 +723,22 @@ public actor EngineSupervisor {
             healthProbePort = candidate.healthProbePort
             mixedPort = candidate.mixedPort
             activeReloadCandidate = candidate.candidate
-            await candidate.client.disconnect()
+            reloadTransition = nil
 
-            // Stop only the old instance; stopProcessOnly intentionally acts
-            // on the current session, which is now the candidate.
-            guard await stopProcessInstance(oldChild) else {
-                reloadTransition = nil
+            if stopOutcome == .oldStillAlive {
+                trackSupersededProcess(oldChild)
                 logger.error(
-                    "old sing-box remained alive after successful reload handoff pid=\(oldChild.processIdentifier)"
+                    "old sing-box remained alive after reload handoff; scheduled cleanup pid=\(oldChild.processIdentifier)"
                 )
                 return
             }
             // Keep termination callbacks fenced until the old child has been
             // reaped. Neither side of the dual-core window may release the
             // still-owned system proxy while this handoff is finishing.
-            reloadTransition = nil
             logger.info(
                 "sing-box reload handed off old session=\(oldSession) to new session=\(candidate.session)"
             )
         } catch {
-            reloadTransition = nil
             var rollbackError: Error?
             if proxyWasHandedOff,
                let oldProxySession,
@@ -693,10 +758,70 @@ public actor EngineSupervisor {
                 }
             }
             if let rollbackError {
+                let deferredOldTermination = reloadTransition.flatMap {
+                    $0.terminationStatus(for: oldSession)
+                }
+                reloadTransition = nil
+                if deferredOldTermination != nil || !oldChild.isRunning {
+                    oldRuntimeAvailable = false
+                    await processTerminated(
+                        session: oldSession,
+                        statusCode: deferredOldTermination ?? oldChild.terminationStatus
+                    )
+                }
+                if let recoveryFailure = rollbackError as? SystemProxyHandoffRecoveryFailure {
+                    throw recoveryFailure
+                }
                 throw systemProxyFailure(rollbackError)
+            }
+            let deferredOldTermination = reloadTransition.flatMap {
+                $0.terminationStatus(for: oldSession)
+            }
+            reloadTransition = nil
+            if oldRuntimeAvailable,
+               deferredOldTermination != nil || !oldChild.isRunning {
+                oldRuntimeAvailable = false
+                await processTerminated(
+                    session: oldSession,
+                    statusCode: deferredOldTermination ?? oldChild.terminationStatus
+                )
+            }
+            if oldRuntimeAvailable, let oldAPIEndpoint {
+                await nativeAPI.configure(endpoint: oldAPIEndpoint)
             }
             throw error
         }
+    }
+
+    private func stopOldProcessDuringHandoff(
+        _ oldChild: Process,
+        candidate: ReloadPreflightRuntime
+    ) async -> ReloadOldProcessStopOutcome {
+        terminateProcessGroup(pid: oldChild.processIdentifier)
+        for index in 0 ..< 40 {
+            let candidateAlive = reloadCandidateIsAlive(candidate)
+            let oldAlive = oldChild.isRunning
+            if !candidateAlive {
+                if oldAlive { return .candidateExitedWhileOldAlive }
+                let oldStatus = reloadTransition.flatMap {
+                    $0.terminationStatus(for: $0.oldSession)
+                } ?? oldChild.terminationStatus
+                return .bothExited(oldStatus: oldStatus)
+            }
+            if !oldAlive { return .oldStopped }
+            if index == 19 {
+                terminateProcessGroup(pid: oldChild.processIdentifier, force: true)
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        if !reloadCandidateIsAlive(candidate) {
+            if oldChild.isRunning { return .candidateExitedWhileOldAlive }
+            let oldStatus = reloadTransition.flatMap {
+                $0.terminationStatus(for: $0.oldSession)
+            } ?? oldChild.terminationStatus
+            return .bothExited(oldStatus: oldStatus)
+        }
+        return oldChild.isRunning ? .oldStillAlive : .oldStopped
     }
 
     private func abandonReloadCandidate(_ candidate: ReloadPreflightRuntime) async {
@@ -709,6 +834,164 @@ public actor EngineSupervisor {
             )
         }
         candidate.candidate.discard()
+    }
+
+    private func reloadCandidateIsAlive(_ candidate: ReloadPreflightRuntime) -> Bool {
+        candidate.process.isRunning
+            && reloadTransition?.terminationStatus(for: candidate.session) == nil
+    }
+
+    private func retainReloadCandidate(
+        _ candidate: ReloadPreflightRuntime,
+        proxySession: UUID,
+        recoveryPort: Int
+    ) async {
+        await candidate.client.disconnect()
+        retainedReloadCandidates[candidate.session] = candidate
+        logger.error(
+            "retaining candidate sing-box while system proxy handoff recovers session=\(candidate.session)"
+        )
+        Task.detached { [weak self] in
+            await self?.recoverRetainedReloadCandidate(
+                session: candidate.session,
+                proxySession: proxySession,
+                recoveryPort: recoveryPort
+            )
+        }
+    }
+
+    private func reconcileRetainedReloadCandidatesBeforeReload(
+        proxySession: UUID?,
+        liveMixedPort: Int
+    ) async throws {
+        guard !retainedReloadCandidates.isEmpty else { return }
+        guard let proxySession else {
+            throw EngineFailure(
+                kind: .systemProxy,
+                message: CoreL10n.text(
+                    "系统代理仍处于未完成的 core 切换状态",
+                    "The system proxy still has an unfinished core handoff"
+                )
+            )
+        }
+        do {
+            try await systemProxy.recoverHandoff(
+                expectedSession: proxySession,
+                toPort: liveMixedPort
+            )
+        } catch {
+            throw systemProxyFailure(error)
+        }
+        guard await stopRetainedReloadCandidates() else {
+            throw EngineFailure(
+                kind: .reload,
+                message: CoreL10n.text(
+                    "旧候选 sing-box 尚未完成清理",
+                    "A retained sing-box candidate has not been cleaned up"
+                )
+            )
+        }
+    }
+
+    private func stopRetainedReloadCandidates() async -> Bool {
+        var allStopped = true
+        let retained = Array(retainedReloadCandidates)
+        for (session, candidate) in retained {
+            guard retainedReloadCandidates[session] != nil else { continue }
+            if await stopProcessInstance(candidate.process) {
+                candidate.candidate.discard()
+                retainedReloadCandidates.removeValue(forKey: session)
+            } else {
+                allStopped = false
+            }
+        }
+        return allStopped
+    }
+
+    private func recoverRetainedReloadCandidate(
+        session: UUID,
+        proxySession: UUID,
+        recoveryPort: Int
+    ) async {
+        for _ in 0 ..< 5 {
+            do {
+                try await selectorControlGate.acquire()
+                guard retainedReloadCandidates[session] != nil else {
+                    await selectorControlGate.release()
+                    return
+                }
+                do {
+                    try await systemProxy.recoverHandoff(
+                        expectedSession: proxySession,
+                        toPort: recoveryPort
+                    )
+                } catch {
+                    await selectorControlGate.release()
+                    throw error
+                }
+                guard let candidate = retainedReloadCandidates.removeValue(forKey: session) else {
+                    await selectorControlGate.release()
+                    return
+                }
+                do {
+                    try await stopPreflightProcess(candidate.process)
+                    candidate.candidate.discard()
+                    logger.info("recovered system proxy handoff and stopped retained candidate session=\(session)")
+                } catch {
+                    retainedReloadCandidates[session] = candidate
+                    logger.error(
+                        "retained candidate cleanup failed after proxy recovery: \(error.localizedDescription)"
+                    )
+                }
+                await selectorControlGate.release()
+                return
+            } catch {
+                logger.error("system proxy handoff recovery retry failed: \(error.localizedDescription)")
+            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        logger.error(
+            "system proxy handoff remains transitional; both live cores are retained session=\(session)"
+        )
+    }
+
+    private func trackSupersededProcess(_ child: Process) {
+        let pid = child.processIdentifier
+        supersededProcesses[pid] = child
+        Task.detached { [weak self] in
+            await self?.retrySupersededProcessCleanup(pid: pid)
+        }
+    }
+
+    private func retrySupersededProcessCleanup(pid: Int32) async {
+        for _ in 0 ..< 5 {
+            guard let child = supersededProcesses[pid] else { return }
+            if await stopProcessInstance(child) {
+                supersededProcesses.removeValue(forKey: pid)
+                logger.info("stopped superseded sing-box pid=\(pid)")
+                return
+            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        logger.error("superseded sing-box still alive after cleanup retries pid=\(pid)")
+    }
+
+    private func stopAuxiliaryProcesses() async -> Bool {
+        var allStopped = await stopRetainedReloadCandidates()
+        if !allStopped {
+            logger.error("one or more retained candidates remained alive during shutdown")
+        }
+        let superseded = Array(supersededProcesses)
+        for (pid, child) in superseded {
+            guard supersededProcesses[pid] != nil else { continue }
+            if await stopProcessInstance(child) {
+                supersededProcesses.removeValue(forKey: pid)
+            } else {
+                allStopped = false
+                logger.error("superseded sing-box remained alive during shutdown pid=\(pid)")
+            }
+        }
+        return allStopped
     }
 
     public func select(node: String) async throws {
@@ -842,12 +1125,15 @@ public actor EngineSupervisor {
             proxyCleanupError = error
             logger.error("system proxy cleanup failed during shutdown: \(error.localizedDescription)")
         }
-        if !didStop {
+        let auxiliaryCleanupSucceeded = proxyCleanupError == nil
+            ? await stopAuxiliaryProcesses()
+            : true
+        if !didStop || !auxiliaryCleanupSucceeded {
             setStatus(.failed(EngineFailure(
                 kind: .shutdown,
                 message: CoreL10n.text(
-                    "sing-box 无法停止",
-                    "sing-box could not be stopped"
+                    "一个或多个 sing-box 进程无法停止",
+                    "One or more sing-box processes could not be stopped"
                 )
             )))
         } else if let proxyCleanupError {
@@ -1116,13 +1402,15 @@ public actor EngineSupervisor {
     }
 
     private func processTerminated(session: UUID, statusCode: Int32) async {
-        if let reloadTransition,
+        if var reloadTransition,
            (reloadTransition.oldSession == session || reloadTransition.candidateSession == session) {
             // During a dual-core handoff neither the old callback nor an early
             // candidate callback may release proxy ownership. The handoff
             // transaction either adopts the candidate or rolls the proxy back
             // to the old listener.
-            logger.warning("ignoring sing-box termination callback during reload handoff session=\(session)")
+            reloadTransition.recordTermination(session: session, statusCode: statusCode)
+            self.reloadTransition = reloadTransition
+            logger.warning("deferring sing-box termination callback during reload handoff session=\(session)")
             return
         }
         guard sessionID == session else { return }
@@ -1144,6 +1432,9 @@ public actor EngineSupervisor {
         }
         guard sessionID == nil else { return }
         if proxySessionID == expectedProxySession { proxySessionID = nil }
+        if proxyCleanupError == nil {
+            _ = await stopAuxiliaryProcesses()
+        }
         if let proxyCleanupError {
             setStatus(.failed(systemProxyFailure(proxyCleanupError)))
         } else if status == .stopping || isShuttingDown {
@@ -1234,9 +1525,25 @@ public actor EngineSupervisor {
     }
 }
 
-private struct ReloadTransition {
+struct ReloadTransition {
     let oldSession: UUID
     let candidateSession: UUID
+    private(set) var terminatedSessions: [UUID: Int32] = [:]
+
+    mutating func recordTermination(session: UUID, statusCode: Int32) {
+        terminatedSessions[session] = statusCode
+    }
+
+    func terminationStatus(for session: UUID) -> Int32? {
+        terminatedSessions[session]
+    }
+}
+
+enum ReloadOldProcessStopOutcome: Equatable {
+    case oldStopped
+    case oldStillAlive
+    case candidateExitedWhileOldAlive
+    case bothExited(oldStatus: Int32)
 }
 
 private struct ReloadPreflightRuntime {

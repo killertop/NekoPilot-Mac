@@ -63,19 +63,38 @@ actor ProxyHealthProbe {
         let targets = self.targets
         let requestTarget = self.requestTarget
         let requiredReachableTargets = self.requiredReachableTargets
-        let results = await withTaskGroup(of: ProxyHealthProbeResult.self, returning: [ProxyHealthProbeResult].self) { group in
+        return await withTaskGroup(
+            of: ProxyHealthProbeResult.self,
+            returning: ProxyHealthProbeResult.self
+        ) { group in
             for target in targets {
                 group.addTask {
                     await requestTarget(target, port)
                 }
             }
             var results: [ProxyHealthProbeResult] = []
+            var reachableCount = 0
+            var remainingCount = targets.count
             for await result in group {
                 results.append(result)
+                remainingCount -= 1
+                if case .reachable = result {
+                    reachableCount += 1
+                }
+                if reachableCount >= requiredReachableTargets
+                    || reachableCount + remainingCount < requiredReachableTargets {
+                    group.cancelAll()
+                    return Self.aggregate(
+                        results: results,
+                        requiredReachableTargets: requiredReachableTargets
+                    )
+                }
             }
-            return results
+            return Self.aggregate(
+                results: results,
+                requiredReachableTargets: requiredReachableTargets
+            )
         }
-        return Self.aggregate(results: results, requiredReachableTargets: requiredReachableTargets)
     }
 
     static func aggregate(

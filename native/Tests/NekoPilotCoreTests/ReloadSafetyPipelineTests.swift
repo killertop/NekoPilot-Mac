@@ -76,6 +76,21 @@ struct ReloadSafetyPipelineTests {
         #expect(!values.contains("start"))
         #expect(!values.contains("release-system-proxy"))
     }
+
+    @Test("Candidate termination is retained until the handoff owner handles it")
+    func candidateTerminationIsDeferred() {
+        let old = UUID()
+        let candidate = UUID()
+        var transition = ReloadTransition(
+            oldSession: old,
+            candidateSession: candidate
+        )
+
+        transition.recordTermination(session: candidate, statusCode: 17)
+
+        #expect(transition.terminationStatus(for: candidate) == 17)
+        #expect(transition.terminationStatus(for: old) == nil)
+    }
 }
 
 private actor PreflightCancellationGate {

@@ -63,6 +63,51 @@ struct SystemProxyManagerTests {
         )
         #expect(marker["port"]?.numberValue == 16_789)
     }
+
+    @Test("Unfinished rollback retains both owned ports until recovery converges")
+    func unfinishedRollbackKeepsCandidateRecoverable() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NekoPilot-SystemProxy-Transition-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let fake = FakeNetworkSetup()
+        let markerURL = root.appendingPathComponent("owner.json")
+        let manager = SystemProxyManager(
+            markerURL: markerURL,
+            commandRunner: { arguments in await fake.run(arguments) }
+        )
+        let session = try await manager.apply(port: 16_789)
+        // Move web to the candidate, fail secure-web, then fail each of the
+        // three bounded attempts to move web back to the old listener.
+        await fake.failInOrder(commands: [
+            "-setsecurewebproxy",
+            "-setwebproxy",
+            "-setwebproxy",
+            "-setwebproxy",
+        ])
+
+        do {
+            try await manager.handoff(expectedSession: session, toPort: 16_790)
+            Issue.record("Expected an unfinished handoff")
+        } catch {
+            #expect(error is SystemProxyHandoffRecoveryFailure)
+        }
+
+        let transitionalMarker = try JSONValue.decodeObject(from: Data(contentsOf: markerURL))
+        #expect(transitionalMarker["port"]?.numberValue == 16_789)
+        #expect(Set(transitionalMarker["transitionalPorts"]?.arrayValue?.compactMap {
+            $0.numberValue.map(Int.init)
+        } ?? []) == [16_789, 16_790])
+        #expect(await fake.proxyPorts() == [16_790, 16_789, 16_789])
+
+        // Once networksetup accepts commands again, recovery converges all
+        // proxy kinds before the candidate may be stopped.
+        try await manager.recoverHandoff(expectedSession: session, toPort: 16_789)
+        #expect(await fake.snapshot() == .enabled(port: 16_789))
+        let recoveredMarker = try JSONValue.decodeObject(from: Data(contentsOf: markerURL))
+        #expect(recoveredMarker["port"]?.numberValue == 16_789)
+        #expect(recoveredMarker["transitionalPorts"] == nil)
+    }
 }
 
 private actor FakeNetworkSetup {
@@ -82,10 +127,14 @@ private actor FakeNetworkSetup {
     private var socks = Snapshot.disabled
     private var bypass: [String] = []
     private var recordedCommands: [[String]] = []
-    private var failingCommand: String?
+    private var failingCommands: [String] = []
 
     func failNext(command: String) {
-        failingCommand = command
+        failingCommands.append(command)
+    }
+
+    func failInOrder(commands: [String]) {
+        failingCommands.append(contentsOf: commands)
     }
 
     func commands() -> [[String]] { recordedCommands }
@@ -97,13 +146,17 @@ private actor FakeNetworkSetup {
         return web
     }
 
+    func proxyPorts() -> [Int] {
+        [web.port, secureWeb.port, socks.port]
+    }
+
     func run(_ arguments: [String]) -> CommandResult {
         recordedCommands.append(arguments)
         guard let command = arguments.first else {
             return failure("missing command")
         }
-        if failingCommand == command {
-            failingCommand = nil
+        if failingCommands.first == command {
+            failingCommands.removeFirst()
             return failure("injected failure")
         }
 

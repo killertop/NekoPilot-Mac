@@ -738,8 +738,12 @@ public actor ConfigurationCompiler {
                 // Prefer the currently usable Apple interface while keeping
                 // the other address family as a bounded fallback when Wi-Fi,
                 // Ethernet, or a VPN changes underneath sing-box.
-                outbound["network_strategy"] = .string("hybrid")
-                outbound["fallback_delay"] = .string("300ms")
+                if outbound["network_strategy"] == nil {
+                    outbound["network_strategy"] = .string("hybrid")
+                }
+                if outbound["fallback_delay"] == nil {
+                    outbound["fallback_delay"] = .string("300ms")
+                }
                 nodes.append(outbound)
             }
         }

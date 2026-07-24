@@ -30,6 +30,24 @@ private actor SubscriptionValidationGate {
     }
 }
 
+private actor EndpointAttemptGate {
+    private var started = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func markStarted() {
+        started = true
+        for waiter in waiters { waiter.resume() }
+        waiters.removeAll()
+    }
+
+    func waitUntilStarted() async {
+        if started { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+}
+
 @Suite("Subscription import validation")
 struct SubscriptionImporterTests {
     @Test("Candidate validation failure never writes the real repository")
@@ -275,6 +293,106 @@ struct SubscriptionImporterTests {
         #expect(!NetworkAddressPolicy.isPublic(url: URL(string: "http://127.0.0.1/sub")!))
     }
 
+    @Test("Subscription endpoint candidates are deduplicated and bounded per address family")
+    func endpointCandidatesAreDeduplicatedAndBounded() {
+        let endpoints = [
+            endpoint("198.51.100.10"),
+            endpoint("198.51.100.10"),
+            endpoint("198.51.100.11"),
+            endpoint("198.51.100.12"),
+            endpoint("2001:db8::10"),
+            endpoint("2001:db8::11"),
+            endpoint("2001:db8::12"),
+        ]
+
+        let bounded = NetworkAddressPolicy.boundedEndpointCandidates(endpoints)
+
+        #expect(bounded.map(\.address) == [
+            "198.51.100.10",
+            "198.51.100.11",
+            "2001:db8::10",
+            "2001:db8::11",
+        ])
+        #expect(bounded.count == NetworkAddressPolicy.maximumEndpointCandidates)
+        #expect(bounded.filter { !$0.address.contains(":") }.count == 2)
+        #expect(bounded.filter { $0.address.contains(":") }.count == 2)
+    }
+
+    @Test("Subscription endpoint fallback preserves task cancellation")
+    func endpointFallbackPreservesCancellation() async {
+        let gate = EndpointAttemptGate()
+        let task = Task {
+            try await PinnedHTTPClient.raceEndpointCandidates(
+                [endpoint("198.51.100.10")],
+                deadlineNanoseconds: 5_000_000_000,
+                staggerNanoseconds: 0
+            ) { _ in
+                await gate.markStarted()
+                try await Task.sleep(nanoseconds: 5_000_000_000)
+                return PinnedHTTPResponse(statusCode: 200, headers: [:], body: Data())
+            }
+        }
+        await gate.waitUntilStarted()
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            Issue.record("A cancelled fallback returned a response")
+        } catch is CancellationError {
+            // Expected: cancellation remains distinguishable by AppModel.
+        } catch {
+            Issue.record("Cancellation was converted to \(error)")
+        }
+    }
+
+    @Test("A cancelled connection attempt does not cancel a live fallback")
+    func endpointAttemptCancellationFallsBack() async throws {
+        let response = try await PinnedHTTPClient.raceEndpointCandidates(
+            [
+                endpoint("198.51.100.10"),
+                endpoint("198.51.100.11"),
+            ],
+            deadlineNanoseconds: 5_000_000_000,
+            staggerNanoseconds: 0
+        ) { candidate in
+            if candidate.address == "198.51.100.10" {
+                throw CancellationError()
+            }
+            return PinnedHTTPResponse(
+                statusCode: 200,
+                headers: [:],
+                body: Data("fallback".utf8)
+            )
+        }
+
+        #expect(response.statusCode == 200)
+        #expect(response.body == Data("fallback".utf8))
+    }
+
+    @Test("Subscription endpoint fallback has an overall deadline")
+    func endpointFallbackHasOverallDeadline() async {
+        do {
+            _ = try await PinnedHTTPClient.raceEndpointCandidates(
+                [endpoint("198.51.100.10")],
+                deadlineNanoseconds: 0,
+                staggerNanoseconds: 0
+            ) { _ in
+                try await Task.sleep(nanoseconds: 5_000_000_000)
+                return PinnedHTTPResponse(statusCode: 200, headers: [:], body: Data())
+            }
+            Issue.record("A request beyond the fallback deadline succeeded")
+        } catch is CancellationError {
+            Issue.record("The fallback deadline was reported as task cancellation")
+        } catch let error as NekoPilotError {
+            guard case .processFailed = error else {
+                Issue.record("Unexpected deadline error: \(error)")
+                return
+            }
+        } catch {
+            Issue.record("Unexpected deadline error: \(error)")
+        }
+    }
+
     @Test(
         "Pinned HTTPS client preserves TLS hostname validation",
         .enabled(if: ProcessInfo.processInfo.environment["NEKOPILOT_VALIDATE_SUBSCRIPTION_HTTP"] == "1")
@@ -388,6 +506,15 @@ struct SubscriptionImporterTests {
             throw NekoPilotError.invalidLink
         }
         return Data(bytes: &address, count: MemoryLayout<in6_addr>.size)
+    }
+
+    private func endpoint(_ address: String) -> ResolvedPublicEndpoint {
+        ResolvedPublicEndpoint(
+            address: address,
+            serverName: "subscription.example",
+            port: 443,
+            useTLS: true
+        )
     }
 
     private func temporaryRepositoryLocation() throws -> (directory: URL, database: URL) {

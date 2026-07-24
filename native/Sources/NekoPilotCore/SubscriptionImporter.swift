@@ -217,6 +217,9 @@ struct ResolvedPublicEndpoint: Sendable, Equatable {
 }
 
 enum NetworkAddressPolicy {
+    static let maximumEndpointCandidates = 4
+    static let maximumCandidatesPerAddressFamily = 2
+
     static func isPublic(url: URL) -> Bool {
         guard let endpoints = try? resolvePublicEndpoints(url: url) else { return false }
         return !endpoints.isEmpty
@@ -253,14 +256,40 @@ enum NetworkAddressPolicy {
         guard !addresses.isEmpty else {
             throw NekoPilotError.remoteAddressBlocked
         }
-        return addresses.map {
+        return boundedEndpointCandidates(addresses.map {
             ResolvedPublicEndpoint(
                 address: $0.numericHost,
                 serverName: host,
                 port: UInt16(portValue),
                 useTLS: scheme == "https"
             )
+        })
+    }
+
+    static func boundedEndpointCandidates(
+        _ endpoints: [ResolvedPublicEndpoint]
+    ) -> [ResolvedPublicEndpoint] {
+        var seen = Set<String>()
+        var ipv4Count = 0
+        var ipv6Count = 0
+        var result: [ResolvedPublicEndpoint] = []
+        result.reserveCapacity(min(maximumEndpointCandidates, endpoints.count))
+
+        for endpoint in endpoints {
+            guard result.count < maximumEndpointCandidates else { break }
+            let key = "\(endpoint.address)|\(endpoint.port)|\(endpoint.useTLS)"
+            guard seen.insert(key).inserted else { continue }
+            let isIPv6 = endpoint.address.contains(":")
+            if isIPv6 {
+                guard ipv6Count < maximumCandidatesPerAddressFamily else { continue }
+                ipv6Count += 1
+            } else {
+                guard ipv4Count < maximumCandidatesPerAddressFamily else { continue }
+                ipv4Count += 1
+            }
+            result.append(endpoint)
         }
+        return result
     }
 
     struct ResolvedAddress: Sendable, Equatable {
@@ -555,6 +584,8 @@ enum HTTPWireResponseParser {
 enum PinnedHTTPClient {
     private static let maximumRedirects = 5
     private static let timeoutNanoseconds: UInt64 = 30_000_000_000
+    private static let fallbackDeadlineNanoseconds: UInt64 = 30_000_000_000
+    private static let fallbackStaggerNanoseconds: UInt64 = 250_000_000
     private static let receiveChunkBytes = 64 * 1024
     private static let wireOverheadBytes = 1024 * 1024
     private static let queue = DispatchQueue(label: "dev.nekopilot.subscription-http", qos: .utility)
@@ -615,47 +646,101 @@ enum PinnedHTTPClient {
         maximumBodyBytes: Int,
         userAgent: String
     ) async throws -> PinnedHTTPResponse {
-        guard !endpoints.isEmpty else { throw NekoPilotError.remoteAddressBlocked }
-        if endpoints.count == 1 {
-            return try await requestWithTimeout(
+        try await raceEndpointCandidates(
+            endpoints,
+            deadlineNanoseconds: fallbackDeadlineNanoseconds,
+            staggerNanoseconds: fallbackStaggerNanoseconds
+        ) { endpoint in
+            try await requestWithTimeout(
                 url: url,
-                endpoint: endpoints[0],
+                endpoint: endpoint,
                 maximumBodyBytes: maximumBodyBytes,
                 userAgent: userAgent
             )
         }
-        // Start IPv4 first, then stagger IPv6 candidates. This keeps the fast
-        // path cheap while allowing an unreachable address family to fail
-        // without blocking subscriptions behind its TCP timeout.
-        return try await withThrowingTaskGroup(of: PinnedHTTPResponse?.self) { group in
+    }
+
+    private enum EndpointAttemptResult: Sendable {
+        case response(PinnedHTTPResponse)
+        case failed
+        case cancelled
+        case deadline
+    }
+
+    static func raceEndpointCandidates(
+        _ endpoints: [ResolvedPublicEndpoint],
+        deadlineNanoseconds: UInt64,
+        staggerNanoseconds: UInt64,
+        request: @escaping @Sendable (ResolvedPublicEndpoint) async throws -> PinnedHTTPResponse
+    ) async throws -> PinnedHTTPResponse {
+        try Task.checkCancellation()
+        guard !endpoints.isEmpty else { throw NekoPilotError.remoteAddressBlocked }
+        guard deadlineNanoseconds > 0 else {
+            throw NekoPilotError.processFailed(CoreL10n.text(
+                "订阅下载超时",
+                "The subscription download timed out"
+            ))
+        }
+
+        return try await withThrowingTaskGroup(
+            of: EndpointAttemptResult.self,
+            returning: PinnedHTTPResponse.self
+        ) { group in
+            group.addTask {
+                do {
+                    try await Task.sleep(nanoseconds: deadlineNanoseconds)
+                    return .deadline
+                } catch {
+                    return .cancelled
+                }
+            }
             for (index, endpoint) in endpoints.enumerated() {
                 group.addTask {
-                    if index > 0 {
-                        try await Task.sleep(nanoseconds: UInt64(index) * 250_000_000)
-                    }
                     do {
-                        return try await requestWithTimeout(
-                            url: url,
-                            endpoint: endpoint,
-                            maximumBodyBytes: maximumBodyBytes,
-                            userAgent: userAgent
-                        )
+                        if index > 0 {
+                            try await Task.sleep(
+                                nanoseconds: UInt64(index) * staggerNanoseconds
+                            )
+                        }
+                        return .response(try await request(endpoint))
                     } catch is CancellationError {
-                        return nil
+                        return Task.isCancelled ? .cancelled : .failed
                     } catch {
-                        return nil
+                        return .failed
                     }
                 }
             }
-            while let response = try await group.next() {
-                if let response {
+
+            var remainingAttempts = endpoints.count
+            while let result = try await group.next() {
+                try Task.checkCancellation()
+                switch result {
+                case let .response(response):
                     group.cancelAll()
                     return response
+                case .failed:
+                    remainingAttempts -= 1
+                    if remainingAttempts == 0 {
+                        group.cancelAll()
+                        throw NekoPilotError.processFailed(CoreL10n.text(
+                            "订阅下载失败：所有网络地址均不可达",
+                            "The subscription download failed: all network addresses were unreachable"
+                        ))
+                    }
+                case .cancelled:
+                    group.cancelAll()
+                    throw CancellationError()
+                case .deadline:
+                    group.cancelAll()
+                    throw NekoPilotError.processFailed(CoreL10n.text(
+                        "订阅下载超时",
+                        "The subscription download timed out"
+                    ))
                 }
             }
             throw NekoPilotError.processFailed(CoreL10n.text(
-                "订阅下载失败：所有网络地址均不可达",
-                "The subscription download failed: all network addresses were unreachable"
+                "订阅下载失败",
+                "The subscription download failed"
             ))
         }
     }

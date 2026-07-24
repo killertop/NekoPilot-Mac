@@ -2,6 +2,14 @@ import Foundation
 import Testing
 @testable import NekoPilotCore
 
+private actor ProbeCancellationRecorder {
+    private(set) var wasCancelled = false
+
+    func recordCancellation() {
+        wasCancelled = true
+    }
+}
+
 @Suite("URL Test scheduling")
 struct URLTesterTests {
     @Test("Offline worker budget follows node count and available processors")
@@ -64,6 +72,45 @@ struct ProxyHealthProbeTests {
             return target.host == "fast.example" ? .reachable(delay: 40) : .reachable(delay: 60)
         }
         #expect(await probe.check(port: 16_789) == .reachable(delay: 60))
+    }
+
+    @Test("Health quorum cancels a remaining slow target")
+    func healthQuorumCancelsRemainingTarget() async {
+        let targets = [
+            ProxyHealthTarget(
+                url: URL(string: "https://first.example/204")!,
+                acceptableStatusCodes: [204]
+            ),
+            ProxyHealthTarget(
+                url: URL(string: "https://second.example/204")!,
+                acceptableStatusCodes: [204]
+            ),
+            ProxyHealthTarget(
+                url: URL(string: "https://slow.example/204")!,
+                acceptableStatusCodes: [204]
+            ),
+        ]
+        let cancellation = ProbeCancellationRecorder()
+        let probe = ProxyHealthProbe(
+            targets: targets,
+            requiredReachableTargets: 2
+        ) { target, _ in
+            guard target.host == "slow.example" else {
+                return target.host == "first.example"
+                    ? .reachable(delay: 40)
+                    : .reachable(delay: 60)
+            }
+            do {
+                try await Task.sleep(nanoseconds: 5_000_000_000)
+                return .reachable(delay: 5_000)
+            } catch {
+                await cancellation.recordCancellation()
+                return .indeterminate
+            }
+        }
+
+        #expect(await probe.check(port: 16_789) == .reachable(delay: 60))
+        #expect(await cancellation.wasCancelled)
     }
 
     @Test("A single health target cannot satisfy the quorum")
